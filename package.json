@@ -1,0 +1,40 @@
+{
+  "name": "autobot",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Odion100/autobot.git"
+  },
+  "author": "odion edwards",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Odion100/autobot/issues"
+  },
+  "homepage": "https://github.com/Odion100/autobot#readme",
+  "dependencies": {
+    "@langchain/community": "^0.0.35",
+    "@langchain/openai": "^0.0.18",
+    "agentci": "^0.0.0",
+    "cheerio": "^1.0.0-rc.12",
+    "chromadb": "^1.8.1",
+    "dotenv": "^16.4.5",
+    "langchain": "^0.1.25",
+    "openai": "^4.28.4",
+    "puppeteer": "^19.11.1",
+    "systemlynx": "^1.14.10"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
+  "devDependencies": {
+    "cz-conventional-changelog": "^3.3.0"
+  }
+}
