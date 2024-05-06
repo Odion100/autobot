@@ -59,6 +59,9 @@ async function getPage({ url }) {
     }
     let zIndex = 9999;
     let viewElement;
+    const boxesGroup = document.createElement("div");
+    document.body.appendChild(boxesGroup);
+    boxesGroup.id = `content-containers`;
     contentContainers.forEach(({ container: selector }, i) => {
       const element = document.querySelector(selector);
       if (!element) return null; // Return null if element is not found
@@ -95,14 +98,14 @@ async function getPage({ url }) {
       number.style.border = "1px solid black";
       //if (i + 1 === 21) viewElement = selector;
       box.appendChild(number);
-      document.body.appendChild(box);
+      boxesGroup.appendChild(box);
     });
     //window.scrollBy(0, window.innerHeight);
-    document
-      .querySelector(
-        "#search > div.s-desktop-width-max.s-desktop-content.s-opposite-dir.s-wide-grid-style.sg-row > div.sg-col-20-of-24.s-matching-dir.sg-col-16-of-20.sg-col.sg-col-8-of-12.sg-col-12-of-16 > div > span.rush-component.s-latency-cf-section > div.s-main-slot.s-result-list.s-search-results.sg-row > div:nth-child(7)"
-      )
-      .scrollIntoView();
+    // document
+    //   .querySelector(
+    //     "#search > div.s-desktop-width-max.s-desktop-content.s-opposite-dir.s-wide-grid-style.sg-row > div.sg-col-20-of-24.s-matching-dir.sg-col-16-of-20.sg-col.sg-col-8-of-12.sg-col-12-of-16 > div > span.rush-component.s-latency-cf-section > div.s-main-slot.s-result-list.s-search-results.sg-row > div:nth-child(7)"
+    //   )
+    //   .scrollIntoView();
     return {};
   }, contentContainers);
   // Close the browser
@@ -233,9 +236,9 @@ function findRealContainer(element) {
   return parent;
 }
 naturalLanguageSelector(
-  "https://www.amazon.com/s?k=natural+soap&ref=nb_sb_noss",
-  // "https://www.amazon.com/Molivera-Organics-Handmade-Oatmeal-Honey/dp/B0C5NYJV53/ref=sr_1_56?dib=eyJ2IjoiMSJ9.3-mKm6FTyOiYuCI112Yjyd_6cQQnag7t97MhK2MPxguRiGYJHvtUcOlZ8jfFtaFOu2S64Hgo4gmOA6t_GbPMCjOPwJfKEZAxUuxrGslA7MAaZr_mthCUpwiMwoPu7Q93mgEAGCWgR3QLd1sAbXH1abHMb2W8--Fenxtr7Sx-sqod3fEEO24kcfiKp2mQBkacV8u-yagg85NK-VhjR0UAKI7_-GE0riwIRU290TjZ2XyQ8TgRbE8cY3oRMU9qCbEWV-xmGdeO25K-56SqFNE5vCve1HcKaOfnUB5NG_B0BE8.2NkOc4PNjfefBrlJv1gUYp5N7Jk8Ckn8FfNNQKbm8SE&dib_tag=se&keywords=natural+soap&qid=1714159972&sr=8-56",
-  // "https://upwork.com",
+  // "https://www.amazon.com/s?k=natural+soap&ref=nb_sb_noss",
+  // "https://www.amazon.com/Australian-Botanical-Soap-Goats-Natural/dp/B07M68CHV9/ref=sr_1_1_sspa?dib=eyJ2IjoiMSJ9.giw0dIQlsDjUnbJK8SHv-PFrm8lnbjWBIOc_9AkvE9WbBBakX7PPnwECYjsFUBp6DO3sR9HhKsZceaAwvOqK6YpgDcpUsKCX0cyUGnyokDmyvi-89xfMt3WQUf5xV4MqF5fSiYfg_p9h8WtQX11VyO3MLo39C8nWF0nkVV2Tgd2WdAqQtOsfkO8W3DV8uDTCCcmUtUra2PikFQf5n-nW6U9VrHmDgIn9UztYZwZl7-ci56ABkSB5K5cUsj4tNFL-A0refw6rCfal7oq4UD7n0DkFfd4DyRc2eS3WPk19TBI.byUmy1d-TvZ-Qh03s82XsX7LX0MGMDGLgafjYMbWse4&dib_tag=se&keywords=natural+soap&qid=1714743951&sr=8-1-spons&sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&psc=1",
+  "https://kinrayweblink.cardinalhealth.com/login",
   ["listing"],
   20
 )
