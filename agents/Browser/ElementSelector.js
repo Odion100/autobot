@@ -1,7 +1,7 @@
 import OpenAI from "openai";
-import schema from "./schemas/BrowserController";
+import schema from "./schemas/ElementSelector";
+import prompt from "./prompts/ElementSelector";
 import driver from "./utils/driver";
-import prompt from "./prompts/BrowserController";
 import dotenv from "dotenv";
 import { insertScreenshot } from "./middleware";
 import htmlVectorSearch from "./utils/htmlVectorSearch";
@@ -21,10 +21,10 @@ export default function ElementSelector() {
     },
   });
 
-  this.selectElement = async function ({ description }, { state }) {
+  this.selectElement = async function ({ searchText }, { state }) {
     const { selectedContainer } = driver.state();
     const html = await driver.getHtml(selectedContainer);
-    const [{ selector }] = htmlVectorSearch(html, description, 5, state.targetElements);
+    const [{ selector }] = htmlVectorSearch(html, searchText, 5, state.targetElements);
     await driver.selectElements(selector);
     return selector;
   };

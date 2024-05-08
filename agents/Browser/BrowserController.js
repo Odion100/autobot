@@ -41,7 +41,7 @@ export default function BrowserController() {
     const selectors = await NaturalLanguageSelector.invoke(description);
     return await driver.getInnerText(selectors);
   };
-  this.promptUser = function ({ prompt }, { state }) {
+  this.promptUser = async function ({ prompt }, { state }) {
     state.userPrompt = prompt;
     return `You've prompted the user this: "${prompt}"`;
   };
@@ -54,4 +54,3 @@ export default function BrowserController() {
     next();
   });
 }
-Agentci.invoke("mes");

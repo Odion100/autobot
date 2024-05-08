@@ -1,7 +1,7 @@
 import OpenAI from "openai";
-import schema from "./schemas/BrowserController";
+import schema from "./schemas/NaturalLanguageSelector";
+import prompt from "./prompts/NaturalLanguageSelector";
 import driver from "./utils/driver";
-import prompt from "./prompts/BrowserController";
 import dotenv from "dotenv";
 import { insertScreenshot } from "./middleware";
 dotenv.config();
