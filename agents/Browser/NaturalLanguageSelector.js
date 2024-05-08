@@ -14,7 +14,11 @@ export default function NaturalLanguageSelector() {
     sdk: openai,
     schema,
     prompt,
-    exitConditions: { iterations: 2, functionCall: "containersFound" },
+    exitConditions: {
+      iterations: 2,
+      functionCall: "containersFound",
+      state: (state) => state.scrollComplete,
+    },
     agents: ["ElementSelector"],
   });
 
@@ -25,7 +29,7 @@ export default function NaturalLanguageSelector() {
   this.containersFound = async function ({ containers }, { agents, input }) {
     const { ElementSelector } = agents;
     await driver.selectElements(containers);
-    const image = driver.getScreenShot();
+    const image = await driver.getScreenShot();
     return ElementSelector.invoke({
       message: input.message,
       image,

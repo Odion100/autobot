@@ -13,6 +13,7 @@ export default function BrowserController() {
     sdk: openai,
     schema,
     prompt,
+    state: { driver },
     exitConditions: { iterations: 2, functionCall: "finished" },
     agents: ["NaturalLanguageSelector"],
   });
@@ -35,9 +36,22 @@ export default function BrowserController() {
     const { NaturalLanguageSelector } = agents;
     await NaturalLanguageSelector.invoke(description);
   };
-  this.findInnerText = async function ({ description }, { agents }) {
+  this.findContent = async function ({ description }, { agents }) {
     const { NaturalLanguageSelector } = agents;
     const selectors = await NaturalLanguageSelector.invoke(description);
     return await driver.getInnerText(selectors);
   };
+  this.promptUser = function ({ prompt }, { state }) {
+    state.userPrompt = prompt;
+    return `You've prompted the user this: "${prompt}"`;
+  };
+  this.after("promptUser", function ({ state }, next) {
+    if (state.userPrompt) {
+      //prompt the user here
+      throw state.userPrompt;
+      state.userPrompt = "";
+    }
+    next();
+  });
 }
+Agentci.invoke("mes");

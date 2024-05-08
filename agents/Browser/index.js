@@ -7,12 +7,5 @@ const BrowserAgent = Agentci()
   .rootAgent(BrowserController)
   .agent("NaturalLanguageSelector", NaturalLanguageSelector)
   .agent("ElementSelector", ElementSelector);
-// .config(function () {
-//   this.before("$invoke", () => {
-//     //log
-//   });
-//   this.after("$all", () => {
-//     //log
-//   });
-// });
+
 export default BrowserAgent;

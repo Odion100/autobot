@@ -123,12 +123,37 @@ const getText = {
     },
   },
 };
-
+const promptUser = {
+  type: "function",
+  function: {
+    name: "promptUser",
+    description:
+      "Used this method to question or prompt the user for help or information.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          prompt: "A question or, request help for the use",
+        },
+      },
+    },
+  },
+};
 export default function schema(state) {
   if (state.itemSelected) {
-    return [navigate, findAndType, findAndClick, findAndSelect, click, type, getText];
+    return [
+      navigate,
+      findAndType,
+      findAndClick,
+      findAndSelect,
+      click,
+      type,
+      getText,
+      promptUser,
+    ];
   } else {
-    return [navigate, findAndType, findAndClick, findAndSelect, findContent];
+    return [navigate, findAndType, findAndClick, findAndSelect, findContent, promptUser];
   }
 }
 

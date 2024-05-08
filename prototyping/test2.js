@@ -101,11 +101,11 @@ async function getPage({ url }) {
       boxesGroup.appendChild(box);
     });
     //window.scrollBy(0, window.innerHeight);
-    // document
-    //   .querySelector(
-    //     "#search > div.s-desktop-width-max.s-desktop-content.s-opposite-dir.s-wide-grid-style.sg-row > div.sg-col-20-of-24.s-matching-dir.sg-col-16-of-20.sg-col.sg-col-8-of-12.sg-col-12-of-16 > div > span.rush-component.s-latency-cf-section > div.s-main-slot.s-result-list.s-search-results.sg-row > div:nth-child(7)"
-    //   )
-    //   .scrollIntoView();
+    document
+      .querySelector(
+        "#search > div.s-desktop-width-max.s-desktop-content.s-opposite-dir.s-wide-grid-style.sg-row > div.sg-col-20-of-24.s-matching-dir.sg-col-16-of-20.sg-col.sg-col-8-of-12.sg-col-12-of-16 > div > span.rush-component.s-latency-cf-section > div.s-main-slot.s-result-list.s-search-results.sg-row > div:nth-child(7)"
+      )
+      .scrollIntoView();
     return {};
   }, contentContainers);
   // Close the browser
@@ -236,9 +236,9 @@ function findRealContainer(element) {
   return parent;
 }
 naturalLanguageSelector(
-  // "https://www.amazon.com/s?k=natural+soap&ref=nb_sb_noss",
+  "https://www.amazon.com/s?k=natural+soap&ref=nb_sb_noss",
   // "https://www.amazon.com/Australian-Botanical-Soap-Goats-Natural/dp/B07M68CHV9/ref=sr_1_1_sspa?dib=eyJ2IjoiMSJ9.giw0dIQlsDjUnbJK8SHv-PFrm8lnbjWBIOc_9AkvE9WbBBakX7PPnwECYjsFUBp6DO3sR9HhKsZceaAwvOqK6YpgDcpUsKCX0cyUGnyokDmyvi-89xfMt3WQUf5xV4MqF5fSiYfg_p9h8WtQX11VyO3MLo39C8nWF0nkVV2Tgd2WdAqQtOsfkO8W3DV8uDTCCcmUtUra2PikFQf5n-nW6U9VrHmDgIn9UztYZwZl7-ci56ABkSB5K5cUsj4tNFL-A0refw6rCfal7oq4UD7n0DkFfd4DyRc2eS3WPk19TBI.byUmy1d-TvZ-Qh03s82XsX7LX0MGMDGLgafjYMbWse4&dib_tag=se&keywords=natural+soap&qid=1714743951&sr=8-1-spons&sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&psc=1",
-  "https://kinrayweblink.cardinalhealth.com/login",
+  // "https://upwork.com",
   ["listing"],
   20
 )

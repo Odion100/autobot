@@ -10,7 +10,7 @@ function browserController() {
   const browserState = {
     currentPage: "",
     lastPage: "",
-    previousAction: [],
+    actions: [],
     selectedElement: "",
     selectedContainers: [],
     containers: [],
@@ -23,7 +23,7 @@ function browserController() {
       page.on("load", function () {
         browserState.currentPage = url;
         browserState.lastPage = lastPage;
-        browserState.previousAction.push(`Navigated to ${page.url()}`);
+        browserState.actions.push(`Navigated to ${page.url()}`);
       });
     }
 
@@ -75,12 +75,12 @@ function browserController() {
   }
   async function click(selector) {
     await page.click(selector);
-    browserState.previousAction.push("clicked button");
+    browserState.actions.push("clicked button");
     return browserState;
   }
   async function type(selector, text) {
     await page.type(selector, text);
-    browserState.previousAction.push(`typed "${text}" into input`);
+    browserState.actions.push(`typed "${text}" into input`);
     return browserState;
   }
   async function getHtml(selector) {
@@ -96,14 +96,14 @@ function browserController() {
     await page.evaluate(() => {
       window.scrollBy(0, 500); // Scroll down by 500 pixels
     });
-    browserState.previousAction.push(`scrolled up`);
+    browserState.actions.push(`scrolled up`);
     return browserState;
   }
   async function scrollDown() {
     await page.evaluate(() => {
       window.scrollBy(0, 500); // Scroll down by 500 pixels
     });
-    browserState.previousAction.push(`scrolled down`);
+    browserState.actions.push(`scrolled down`);
     return browserState;
   }
   async function getScreenShot() {
