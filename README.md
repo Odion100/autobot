@@ -1,24 +1,13 @@
 # autobot
 
-```javascript
-async function processImageRequest(filePath) {
-  const imageBuffer = await fs.readFile(filePath);
-  const base64Image = imageBuffer.toString("base64");
-  const encodedImage = `data:image/jpeg;base64,{${base64Image}}`;
+1. install node packages
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4-vision-preview",
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: tablePrompt },
-          { type: "image_url", image_url: { url: encodedImage } },
-        ],
-      },
-    ],
-    max_tokens: 1024,
-  });
-  return response;
-}
 ```
+  npm install
+
+```
+
+2. install chromadb
+
+3. Start chromadb
+   `chroma run --path ./vectorStore`

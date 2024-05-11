@@ -22,7 +22,12 @@ const invalidContainer = {
       "Indicates that the highlighted container does not match or container the target item.",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        reasoning: {
+          type: "string",
+          description: "A simple explication of why the selected element is incorrect.",
+        },
+      },
     },
   },
 };

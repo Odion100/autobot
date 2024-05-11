@@ -1,13 +1,13 @@
 import OpenAI from "openai";
-import schema from "./schemas/ElementSelector";
-import prompt from "./prompts/ElementSelector";
-import driver from "./utils/driver";
+import schema from "./schemas/ElementSelector.js";
+import prompt from "./prompts/ElementSelector.js";
+import driver from "./utils/driver.js";
+import { insertScreenshot } from "./middleware.js";
+import htmlVectorSearch from "./utils/htmlVectorSearch.js";
 import dotenv from "dotenv";
-import { insertScreenshot } from "./middleware";
-import htmlVectorSearch from "./utils/htmlVectorSearch";
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
+// add filters for target element in vector search
 export default function ElementSelector() {
   this.use({
     provider: "openai",
@@ -16,15 +16,21 @@ export default function ElementSelector() {
     schema,
     prompt,
     exitConditions: {
-      //state: (state) => state.something === true,
-      functionCall: ["itemFound"],
+      iterations: 3,
+      functionCall: ["itemFound", "invalidContainer"],
     },
+    temperature: 0.1,
   });
 
   this.selectElement = async function ({ searchText }, { state }) {
-    const { selectedContainer } = driver.state();
-    const html = await driver.getHtml(selectedContainer);
-    const [{ selector }] = htmlVectorSearch(html, searchText, 5, state.targetElements);
+    const { selectedContainers } = driver.state();
+    const html = await driver.getHtml(selectedContainers[0]);
+    const [{ selector }] = await htmlVectorSearch(
+      html,
+      searchText,
+      5,
+      state.targetElements
+    );
     await driver.selectElements(selector);
     return selector;
   };
@@ -35,10 +41,6 @@ export default function ElementSelector() {
   this.itemFound = function ({ message }, { state }) {
     return message;
   };
-  // this.findGroupSelector = function () {
-  //   // if the ai thinks that there is a class of elements
-  //   // that match the selection then call this
-  // };
 
   this.after("selectElement", insertScreenshot);
   this.after("findGroupSelector", insertScreenshot);

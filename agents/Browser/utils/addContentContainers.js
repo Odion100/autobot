@@ -21,7 +21,6 @@ export default function addContentContainers(contentContainers) {
     if (!element) return null; // Return null if element is not found
     const rect = getRect(element);
     // Add a red border with 2px width
-    console.log("rect:", rect);
     const box = document.createElement("div");
     // Apply styles to the box
     zIndex--;
@@ -30,7 +29,7 @@ export default function addContentContainers(contentContainers) {
     box.style.left = rect.left;
     box.style.width = rect.width;
     box.style.height = rect.height;
-    box.style.border = "1px solid orange";
+    box.style.border = "2px solid red";
     box.style.pointerEvents = "none";
     box.style.zIndex = `${zIndex}`;
     box.id = `${i + 1}`;
@@ -43,9 +42,10 @@ export default function addContentContainers(contentContainers) {
     number.style.right = "0";
     number.style.background = "red";
     number.style.color = "white";
-    number.style.padding = "2px";
+    number.style.padding = "4px";
     number.style.lineHeight = "11px";
-    number.style.border = "1px solid black";
+    // number.style.border = "1px solid black";
+    number.style.fontSize = "20px";
     //if (i + 1 === 21) viewElement = selector;
     box.appendChild(number);
     boxContainer.appendChild(box);

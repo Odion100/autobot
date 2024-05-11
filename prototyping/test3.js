@@ -58,4 +58,6 @@ function test(filePath) {
     image: filePath,
   });
 }
-test(`${process.cwd()}/prototyping/test2.png`).then(console.log).catch(console.error);
+test(`${process.cwd()}/screenshots/1715221824956.png`)
+  .then(console.log)
+  .catch(console.error);

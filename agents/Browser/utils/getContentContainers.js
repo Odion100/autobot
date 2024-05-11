@@ -35,25 +35,25 @@ export default function getContentContainers(html, chunkSize = 4000) {
       parent.empty();
       parent.text(innerText);
       // const elementsTxt = $.html(parent).toString();
-      console.log({ section, container });
+      // console.log({ section, container });
       htmlContent.push({ section, container });
     } else {
-      console.log("checking children -->");
+      // console.log("checking children -->");
       parent.children().each((index, child) => {
-        console.log("next child -->");
+        // console.log("next child -->");
         const el = $(child);
         const tagName = el.get(0).tagName;
 
         if (!skipElements.includes(tagName)) {
           extractContent(el);
-        } else console.log("skipping -->", tagName);
+        } // else console.log("skipping -->", tagName);
       });
     }
   }
 
   // Start chunking from the body element
   extractContent($("body"));
-  console.log('$("body").text.length', $("body").text().length, chunkSize);
+  // console.log('$("body").text.length', $("body").text().length, chunkSize);
 
   // Return the array of chunked HTML strings
   return htmlContent;
@@ -61,7 +61,8 @@ export default function getContentContainers(html, chunkSize = 4000) {
 function getSelector(el) {
   //console.log("el.attr", el.attr);
   if (!el) return "";
-  if (el.attr("id")) return `#${el.attr("id")}`;
+  if (el.attr("id") && /^[a-zA-Z_-][\w-]*$/.test(el.attr("id")))
+    return `#${el.attr("id")}`;
   if (el.attr("class")) {
     return getClassSelector(el);
   } else {
@@ -75,7 +76,7 @@ function getClassSelector(el) {
     const classes = el
       .attr("class")
       .split(" ")
-      .filter((str) => !str.includes("=") && !str.includes(":"))
+      .filter((str) => /^[a-zA-Z_-][\w-]*$/.test(str))
       .join(".")
       .trim();
     selector += `.${classes}`;
@@ -94,26 +95,26 @@ function getChildSelector(el) {
   return selector;
 }
 function getFullSelector(element) {
-  console.log("tag1", element.get(0).tagName);
+  // console.log("tag1", element.get(0).tagName);
   if (element.get(0).tagName === "html") return "html";
   let parent = element.parent();
   let selector = getChildSelector(element);
   if (selector.charAt(0) === "#") return selector;
   // Iterate through parent nodes until reaching the document root or a parent with more than one child
   while (!["body", "html"].includes(parent.get(0).tagName) && !parent.attr("id")) {
-    if (parent.get(0)) console.log("tag2", parent.get(0).tagName);
+    // if (parent.get(0)) console.log("tag2", parent.get(0).tagName);
     selector = `${getSelector(parent)} > ${selector}`;
-    console.log("selector->", selector);
+    // console.log("selector->", selector);
     parent = parent.parent();
   }
-  console.log("tag3", parent.get(0).tagName);
+  // console.log("tag3", parent.get(0).tagName);
 
   // Return the first parent with more than one child or with an ID
   return getSelector(parent) + " > " + selector;
 }
 function findRealContainer(element) {
   let parent = element.parent();
-  console.log("parent.get(0).tagName)", parent.get(0).tagName);
+  // console.log("parent.get(0).tagName)", parent.get(0).tagName);
   while (parent.get(0).tagName !== "html" && parent.children().length <= 1) {
     parent = parent.parent();
   }

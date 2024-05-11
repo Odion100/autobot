@@ -140,17 +140,20 @@ const promptUser = {
     },
   },
 };
-export default function schema(state) {
-  if (state.itemSelected) {
+export default function schema({ driver } = {}) {
+  const elementSelected = driver ? !!driver.state().selectedElement : false;
+
+  if (elementSelected) {
     return [
       navigate,
       findAndType,
       findAndClick,
       findAndSelect,
+      findContent,
+      promptUser,
       click,
       type,
       getText,
-      promptUser,
     ];
   } else {
     return [navigate, findAndType, findAndClick, findAndSelect, findContent, promptUser];

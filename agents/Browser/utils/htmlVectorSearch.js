@@ -13,12 +13,13 @@ export default async function htmlVectorSearch(
   html,
   queryTexts = [],
   nResults = 3,
-  tagNameFilters
+  selector
 ) {
-  const elements = parseHtml(html);
+  const elements = parseHtml(html, selector);
+  if (!elements.length) return [];
   const embeddingData = elements.reduce(
-    (sum, { html, selector, innerText, tagName }, i) => {
-      sum.documents.push(innerText || "none");
+    (sum, { html, selector, innerText, tagName, attributes }, i) => {
+      sum.documents.push(`${innerText}, ${attributes}`);
       sum.ids.push(`id${i}`);
       sum.metadatas.push({ html, selector, tagName });
       return sum;
@@ -41,9 +42,7 @@ export default async function htmlVectorSearch(
     embeddingFunction: embeddingFunction(),
   });
   await collection.add(embeddingData);
-  const query = { queryTexts, nResults };
-  if (tagNameFilters) query.where = { tagName: { $in: tagNameFilters } };
-  return (await collection.query(query)).metadatas;
+  return (await collection.query({ queryTexts, nResults })).metadatas[0];
 }
 
 async function getEmbeddings(input) {
@@ -62,25 +61,17 @@ function embeddingFunction() {
   return fn;
 }
 
-function parseHtml(html) {
+function parseHtml(html, selector = "*") {
   const $ = html.length ? cheerio.load(html) : null;
-  return $("*")
+  return $(selector)
     .map((i, element) => ({
       tagName: $(element).get(0).tagName,
-      selector: $(element)
-        .parents()
-        .addBack()
-        .map((index, el) => {
-          const tagName = el.tagName.toLowerCase();
-          const id = el.attribs.id ? `#${el.attribs.id}` : "";
-          const classes = el.attribs.class
-            ? `.${el.attribs.class.replace(/\s+/g, ".")}`
-            : "";
-          return tagName + id + classes;
-        })
-        .get()
-        .join(" > "),
+      selector: getFullSelector($(element)),
       html: $.html(element).toString(),
+      attributes: Object.keys(element.attribs)
+        .filter((attr) => !["class", "style"].includes(attr))
+        .map((attr) => `${attr}="${element.attribs[attr]}"`)
+        .join(" "),
       innerText: $(element)
         .text()
         .split("\n")
@@ -89,6 +80,68 @@ function parseHtml(html) {
         .join(" "),
     }))
     .get();
+}
+function getSelector(el) {
+  //console.log("el.attr", el.attr);
+  if (!el) return "";
+  if (el.attr("id") && /^[a-zA-Z_-][\w-]*$/.test(el.attr("id")))
+    return `#${el.attr("id")}`;
+  if (el.attr("class")) {
+    return getClassSelector(el);
+  } else {
+    return getChildSelector(el);
+  }
+}
+function getClassSelector(el) {
+  let selector = el.get(0).tagName;
+
+  if (el.attr("class")) {
+    const classes = el
+      .attr("class")
+      .split(" ")
+      .filter((str) => /^[a-zA-Z_-][\w-]*$/.test(str))
+      .join(".")
+      .trim();
+    selector += `.${classes}`;
+  }
+  return selector;
+}
+function getChildSelector(el) {
+  let selector = el.get(0).tagName;
+  if (el.parent().children().length > 1) {
+    const index = el.index();
+    if (index !== -1) {
+      const nthChild = index + 1; // nth-child is 1-indexed
+      selector += `:nth-child(${nthChild})`;
+    }
+  }
+  return selector;
+}
+function getFullSelector(element) {
+  // console.log("tag1", element.get(0).tagName);
+  if (element.get(0).tagName === "html") return "html";
+  let parent = element.parent();
+  let selector = getChildSelector(element);
+  if (selector.charAt(0) === "#") return selector;
+  // Iterate through parent nodes until reaching the document root or a parent with more than one child
+  while (!["body", "html"].includes(parent.get(0).tagName) && !parent.attr("id")) {
+    // if (parent.get(0)) console.log("tag2", parent.get(0).tagName);
+    selector = `${getSelector(parent)} > ${selector}`;
+    // console.log("selector->", selector);
+    parent = parent.parent();
+  }
+  // console.log("tag3", parent.get(0).tagName);
+
+  // Return the first parent with more than one child or with an ID
+  return getSelector(parent) + " > " + selector;
+}
+function findRealContainer(element) {
+  let parent = element.parent();
+  // console.log("parent.get(0).tagName)", parent.get(0).tagName);
+  while (parent.get(0).tagName !== "html" && parent.children().length <= 1) {
+    parent = parent.parent();
+  }
+  return parent;
 }
 const test = `<!DOCTYPE html>
 <html lang="en">
@@ -123,35 +176,35 @@ const test = `<!DOCTYPE html>
         <div class="row">
             <div class="col" id="first-column">
                 <h2>Column 1</h2>
-                <p>This is the first column.</p>
+                <a>This is the first column.</a>
             </div>
             <div class="col">
                 <h2>Column 2</h2>
-                <p>This is the second column.</p>
+                <a>This is the second column.</a>
                 <div class="nested">
                     <h3>Nested Div</h3>
-                    <p>This is a nested div inside column 2.</p>
+                    <a>This is a nested div inside column 2.</a>
                 </div>
             </div>
         </div>
         <div class="row">
             <div class="col">
                 <h2>Column 3</h2>
-                <p>This is the third column.</p>
+                <a>This is the third column.</a>
             </div>
             <div class="col">
                 <h2>Column 4</h2>
-                <p>This is the fourth column.</p>
+                <a>This is the fourth column.</a>
             </div>
         </div>
     </div>
 </body>
 </html>
 `;
-htmlVectorSearch(test, ["Nested Div"], 20)
-  .then(async (res) => {
-    console.log("results -->", res);
-    //await vectorStore.reset();
-  })
-  .catch(console.error);
+// htmlVectorSearch(test, ["Nested Div"], 3)
+//   .then(async (res) => {
+//     console.log("results -->", res);
+//     //await vectorStore.reset();
+//   })
+//   .catch(console.error);
 // console.log(parseHtml(test));

@@ -20,24 +20,37 @@ const scrollDown = {
     },
   },
 };
-const containersFound = {
+const searchContainer = {
   type: "function",
   function: {
-    name: "containersFound",
-    description: "Returns the box numbers of the target containers",
+    name: "searchContainer",
+    description:
+      "Searches a given container and selects an element based on the searchText",
     parameters: {
       type: "object",
       properties: {
-        containers: {
-          type: "array",
-          description: "An array of numbers referencing each box matching the query",
-          items: {
-            type: "number",
-          },
+        container: {
+          type: "number",
+          description: "Then numbers of box you want to search",
+        },
+        searchText: {
+          type: "string",
+          description: "text or description found in the item you are want to select",
         },
       },
     },
   },
 };
-
-export default [scrollUp, scrollDown, containersFound];
+const confirmSelection = {
+  type: "function",
+  function: {
+    name: "scrollDown",
+    description:
+      "Confirm that the target element is selected (surrounding by a green box)",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+};
+export default [scrollUp, scrollDown, searchContainer, confirmSelection];
