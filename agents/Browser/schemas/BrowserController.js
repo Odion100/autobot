@@ -25,7 +25,8 @@ const findAndType = {
       properties: {
         description: {
           type: "string",
-          description: "A simple description of the element you want to type into",
+          description:
+            "A simple description of the element you want to type into. Include the general position (i.e shopping cart button at top of the page.",
         },
         text: {
           type: "string",
@@ -79,7 +80,8 @@ const findAndSelect = {
       properties: {
         description: {
           type: "string",
-          description: "A simple description of the element you want to type into",
+          description:
+            "A simple description of the element you want to type into. Include the general position (i.e shopping cart button at top of the page.",
         },
       },
     },

@@ -35,22 +35,11 @@ const searchContainer = {
         },
         searchText: {
           type: "string",
-          description: "text or description found in the item you are want to select",
+          description:
+            "A description of the element (ie. shopping cart button) or text found in the element you are want to select",
         },
       },
     },
   },
 };
-const confirmSelection = {
-  type: "function",
-  function: {
-    name: "scrollDown",
-    description:
-      "Confirm that the target element is selected (surrounding by a green box)",
-    parameters: {
-      type: "object",
-      properties: {},
-    },
-  },
-};
-export default [scrollUp, scrollDown, searchContainer, confirmSelection];
+export default [scrollUp, scrollDown, searchContainer];

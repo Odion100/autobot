@@ -10,48 +10,70 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export default function NaturalLanguageSelector() {
   this.use({
     provider: "openai",
-    model: "gpt-4-turbo",
+    model: "gpt-4o",
     sdk: openai,
     schema,
     prompt,
+    state: { scrollComplete: false, itemFound: false, errors: 1 },
     exitConditions: {
-      iterations: 2,
-      functionCall: "confirmSelection",
-      state: (state) => state.scrollComplete,
+      iterations: 10,
+      state: (state) => state.scrollComplete || state.itemFound,
     },
     agents: ["ElementSelector"],
-    temperature: 0.3,
+    temperature: 1,
   });
 
-  this.scrollUp = async function (input, { state }) {
+  this.scrollUp = async function (data, { state, input }) {
     const result = await driver.scrollUp();
-    if (result === "scroll ended") state.scrollComplete = true;
-    return result;
-  };
-
-  this.scrollDown = async function (input, { state }) {
-    const result = await driver.scrollDown();
-    if (result === "scroll ended") state.scrollComplete = true;
-    return result;
-  };
-  this.searchContainer = async function ({ container, searchText }, { state, input }) {
-    try {
-      const itemSelected = await driver.searchContainer(
-        container,
-        searchText,
-        state.elementType
-      );
-      return itemSelected
-        ? `Please analyze and confirm if the correct item was selected. If not search a different container`
-        : `${input.message} not found in ${container}`;
-    } catch (error) {
-      console.log(error);
-      return "search error";
+    if (result === "scroll ended") {
+      state.scrollComplete = true;
+    } else {
+      state.screenshot = await driver.getScreenShot();
+      state.screenshot_message = `You have scrolled upward on the page. Please use this image continue  your search for the ${input.message}`;
+      return result;
     }
   };
 
-  this.confirmSelection = function (data, { input }) {
-    return ``;
+  this.scrollDown = async function (data, { state }) {
+    const result = await driver.scrollDown();
+    if (result === "scroll ended") {
+      state.scrollComplete = true;
+    } else {
+      state.screenshot = await driver.getScreenShot();
+      state.screenshot_message = `You have scrolled downward on the page. Please use this image to continue your search for the ${input.message}`;
+      return result;
+    }
+  };
+  this.searchContainer = async function (
+    { container, searchText },
+    { state, input, agents }
+  ) {
+    const itemSelected = await driver.searchContainer(
+      container,
+      searchText,
+      state.elementType
+    );
+    if (itemSelected) {
+      const { ElementSelector } = agents;
+      const image = await driver.captureContainer(container);
+      const message = `Is the/a ${input.message} the selected element (surrounded by a green box) in the screenshot?`;
+      const results = await ElementSelector.invoke({ image, message });
+      console.log("results --->", container, results);
+      if (results.elementFound) {
+        console.log("setting element found", container);
+        state.itemFound = true;
+        return "true";
+      } else {
+        console.log("hiding container", container);
+
+        await driver.hideContainer(container);
+        await driver.clearSelection();
+        return `Container number ${container} does not contain the ${input.message}. Please search another container.`;
+      }
+    } else {
+      await driver.hideContainer(container);
+      return `Container number ${container} does not contain the ${input.message}. Please search another container.`;
+    }
   };
 
   this.after("scrollUp", insertScreenshot);
@@ -62,11 +84,6 @@ export default function NaturalLanguageSelector() {
     await driver.setContainers();
     const image = await driver.getScreenShot();
     input.image = image;
-    input.message = `${input.message}`;
-    next();
-  });
-  this.after("$invoke", function ({ state }, next) {
-    state.scrollComplete = false;
     next();
   });
 }

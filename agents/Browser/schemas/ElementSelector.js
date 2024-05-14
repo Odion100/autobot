@@ -1,41 +1,26 @@
-const selectElement = {
+const yes = {
   type: "function",
   function: {
-    name: "selectElement",
-    description: "Select and element inside the target container.",
+    name: "yes",
+    description: "Indicates that the selected element matching the user's query.",
     parameters: {
       type: "object",
       properties: {
         searchText: {
           type: "string",
-          description: "text or description found in the item you are want to select",
+          certainty:
+            "A score from 1-5 representing your confidence in the match (1 = not confident at all, 5 = extremely confident)",
         },
       },
     },
   },
 };
-const invalidContainer = {
+const no = {
   type: "function",
   function: {
-    name: "invalidContainer",
+    name: "no",
     description:
-      "Indicates that the highlighted container does not match or container the target item.",
-    parameters: {
-      type: "object",
-      properties: {
-        reasoning: {
-          type: "string",
-          description: "A simple explication of why the selected element is incorrect.",
-        },
-      },
-    },
-  },
-};
-const itemFound = {
-  type: "function",
-  function: {
-    name: "itemFound",
-    description: "Indicates that the that the correct item has been selected.",
+      "Indicates that the selected element does not match what the user is search for, or that no item is selected",
     parameters: {
       type: "object",
       properties: {},
@@ -43,4 +28,4 @@ const itemFound = {
   },
 };
 
-export default [selectElement, invalidContainer, itemFound];
+export default [yes, no];

@@ -26,17 +26,18 @@ function browserController() {
       page.on("load", function () {
         browserState.lastPage = browserState.currentPage;
         browserState.currentPage = url;
-        browserState.actions.push(`Navigated to ${page.url()}`);
+        browserState.actions.push(`You have navigated to ${page.url()}`);
         browserState.selectedElement = "";
         browserState.selectedContainers = [];
+        containers = [];
       });
     }
 
     await page.setViewport({ width: 0, height: 0 });
     await page.goto(url);
 
-    const lastPage = browserState.currentPage;
-    return `Navigated to ${page.url()}`;
+    browserState.lastPage = browserState.currentPage;
+    return `You have navigated to ${page.url()}`;
   }
   async function setContainers() {
     if (containers.length) return "search containers already set";
@@ -46,9 +47,9 @@ function browserController() {
     return "setting search containers";
   }
   const clickable =
-    'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"], select, option';
+    'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
 
-  const typeable = 'input[type="text"], textarea';
+  const typeable = "input, textarea";
   const elementType = { clickable, typeable };
   async function searchContainer(number, searchText, target = "none") {
     const selector = getContainer(number);
@@ -57,7 +58,8 @@ function browserController() {
 
     if (results[0]) {
       console.log("results", results, results[0].selector, Object.keys(results[0]));
-      await selectElements(results[0].selector);
+      const s = results[0].selector.replace("body", selector);
+      await selectElements(s);
       return true;
     } else {
       return false;
@@ -79,8 +81,8 @@ function browserController() {
   }
 
   async function selectElements(selector, description = "element") {
-    console.log("selectElement", selector);
-    await clearSelection();
+    browserState.selectedContainers = [];
+    browserState.selectedElement = "";
     await page.evaluate(setSelection, [selector]);
     browserState.selectedElement = selector;
     const action = `Selecting ${description}.`;
@@ -155,6 +157,34 @@ function browserController() {
     return path;
   }
 
+  async function captureElement(selector) {
+    const clip = await page.evaluate((selector) => {
+      const element = document.querySelector(selector);
+      const { x, y, width, height } = element.getBoundingClientRect();
+
+      return { x: x, y: y, width, height };
+    }, selector);
+    const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
+    await page.screenshot({ clip, path });
+    return path;
+  }
+
+  async function captureContainer(number) {
+    const selector = getContainer(number);
+    return await captureElement(selector);
+  }
+  async function hideContainer(number) {
+    const selector = `#cambrian-ai-containers > div:nth-child(${number})`;
+    const hidden = await page.evaluate((selector) => {
+      const element = document.querySelector(selector);
+      if (element) {
+        element.style.display = "none";
+        return true;
+      }
+    }, selector);
+    return hidden;
+  }
+
   return {
     navigate,
     click,
@@ -172,6 +202,9 @@ function browserController() {
     state,
     getContainer,
     searchContainer,
+    captureElement,
+    captureContainer,
+    hideContainer,
   };
 }
 const driver = browserController();

@@ -1,5 +1,5 @@
 import readline from "readline";
-import BrowserAgent from "./agents/Browser/index.js";
+import driver from "./agents/Browser/utils/driver.js";
 const state = { messages: [] };
 function startLineReader() {
   const lineReader = readline.createInterface({
@@ -7,9 +7,12 @@ function startLineReader() {
     output: process.stdout,
   });
   const handleInput = async (input = "") => {
-    if (input) {
+    const [fn, args] = input.split(/:(.+)/);
+
+    if (typeof driver[fn] === "function") {
       try {
-        const response = await BrowserAgent.invoke(input, state);
+        const splitArgs = args.split(",").map((s) => s.trim());
+        const response = await driver[fn](...splitArgs);
         console.log("response", response);
       } catch (error) {
         console.log("error:", error);
