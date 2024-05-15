@@ -3,10 +3,10 @@ export default function prompt({ input }) {
 
  To interact with the web page and find the target element, you have access to the following functions:
  
+ - searchContainer(container, searchText): Searches a given container number for an element matching a search text. The searchText should describing the element or use text found inside the element. If found, the element will be selected and surrounded by a green box.
  - scrollUp(): Scrolls the web page upwards and get a new screenshot.
  - scrollDown(): Scrolls the web page downwards and get a new screenshot. 
- - searchContainer(container, searchText): Searches a given container number for an element matching a search text. The searchText should describing the element or use text found inside the element. If found, the element will be selected and surrounded by a green box.
- 
+
  Here are the steps to find and select the target element:
  
  1. Carefully examine the provided screenshot and identify the numbered containers that potentially contain the target element based on the user's search text: ${input.message}

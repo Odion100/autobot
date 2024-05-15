@@ -6,11 +6,23 @@ import dotenv from "dotenv";
 import { insertScreenshot } from "./middleware.js";
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
+//- update hide container to hide all or a list
+//- add show container method
+//- write a function to map relevant items in a container to then be labeled
+//- create an agent to label elements. it may need to work with items and containers
+// it should return a list of [{ itemNumber, description }]
+//- write a setLabels functions in the driver. Labels should be automatically saved
+//- saved labels can have a status of confirmed or not depends on how well the labeling works
+//- create a trainer agent which can set containers and labels
+//- add function to shrink and grow the containers"
+//-- part two
+//- update searchContainer to set the item Labels instead of selection
+//- create a function to update the labels
+//- save the selectors
 export default function BrowserController() {
   this.use({
     provider: "openai",
-    model: "gpt-4-turbo",
+    model: "gpt-4o",
     sdk: openai,
     schema,
     prompt,

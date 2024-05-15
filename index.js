@@ -1,12 +1,30 @@
 import readline from "readline";
+import driver from "./agents/Browser/utils/driver.js";
 import BrowserAgent from "./agents/Browser/index.js";
 const state = { messages: [] };
-function startLineReader() {
+async function startLineReader() {
   const lineReader = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
+  await driver.navigate("https://amazon.com");
+  await driver.setContainers();
+  await driver.searchContainer(5, "search bar", "both");
   const handleInput = async (input = "") => {
+    if (input.charAt(0) === ".") {
+      const [fn, args] = input.substring(1).split(/:(.+)/);
+
+      if (typeof driver[fn] === "function") {
+        try {
+          const splitArgs = args.split(",").map((s) => s.trim());
+          const response = await driver[fn](...splitArgs);
+          console.log("response", response);
+        } catch (error) {
+          console.log("error:", error);
+        }
+      }
+      return;
+    }
     if (input) {
       try {
         const response = await BrowserAgent.invoke(input, state);

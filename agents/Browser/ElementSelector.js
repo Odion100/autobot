@@ -8,7 +8,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export default function ElementSelector() {
   this.use({
     provider: "openai",
-    model: "gpt-4-turbo",
+    model: "gpt-4o",
     sdk: openai,
     schema,
     prompt,

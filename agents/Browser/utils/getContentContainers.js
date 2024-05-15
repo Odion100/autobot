@@ -36,7 +36,7 @@ export default function getContentContainers(html, chunkSize = 4000) {
       parent.text(innerText);
       // const elementsTxt = $.html(parent).toString();
       // console.log({ section, container });
-      htmlContent.push({ section, container });
+      htmlContent.push({ section, container, selector: container });
     } else {
       // console.log("checking children -->");
       parent.children().each((index, child) => {

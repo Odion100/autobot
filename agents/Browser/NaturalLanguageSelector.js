@@ -66,12 +66,12 @@ export default function NaturalLanguageSelector() {
       } else {
         console.log("hiding container", container);
 
-        await driver.hideContainer(container);
+        await driver.hideContainers(container);
         await driver.clearSelection();
         return `Container number ${container} does not contain the ${input.message}. Please search another container.`;
       }
     } else {
-      await driver.hideContainer(container);
+      await driver.hideContainers(container);
       return `Container number ${container} does not contain the ${input.message}. Please search another container.`;
     }
   };

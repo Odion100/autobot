@@ -41,9 +41,12 @@ export default async function htmlVectorSearch(
   const collection = await vectorStore.createCollection({
     name: "test4",
     embeddingFunction: embeddingFunction(),
+    metadata: { "hnsw:space": "cosine" },
   });
   await collection.add(embeddingData);
-  return (await collection.query({ queryTexts, nResults })).metadatas[0];
+  const results = await collection.query({ queryTexts, nResults });
+  console.log("results1", results);
+  return results.metadatas[0];
 }
 
 async function getEmbeddings(input) {

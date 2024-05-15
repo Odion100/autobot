@@ -3,6 +3,8 @@ import getContentContainers from "./getContentContainers.js";
 import addContentContainers from "./addContentContainers.js";
 import setSelection from "./setSelection.js";
 import htmlVectorSearch from "./htmlVectorSearch.js";
+import selectorStore from "./selectorStore.js";
+import addLabels from "./addLabels.js";
 
 function browserController() {
   let browser;
@@ -16,6 +18,7 @@ function browserController() {
     selectedContainers: [],
     scrollHeight: 0,
     containers,
+    labeledElements: [],
   };
   const state = () => browserState;
   const getContainer = (n) => containers[n - 1].container;
@@ -50,20 +53,36 @@ function browserController() {
     'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
 
   const typeable = "input, textarea";
-  const elementType = { clickable, typeable };
+  const both = clickable + ", " + typeable;
+  const elementType = { clickable, typeable, both };
   async function searchContainer(number, searchText, target = "none") {
     const selector = getContainer(number);
     const html = await getHtml(selector);
-    const results = await htmlVectorSearch(html, searchText, 3, elementType[target]);
+    const results = await htmlVectorSearch(html, searchText, 5, elementType[target]);
 
     if (results[0]) {
       console.log("results", results, results[0].selector, Object.keys(results[0]));
       const s = results[0].selector.replace("body", selector);
-      await selectElements(s);
+      const selectors = results.map(({ selector: s }) => s.replace("body", selector));
+      console.log("selectors", selectors);
+      await setLabels(results);
       return true;
     } else {
       return false;
     }
+  }
+  async function setLabels(selection, type = "item") {
+    browserState.labeledElements = [];
+    await page.evaluate(addLabels, selection, type);
+    browserState.labeledElements = selection;
+  }
+  async function clearLabels() {
+    await page.evaluate(() => {
+      const elementToRemove = document.getElementById("cambrian-ai-labels"); // Replace '.className' with the class name of the elements you want to remove
+      if (elementToRemove) elementToRemove.remove();
+    });
+    browserState.labeledElements = [];
+    return "Clearing search containers";
   }
   async function clearContainers() {
     await page.evaluate(() => {
@@ -80,11 +99,11 @@ function browserController() {
     return `Found and selected ${numbers.length} containers.`;
   }
 
-  async function selectElements(selector, description = "element") {
+  async function selectElements(selectors, description = "element") {
     browserState.selectedContainers = [];
     browserState.selectedElement = "";
-    await page.evaluate(setSelection, [selector]);
-    browserState.selectedElement = selector;
+    await page.evaluate(setSelection, selectors);
+    browserState.selectedElement = selectors;
     const action = `Selecting ${description}.`;
     browserState.actions.push(action);
     return action;
@@ -173,16 +192,40 @@ function browserController() {
     const selector = getContainer(number);
     return await captureElement(selector);
   }
-  async function hideContainer(number) {
-    const selector = `#cambrian-ai-containers > div:nth-child(${number})`;
-    const hidden = await page.evaluate((selector) => {
-      const element = document.querySelector(selector);
-      if (element) {
-        element.style.display = "none";
-        return true;
-      }
-    }, selector);
+  async function toggleContainers(input, show = true) {
+    const numbers = !input
+      ? containers.map((item, i) => i + 1)
+      : Array.isArray(input)
+      ? input
+      : [input];
+    const display = show ? "initial" : "none";
+    const hidden = await page.evaluate(
+      (numbers, display) => {
+        for (number of numbers) {
+          const selector = `#cambrian-ai-containers > div:nth-child(${number})`;
+          const element = document.querySelector(selector);
+          if (element) element.style.display = display;
+        }
+      },
+      numbers,
+      display
+    );
     return hidden;
+  }
+  async function hideContainers(input) {
+    return toggleContainers(input, false);
+  }
+  async function showContainers(input) {
+    return toggleContainers(input);
+  }
+  async function getSelector(description = "") {
+    const url = browserState.currentPage;
+    const selectors = await selectorStore.get(url, description);
+    return selectors[0];
+  }
+  async function saveSelector(selector = browserState.selectedElement, description = "") {
+    const url = browserState.currentPage;
+    await selectorStore.save(url, selector, description);
   }
 
   return {
@@ -204,7 +247,13 @@ function browserController() {
     searchContainer,
     captureElement,
     captureContainer,
-    hideContainer,
+    hideContainers,
+    getSelector,
+    saveSelector,
+    showContainers,
+    toggleContainers,
+    clearLabels,
+    setLabels,
   };
 }
 const driver = browserController();
