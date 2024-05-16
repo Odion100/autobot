@@ -9,7 +9,6 @@ import addLabels from "./addLabels.js";
 function browserController() {
   let browser;
   let page;
-  let containers = [];
   const browserState = {
     currentPage: "",
     lastPage: "",
@@ -17,11 +16,12 @@ function browserController() {
     selectedElement: "",
     selectedContainers: [],
     scrollHeight: 0,
-    containers,
+    containers: [],
     labeledElements: [],
   };
   const state = () => browserState;
-  const getContainer = (n) => containers[n - 1].container;
+  const getContainer = (n) => browserState.containers[n - 1];
+  const getLabeledElement = (n) => browserState.labeledElements[n - 1];
   async function navigate(url) {
     if (!browser) {
       browser = await puppeteer.launch({ headless: false, args: ["--start-maximized"] });
@@ -32,7 +32,9 @@ function browserController() {
         browserState.actions.push(`You have navigated to ${page.url()}`);
         browserState.selectedElement = "";
         browserState.selectedContainers = [];
-        containers = [];
+        browserState.containers = [];
+        browserState.labeledElements = [];
+        browserState.scrollHeight = 0;
       });
     }
 
@@ -43,10 +45,10 @@ function browserController() {
     return `You have navigated to ${page.url()}`;
   }
   async function setContainers() {
-    if (containers.length) return "search containers already set";
+    if (browserState.containers.length) return "search containers already set";
     const html = await page.content();
-    containers = getContentContainers(html);
-    await page.evaluate(addContentContainers, containers);
+    browserState.containers = getContentContainers(html);
+    await page.evaluate(addContentContainers, browserState.containers);
     return "setting search containers";
   }
   const clickable =
@@ -55,8 +57,9 @@ function browserController() {
   const typeable = "input, textarea";
   const both = clickable + ", " + typeable;
   const elementType = { clickable, typeable, both };
+
   async function searchContainer(number, searchText, target = "none") {
-    const selector = getContainer(number);
+    const { selector } = getContainer(number);
     const html = await getHtml(selector);
     const results = await htmlVectorSearch(html, searchText, 5, elementType[target]);
 
@@ -71,9 +74,41 @@ function browserController() {
       return false;
     }
   }
-  async function setLabels(selection, type = "item") {
-    browserState.labeledElements = [];
-    await page.evaluate(addLabels, selection, type);
+  async function updateLabels(updates = [], type = "labeledElements") {
+    console.log("updates--->", updates);
+    console.log(type, browserState[type]);
+    const updatedLabels = [];
+    const labels = browserState[type];
+    const newLabels = Array.isArray(updates) ? updates : [updates];
+    for (const newLabel of newLabels) {
+      const oldLabel = labels[newLabel.number - 1];
+      if (oldLabel) {
+        Object.assign(oldLabel, newLabel);
+        updatedLabels.push(oldLabel);
+      }
+    }
+    console.log("updatedLabels", updatedLabels);
+
+    const labelSelector =
+      type === "labeledElements" ? "#cambrian-ai-labels" : "#cambrian-ai-containers";
+    await page.evaluate(
+      (updatedLabels, labelSelector) => {
+        for (const label of updatedLabels) {
+          const selector = `${labelSelector} > div:nth-child(${label.number}) > div.box-label`;
+          console.log("selector4", selector);
+          const element = document.querySelector(selector);
+          if (element) element.textContent = label.label;
+        }
+      },
+      updatedLabels,
+      labelSelector
+    );
+    console.log(type, browserState[type]);
+  }
+
+  async function setLabels(selection) {
+    await clearLabels();
+    await page.evaluate(addLabels, selection);
     browserState.labeledElements = selection;
   }
   async function clearLabels() {
@@ -89,14 +124,8 @@ function browserController() {
       const elementToRemove = document.getElementById("cambrian-ai-containers"); // Replace '.className' with the class name of the elements you want to remove
       if (elementToRemove) elementToRemove.remove();
     });
-    containers = [];
+    browserState.containers = [];
     return "Clearing search containers";
-  }
-  async function selectContainers(numbers) {
-    const selectors = numbers.map((number) => containers[number - 1].container);
-    await page.evaluate(setSelection, selectors);
-    browserState.selectedContainers.push(...selectors);
-    return `Found and selected ${numbers.length} containers.`;
   }
 
   async function selectElements(selectors, description = "element") {
@@ -189,12 +218,12 @@ function browserController() {
   }
 
   async function captureContainer(number) {
-    const selector = getContainer(number);
+    const { selector } = getContainer(number);
     return await captureElement(selector);
   }
   async function toggleContainers(input, show = true) {
     const numbers = !input
-      ? containers.map((item, i) => i + 1)
+      ? browserState.containers.map((item, i) => i + 1)
       : Array.isArray(input)
       ? input
       : [input];
@@ -221,11 +250,12 @@ function browserController() {
   async function getSelector(description = "") {
     const url = browserState.currentPage;
     const selectors = await selectorStore.get(url, description);
-    return selectors[0];
+    if (selectors.length) return selectors[0].selector;
   }
-  async function saveSelector(selector = browserState.selectedElement, description = "") {
+  async function saveSelectors(selectors) {
+    const newSelectors = Array.isArray(selectors) ? selectors : [labels];
     const url = browserState.currentPage;
-    await selectorStore.save(url, selector, description);
+    await selectorStore.save(url, newSelectors);
   }
 
   return {
@@ -236,9 +266,9 @@ function browserController() {
     scrollDown,
     getScreenShot,
     setContainers,
+    getLabeledElement,
     clearContainers,
     clearSelection,
-    selectContainers,
     selectElements,
     getInnerText,
     getHtml,
@@ -249,11 +279,12 @@ function browserController() {
     captureContainer,
     hideContainers,
     getSelector,
-    saveSelector,
+    saveSelectors,
     showContainers,
     toggleContainers,
     clearLabels,
     setLabels,
+    updateLabels,
   };
 }
 const driver = browserController();

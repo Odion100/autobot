@@ -29,14 +29,14 @@ export default function getContentContainers(html, chunkSize = 4000) {
     );
 
     if (innerText.length <= chunkSize && interActiveElements.length <= 250) {
-      const container = getFullSelector(parent);
-      const section = getFullSelector(findRealContainer(parent));
+      const selector = getFullSelector(parent);
 
       parent.empty();
       parent.text(innerText);
       // const elementsTxt = $.html(parent).toString();
       // console.log({ section, container });
-      htmlContent.push({ section, container, selector: container });
+
+      htmlContent.push({ selector, type: "content" });
     } else {
       // console.log("checking children -->");
       parent.children().each((index, child) => {

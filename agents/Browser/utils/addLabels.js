@@ -36,7 +36,7 @@ export default function addLabels(selections) {
     box.style.border = "2px solid #0eff0e";
     box.style.pointerEvents = "none";
     box.style.zIndex = `${zIndex}`;
-    box.id = `${i + 1}`;
+    box.id = `container_${i + 1}`;
 
     const label = document.createElement("div");
     let top = "0px";
@@ -45,7 +45,8 @@ export default function addLabels(selections) {
       right = "-11px";
       top = "-2px";
     }
-    label.textContent = lb || `${i + 1}`; // Change the label as needed
+    label.className = "box-label";
+    label.textContent = lb || `${i + 1}`;
     label.style.position = "absolute";
     label.style.top = top;
     label.style.right = right;
@@ -55,7 +56,7 @@ export default function addLabels(selections) {
     label.style.lineHeight = "13px";
     label.style.border = "1px solid #0eff0e";
     label.style.fontSize = "13px";
-    //if (i + 1 === 21) viewElement = selector;
+
     box.appendChild(label);
     boxContainer.appendChild(box);
   });

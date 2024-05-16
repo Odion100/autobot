@@ -83,6 +83,8 @@ function parseHtml(html, selector = "*") {
         .map((word) => word.trim())
         .filter((word) => word)
         .join(" "),
+      number: i + 1,
+      type: getElementType(element),
     }))
     .get();
 }
@@ -144,13 +146,33 @@ function getFullSelector(element) {
   // Return the first parent with more than one child or with an ID
   return getSelector(parent) + " > " + selector;
 }
-function findRealContainer(element) {
-  let parent = element.parent();
-  // console.log("parent.get(0).tagName)", parent.get(0).tagName);
-  while (parent.get(0).tagName !== "html" && parent.children().length <= 1) {
-    parent = parent.parent();
+function getElementType(element) {
+  const tagName = element.tagName;
+  const attributes = element.attribs;
+
+  // Check if element has an onclick attribute or is one of the other types of clickable elements
+  if (
+    attributes.onclick ||
+    tagName === "a" ||
+    tagName === "button" ||
+    attributes.type === "button" ||
+    attributes.type === "submit" ||
+    attributes.type === "reset" ||
+    attributes.type === "image" ||
+    attributes.type === "file" ||
+    attributes.type === "checkbox" ||
+    attributes.type === "radio"
+  ) {
+    return "clickable";
   }
-  return parent;
+  // Check if element is an input or textarea
+  else if (tagName === "input" || tagName === "textarea") {
+    return "typeable";
+  }
+  // If not clickable or typeable, consider it as content
+  else {
+    return "content";
+  }
 }
 const test = `<!DOCTYPE html>
 <html lang="en">

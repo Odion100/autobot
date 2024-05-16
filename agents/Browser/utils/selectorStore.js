@@ -1,6 +1,6 @@
 import { ChromaClient } from "chromadb";
 import dotenv from "dotenv";
-
+import uniqueId from "./uniqueId.js";
 dotenv.config();
 import OpenAI from "openai";
 
@@ -8,26 +8,69 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const vectorStore = new ChromaClient();
 
-export async function save(url, selector, description) {
+export async function save(url, selectors) {
   const domain = parseDomain(url);
   const collection = await vectorStore.getOrCreateCollection({
     name: domain,
     embeddingFunction: embeddingFunction(),
   });
-  await collection.upsert({
-    ids: [description],
-    documents: [description],
-    metadatas: [selector],
-  });
+  const embeddingData = selectors.reduce(
+    (sum, { id = uniqueId(), label, description, ...rest }) => {
+      sum.documents.push(`${label}: ${description}`);
+      sum.ids.push(id);
+      sum.metadatas.push(rest);
+      return sum;
+    },
+    {
+      ids: [],
+      documents: [],
+      metadatas: [],
+    }
+  );
+  await collection.upsert(embeddingData);
 }
+
 export async function get(url, description, nResults = 3) {
   const domain = parseDomain(url);
-  const collection = await vectorStore.getOrCreateCollection({
+  const collection = await vectorStore.getCollection({
     name: domain,
     embeddingFunction: embeddingFunction(),
   });
-  const results = await collection.query({ queryTexts: description, nResults });
-  console.log("get results", results);
+  if (collection) {
+    const results = await collection.query({ queryTexts: description, nResults });
+    console.log("get results", results);
+    return results.metadatas[0];
+  }
+  return [];
+}
+export async function quickSearch(selectors, queryTexts, nResults = 3) {
+  const embeddingData = selectors.reduce(
+    (sum, { label, description, ...rest }, i) => {
+      sum.documents.push(description);
+      sum.ids.push(`id${i}`);
+      sum.metadatas.push(rest);
+      return sum;
+    },
+    {
+      ids: [],
+      documents: [],
+      metadatas: [],
+    }
+  );
+  try {
+    await vectorStore.deleteCollection({
+      name: "temp",
+    });
+  } catch (error) {
+    console.log(error);
+  }
+  const collection = await vectorStore.createCollection({
+    name: "temp",
+    embeddingFunction: embeddingFunction(),
+    metadata: { "hnsw:space": "cosine" },
+  });
+  await collection.add(embeddingData);
+  const results = await collection.query({ queryTexts, nResults });
   return results.metadatas[0];
 }
 function parseDomain(url) {
