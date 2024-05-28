@@ -1,4 +1,4 @@
-export default function addLabels(selections) {
+export default function addLabels(identifiers) {
   function getRect(element) {
     const rect = element.getBoundingClientRect();
     // Convert the position and dimensions to string values with "px" units
@@ -11,6 +11,14 @@ export default function addLabels(selections) {
       height: `${rect.height}px`,
     };
   }
+  function isVisible(element) {
+    const style = window.getComputedStyle(element);
+    return !(
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      element.offsetParent === null
+    );
+  }
 
   let zIndex = 9999;
   let boxContainer = document.getElementById("cambrian-ai-labels");
@@ -19,14 +27,16 @@ export default function addLabels(selections) {
     document.body.appendChild(boxContainer);
     boxContainer.id = "cambrian-ai-labels";
   }
-  selections.forEach(({ selector, label: lb }, i) => {
+  identifiers.forEach(({ selector, label: lb, number }, i) => {
     console.log("selector", selector);
     const element = document.querySelector(selector);
     if (!element) return null; // Return null if element is not found
     const rect = getRect(element);
 
     const box = document.createElement("div");
-
+    if (!isVisible(element)) {
+      box.style.display = "none";
+    }
     zIndex--;
     box.style.position = "absolute";
     box.style.top = rect.top;
@@ -36,7 +46,7 @@ export default function addLabels(selections) {
     box.style.border = "2px solid #0eff0e";
     box.style.pointerEvents = "none";
     box.style.zIndex = `${zIndex}`;
-    box.id = `container_${i + 1}`;
+    // box.id = `container_${i + 1}`;
 
     const label = document.createElement("div");
     let top = "0px";
@@ -46,7 +56,7 @@ export default function addLabels(selections) {
       top = "-2px";
     }
     label.className = "box-label";
-    label.textContent = lb || `${i + 1}`;
+    label.textContent = lb || number;
     label.style.position = "absolute";
     label.style.top = top;
     label.style.right = right;

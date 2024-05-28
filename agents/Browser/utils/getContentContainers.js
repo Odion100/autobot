@@ -1,10 +1,12 @@
 import cheerio from "cheerio";
-export default function getContentContainers(html, chunkSize = 4000) {
+export default function getContentContainers(html, chunkSize, elementLimit) {
   // Load HTML content using Cheerio
   const $ = html.length ? cheerio.load(html) : null;
   const pageLength = $("body").text().length;
-  chunkSize = pageLength * 0.012;
-
+  if (!chunkSize) chunkSize = pageLength * 0.015;
+  if (!elementLimit) elementLimit = chunkSize * 0.05;
+  console.log("chunkSize", chunkSize);
+  console.log("elementLimit", elementLimit);
   // Array to store chunked HTML strings
   const htmlContent = [];
   const skipElements = [
@@ -17,6 +19,7 @@ export default function getContentContainers(html, chunkSize = 4000) {
     "meta",
     "svg",
   ];
+  let containerNumber = 0;
   async function extractContent(parent) {
     let innerText = parent
       .text()
@@ -30,13 +33,13 @@ export default function getContentContainers(html, chunkSize = 4000) {
 
     if (innerText.length <= chunkSize && interActiveElements.length <= 250) {
       const selector = getFullSelector(parent);
-
+      const html = $.html(parent).toString();
       parent.empty();
       parent.text(innerText);
-      // const elementsTxt = $.html(parent).toString();
-      // console.log({ section, container });
 
-      htmlContent.push({ selector, type: "content" });
+      // console.log({ section, container });
+      containerNumber++;
+      htmlContent.push({ selector, html, containerNumber });
     } else {
       // console.log("checking children -->");
       parent.children().each((index, child) => {
@@ -108,7 +111,7 @@ function getFullSelector(element) {
   while (!["body", "html"].includes(parent.get(0).tagName) && !parent.attr("id")) {
     // if (parent.get(0)) console.log("tag2", parent.get(0).tagName);
     selector = `${getSelector(parent)} > ${selector}`;
-    console.log("selector->", selector);
+    // console.log("selector->", selector);
     parent = parent.parent();
   }
   // console.log("tag3", parent.get(0).tagName);

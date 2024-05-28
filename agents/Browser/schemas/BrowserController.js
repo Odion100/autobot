@@ -19,20 +19,40 @@ const findAndType = {
   function: {
     name: "findAndType",
     description:
-      "Types the given text into the first element matching a natural language description of where you want to type",
+      "Types the given text into the first element matching the element matching a search using a description of the element and text found in and around the element.",
     parameters: {
       type: "object",
       properties: {
-        description: {
+        elementName: {
+          type: "string",
+          description: "A concise name or label to describe the element.",
+        },
+        elementDescription: {
           type: "string",
           description:
-            "A simple description of the element you want to type into. Include the general position (i.e shopping cart button at top of the page.",
+            "Describe the element's purpose and functionality as it relates to the entire page.",
         },
-        text: {
+        elementText: {
+          type: "string",
+          description: "Any text that is visible within the element.",
+        },
+        containerText: {
+          type: "string",
+          description:
+            "As much text as can be seen within the same red container as the target element. The boundaries of the container are the red box in which the element is inside",
+        },
+        inputText: {
           type: "string",
           description: "The text to type into the input",
         },
       },
+      required: [
+        "elementName",
+        "elementDescription",
+        "elementText",
+        "containerText",
+        "inputText",
+      ],
     },
   },
 };
@@ -41,28 +61,43 @@ const findAndClick = {
   function: {
     name: "findAndClick",
     description:
-      "Clicks on the first element matching a natural language description of the item you want to click",
+      "Clicks on the first element matching a search using a description of the element and text found in and around the element.",
     parameters: {
       type: "object",
       properties: {
-        description: {
+        elementName: {
           type: "string",
-          description: "A simple description of the element you want to click",
+          description: "A concise name or label to describe the element.",
+        },
+        elementDescription: {
+          type: "string",
+          description:
+            "Describe the element's purpose and functionality as it relates to the entire page.",
+        },
+        elementText: {
+          type: "string",
+          description: "Any text that is visible within the element.",
+        },
+        containerText: {
+          type: "string",
+          description:
+            "As much text as can be seen within the same red container as the target element. The boundaries of the container are the red box in which the element is inside",
         },
       },
+      required: ["elementName", "elementDescription", "elementText", "containerText"],
     },
   },
 };
-const findContent = {
+const saveContent = {
   type: "function",
   function: {
-    name: "findContent",
+    name: "saveContent",
     description:
-      "Finds text content based on a natural language description of the content",
+      "Use this function to collect any data you can see on the screen. The content should be a list of the data collected in csv format.",
     parameters: {
       type: "object",
       properties: {
-        description: {
+        content: {
           type: "string",
           description: "A simple description of the element from you want extract data.",
         },
@@ -70,61 +105,30 @@ const findContent = {
     },
   },
 };
-const findAndSelect = {
+
+const scrollUp = {
   type: "function",
   function: {
-    name: "findAndSelect",
-    description: "Finds and selects elements based on a natural language description.",
-    parameters: {
-      type: "object",
-      properties: {
-        description: {
-          type: "string",
-          description:
-            "A simple description of the element you want to type into. Include the general position (i.e shopping cart button at top of the page.",
-        },
-      },
-    },
-  },
-};
-const click = {
-  type: "function",
-  function: {
-    name: "click",
-    description: "Clicks on the selected element.",
+    name: "scrollUp",
+    description: "Scrolls the web page downward and get a screenshot.",
     parameters: {
       type: "object",
       properties: {},
     },
   },
 };
-const type = {
+const scrollDown = {
   type: "function",
   function: {
-    name: "type",
-    description: "Types into the selected input.",
-    parameters: {
-      type: "object",
-      properties: {
-        text: {
-          type: "string",
-          description: "The text to type into the selected input",
-        },
-      },
-    },
-  },
-};
-const getText = {
-  type: "function",
-  function: {
-    name: "getText",
-    description: "Get the text from the selected element.",
+    name: "scrollDown",
+    description: "Scrolls the web page downward and get a screenshot.",
     parameters: {
       type: "object",
       properties: {},
     },
   },
 };
+
 const promptUser = {
   type: "function",
   function: {
@@ -136,28 +140,20 @@ const promptUser = {
       properties: {
         text: {
           type: "string",
-          prompt: "A question or, request help for the use",
+          prompt:
+            "Call the function when you have completed your task or if to ask the user for context or clarification.",
         },
       },
     },
   },
 };
-export default function schema({ driver } = {}) {
-  const elementSelected = driver ? !!driver.state().selectedElement : false;
 
-  if (elementSelected) {
-    return [
-      navigate,
-      findAndType,
-      findAndClick,
-      findAndSelect,
-      findContent,
-      promptUser,
-      click,
-      type,
-      getText,
-    ];
-  } else {
-    return [navigate, findAndType, findAndClick, findAndSelect, findContent, promptUser];
-  }
-}
+export default [
+  navigate,
+  findAndType,
+  findAndClick,
+  saveContent,
+  scrollUp,
+  scrollDown,
+  promptUser,
+];

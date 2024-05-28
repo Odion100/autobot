@@ -1,10 +1,12 @@
 import puppeteer from "puppeteer";
 import getContentContainers from "./getContentContainers.js";
-import addContentContainers from "./addContentContainers.js";
+import setContentContainers from "./setContentContainers.js";
 import setSelection from "./setSelection.js";
 import htmlVectorSearch from "./htmlVectorSearch.js";
+import getViewport from "./getViewport.js";
 import selectorStore from "./selectorStore.js";
-import addLabels from "./addLabels.js";
+import setLabels from "./setLabels.js";
+import insertContainerLabels from "./insertContainerLabels.js";
 
 function browserController() {
   let browser;
@@ -13,11 +15,12 @@ function browserController() {
     currentPage: "",
     lastPage: "",
     actions: [],
-    selectedElement: "",
+    selectedElement: undefined,
     selectedContainers: [],
     scrollHeight: 0,
     containers: [],
     labeledElements: [],
+    showSelection: true,
   };
   const state = () => browserState;
   const getContainer = (n) => browserState.containers[n - 1];
@@ -26,15 +29,18 @@ function browserController() {
     if (!browser) {
       browser = await puppeteer.launch({ headless: false, args: ["--start-maximized"] });
       page = await browser.newPage();
-      page.on("load", function () {
+      page.on("load", async function () {
+        console.log("page load event --->");
         browserState.lastPage = browserState.currentPage;
         browserState.currentPage = url;
         browserState.actions.push(`You have navigated to ${page.url()}`);
-        browserState.selectedElement = "";
+        browserState.selectedElement = undefined;
         browserState.selectedContainers = [];
         browserState.containers = [];
         browserState.labeledElements = [];
         browserState.scrollHeight = 0;
+        await searchContainers();
+        await selectorStore.clear("active-page");
       });
     }
 
@@ -44,13 +50,7 @@ function browserController() {
     browserState.lastPage = browserState.currentPage;
     return `You have navigated to ${page.url()}`;
   }
-  async function setContainers() {
-    if (browserState.containers.length) return "search containers already set";
-    const html = await page.content();
-    browserState.containers = getContentContainers(html);
-    await page.evaluate(addContentContainers, browserState.containers);
-    return "setting search containers";
-  }
+
   const clickable =
     'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
 
@@ -58,25 +58,75 @@ function browserController() {
   const both = clickable + ", " + typeable;
   const elementType = { clickable, typeable, both };
 
-  async function searchContainer(number, searchText, target = "none") {
-    const { selector } = getContainer(number);
-    const html = await getHtml(selector);
-    const results = await htmlVectorSearch(html, searchText, 5, elementType[target]);
+  async function searchContainers(containers = [], searchText, target = "both") {
+    return await htmlVectorSearch(containers, searchText, 5, both);
+  }
+  async function searchPage(searchText, target = "both") {
+    await setContainers();
+    await clearInsertedLabels();
+    const viewportContainers = await page.evaluate(getViewport, browserState.containers);
+    console.log("viewportContainers-->", viewportContainers.length);
+    const { results } = await searchContainers(viewportContainers, searchText, target);
+    if (!results.length) return;
+    const filteredIdentifiers = await page.evaluate(function filterHiddenElements(
+      results
+    ) {
+      return results.reduce(function (acc, identifier, i) {
+        const element = document.querySelector(identifier.selector);
+        if (!element) {
+          console.log("element missing", identifier);
+          return acc;
+        }
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        const width = parseFloat(rect.width);
+        const height = parseFloat(rect.height);
+        if (
+          !(
+            width <= 1 ||
+            height <= 1 ||
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            element.offsetParent === null
+          )
+        ) {
+          identifier.number = acc.length + 1;
+          identifier.width = rect.width;
+          identifier.height = rect.height;
+          identifier.display = style.display;
+          identifier.visibility = style.visibility;
+          identifier.offset = element.offsetParent === null;
+          acc.push(identifier);
+        }
+        return acc;
+      }, []);
+    },
+    results);
+    console.log("filteredIdentifiers", filteredIdentifiers);
+    await insertLabels(filteredIdentifiers);
 
-    if (results[0]) {
-      console.log("results", results, results[0].selector, Object.keys(results[0]));
-      const s = results[0].selector.replace("body", selector);
-      const selectors = results.map(({ selector: s }) => s.replace("body", selector));
-      console.log("selectors", selectors);
-      await setLabels(results);
-      return true;
-    } else {
-      return false;
-    }
+    return filteredIdentifiers;
+  }
+  //1. insert label into the container so that they are hidden with them
+  // - create a function called insertLabels
+  // - container number must be added in the getContentContainers function
+  // - containerNumber must then be added to the htmlVectorSearch
+  // - it will take a list of identifiers and use the containerNumber to insert it
+  // - show and hide only the target container when getting descriptions
+  // - hideContainers and show... need to loop through all containers
+  // - hideContainers needs a excludeNumber for the second parameter
+  //--next
+  // add getScreen shot method to the BrowserController
+  async function insertLabels(identifiers) {
+    await page.evaluate(insertContainerLabels, identifiers);
+  }
+  async function clearInsertedLabels() {
+    await page.evaluate(() => {
+      const elements = document.querySelectorAll(".inserted-identifiers");
+      elements.forEach((element) => element.remove());
+    });
   }
   async function updateLabels(updates = [], type = "labeledElements") {
-    console.log("updates--->", updates);
-    console.log(type, browserState[type]);
     const updatedLabels = [];
     const labels = browserState[type];
     const newLabels = Array.isArray(updates) ? updates : [updates];
@@ -87,7 +137,6 @@ function browserController() {
         updatedLabels.push(oldLabel);
       }
     }
-    console.log("updatedLabels", updatedLabels);
 
     const labelSelector =
       type === "labeledElements" ? "#cambrian-ai-labels" : "#cambrian-ai-containers";
@@ -95,7 +144,6 @@ function browserController() {
       (updatedLabels, labelSelector) => {
         for (const label of updatedLabels) {
           const selector = `${labelSelector} > div:nth-child(${label.number}) > div.box-label`;
-          console.log("selector4", selector);
           const element = document.querySelector(selector);
           if (element) element.textContent = label.label;
         }
@@ -103,21 +151,31 @@ function browserController() {
       updatedLabels,
       labelSelector
     );
-    console.log(type, browserState[type]);
+    await selectorStore.save("active-page", updatedLabels);
   }
 
-  async function setLabels(selection) {
-    await clearLabels();
-    await page.evaluate(addLabels, selection);
-    browserState.labeledElements = selection;
+  async function addLabels(identifiers) {
+    await page.evaluate(setLabels, identifiers);
+    browserState.labeledElements = identifiers;
   }
+
   async function clearLabels() {
-    await page.evaluate(() => {
+    const test = await page.evaluate(() => {
       const elementToRemove = document.getElementById("cambrian-ai-labels"); // Replace '.className' with the class name of the elements you want to remove
       if (elementToRemove) elementToRemove.remove();
+      else return true;
     });
+    if (test) console.log("failed to remove labels <--------------");
     browserState.labeledElements = [];
-    return "Clearing search containers";
+  }
+  async function setContainers(chunkSize, elementLimit) {
+    if (browserState.containers.length) return await showContainers();
+
+    const html = await page.content();
+    browserState.containers = getContentContainers(html, chunkSize, elementLimit);
+
+    await page.evaluate(setContentContainers, browserState.containers);
+    return "setting search containers";
   }
   async function clearContainers() {
     await page.evaluate(() => {
@@ -128,14 +186,30 @@ function browserController() {
     return "Clearing search containers";
   }
 
-  async function selectElements(selectors, description = "element") {
-    browserState.selectedContainers = [];
-    browserState.selectedElement = "";
-    await page.evaluate(setSelection, selectors);
-    browserState.selectedElement = selectors;
-    const action = `Selecting ${description}.`;
-    browserState.actions.push(action);
-    return action;
+  async function selectElement(identifier, shouldSave) {
+    const { selector, additionalSelectors = [] } = identifier;
+    const selectors = [selector, ...additionalSelectors];
+    let elementHandler;
+    console.log("selectElement", identifier, selectors);
+    for (const selector of selectors) {
+      elementHandler = await page.$(selector);
+      if (elementHandler) {
+        if (selector !== identifier.selector) {
+          identifier.additionalSelectors.unshift(identifier.selector);
+          identifier.selector = selector;
+          identifier.additionalSelectors.filter((s) => s !== selector);
+          saveSelectors(identifier);
+        } else if (shouldSave) saveSelectors(identifier);
+        break;
+      }
+    }
+
+    if (elementHandler) {
+      browserState.selectedElement = undefined;
+      if (browserState.showSelection) await page.evaluate(setSelection, elementHandler);
+      browserState.selectedElement = identifier;
+      return elementHandler;
+    }
   }
 
   async function clearSelection() {
@@ -143,25 +217,18 @@ function browserController() {
       const elementToRemove = document.getElementById("cambrian-ai-selection"); // Replace '.className' with the class name of the elements you want to remove
       if (elementToRemove) elementToRemove.remove();
     });
-    browserState.selectedContainers = [];
-    browserState.selectedElement = "";
+    browserState.selectedElement = undefined;
     return browserState;
   }
-  async function click(selector = browserState.selectedElement, description = "") {
-    await page.click(selector);
-    const action = `Clicked ${description}.`;
-    browserState.actions.push(action);
-    return action;
+  async function click(identifier = [browserState.selectedElement]) {
+    await page.click(identifier.selector);
   }
-  async function type(
-    selector = browserState.selectedElement,
-    text,
-    description = "input"
-  ) {
-    await page.type(selector, text);
-    const action = `typed "${text}" into ${description}`;
-    browserState.actions.push(action);
-    return action;
+  async function type(identifier = [browserState.selectedElement], text) {
+    const element = await selectElement(identifier);
+    if (element) {
+      element.type(text, { delay: 100 });
+      return true;
+    }
   }
   async function getHtml(selector = browserState.selectedElement) {
     const element = await page.$(selector);
@@ -180,7 +247,7 @@ function browserController() {
       window.scrollBy(0, -window.innerHeight);
       return document.body.scrollHeight;
     });
-    if (scrollHeight === browserState.scrollHeight) return "scroll ended";
+    if (scrollHeight === browserState.scrollHeight) return "scroll complete";
     browserState.scrollHeight = scrollHeight;
     const action = `scrolling up`;
     browserState.actions.push(action);
@@ -192,7 +259,7 @@ function browserController() {
       window.scrollBy(0, window.innerHeight);
       return document.body.scrollHeight;
     });
-    if (scrollHeight === browserState.scrollHeight) return "scroll ended";
+    if (scrollHeight === browserState.scrollHeight) return "scroll complete";
     browserState.scrollHeight = scrollHeight;
     const action = `scrolling down`;
     browserState.actions.push(action);
@@ -210,7 +277,7 @@ function browserController() {
       const element = document.querySelector(selector);
       const { x, y, width, height } = element.getBoundingClientRect();
 
-      return { x: x, y: y, width, height };
+      return { x, y, width, height };
     }, selector);
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
     await page.screenshot({ clip, path });
@@ -221,9 +288,11 @@ function browserController() {
     const { selector } = getContainer(number);
     return await captureElement(selector);
   }
-  async function toggleContainers(input, show = true) {
+  async function toggleContainers(input, show = true, excludeNumber) {
     const numbers = !input
-      ? browserState.containers.map((item, i) => i + 1)
+      ? browserState.containers
+          .filter(({ containerNumber }) => excludeNumber !== containerNumber)
+          .map(({ containerNumber }) => containerNumber)
       : Array.isArray(input)
       ? input
       : [input];
@@ -241,23 +310,54 @@ function browserController() {
     );
     return hidden;
   }
-  async function hideContainers(input) {
-    return toggleContainers(input, false);
+  async function hideContainers(input, excludeNumber) {
+    return toggleContainers(input, false, excludeNumber);
   }
-  async function showContainers(input) {
-    return toggleContainers(input);
+  async function showContainers(input, excludeNumber) {
+    return toggleContainers(input, true, excludeNumber);
   }
-  async function getSelector(description = "") {
-    const url = browserState.currentPage;
-    const selectors = await selectorStore.get(url, description);
-    if (selectors.length) return selectors[0].selector;
-  }
-  async function saveSelectors(selectors) {
-    const newSelectors = Array.isArray(selectors) ? selectors : [labels];
-    const url = browserState.currentPage;
-    await selectorStore.save(url, newSelectors);
-  }
+  async function getSelector(description = "", { type, types = [], nIds }) {
+    const filter = {};
+    const targets = type ? [type] : types;
+    if (targets.length) filter.type = { $in: targets };
+    if (nIds) filter.id = { $nin: nIds };
+    const domain = parseDomain(browserState.currentPage);
+    const { results: savedIdentifiers, distances: dist } = await selectorStore.search(
+      domain,
+      description,
+      1,
+      filter
+    );
 
+    if (savedIdentifiers.length) {
+      console.log("savedIdentifier x", savedIdentifiers[0], dist[0]);
+      if (dist[0] <= 0.45) return savedIdentifiers[0];
+    }
+
+    const { results: activeIdentifiers, distances } = await selectorStore.search(
+      "active-page",
+      description,
+      1,
+      filter
+    );
+
+    if (activeIdentifiers.length) {
+      console.log("activeIdentifier x", activeIdentifiers[0], distances[0]);
+      if (distances[0] <= 0.45) return activeIdentifiers[0];
+    }
+  }
+  async function saveSelectors(identifiers) {
+    const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
+    const domain = parseDomain(browserState.currentPage);
+    await selectorStore.save(domain, newIdentifiers);
+  }
+  async function cacheSelectors(identifiers) {
+    const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
+    await selectorStore.save("active-page", newIdentifiers);
+  }
+  function onPageLoad(handler) {
+    page.on("load", handler);
+  }
   return {
     navigate,
     click,
@@ -269,23 +369,39 @@ function browserController() {
     getLabeledElement,
     clearContainers,
     clearSelection,
-    selectElements,
+    selectElement,
     getInnerText,
     getHtml,
     state,
     getContainer,
-    searchContainer,
+    searchPage,
+    searchContainers,
     captureElement,
     captureContainer,
     hideContainers,
     getSelector,
     saveSelectors,
+    cacheSelectors,
     showContainers,
     toggleContainers,
     clearLabels,
-    setLabels,
+    addLabels,
     updateLabels,
+    insertLabels,
+    onPageLoad,
   };
+}
+function parseDomain(url) {
+  // Regular expression to match domain from URL
+  var domainRegex = /^(?:https?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n?]+)/gi;
+
+  // Executing the regex on the URL
+  var matches = domainRegex.exec(url);
+
+  // Extracting the domain from the matched groups
+  var domain = matches && matches.length > 1 ? matches[1] : null;
+
+  return domain.replace(".", "_");
 }
 const driver = browserController();
 export default driver;

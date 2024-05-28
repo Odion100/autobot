@@ -10,19 +10,25 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const vectorStore = new ChromaClient();
 
 export default async function htmlVectorSearch(
-  html,
+  containers = [],
   queryTexts = [],
   nResults = 3,
-  selector
+  filter
 ) {
-  const elements = parseHtml(html, selector);
-
-  if (!elements.length) return [];
-  const embeddingData = elements.reduce(
-    (sum, { html, selector, innerText, tagName, attributes }, i) => {
+  const targetElements = [];
+  for (const container of containers) {
+    targetElements.push(...parseHtml(container, filter));
+  }
+  if (!targetElements.length) return [];
+  const embeddingData = targetElements.reduce(
+    (
+      sum,
+      { selector, innerText, attributes, container, containerNumber, number, type },
+      i
+    ) => {
       sum.documents.push(`${innerText}, ${attributes}`);
       sum.ids.push(`id${i}`);
-      sum.metadatas.push({ html, selector, tagName });
+      sum.metadatas.push({ selector, container, containerNumber, number, type });
       return sum;
     },
     {
@@ -38,19 +44,25 @@ export default async function htmlVectorSearch(
   } catch (error) {
     console.log(error);
   }
+
   const collection = await vectorStore.createCollection({
     name: "test4",
     embeddingFunction: embeddingFunction(),
     metadata: { "hnsw:space": "cosine" },
   });
+  //console.log("embeddingData", embeddingData);
+
   await collection.add(embeddingData);
   const results = await collection.query({ queryTexts, nResults });
-  console.log("results1", results);
-  return results.metadatas[0];
+  console.log("results1", results, results.metadatas[0]);
+  return {
+    results: results.metadatas[0],
+    distances: results.distances[0],
+  };
 }
 
 async function getEmbeddings(input) {
-  console.log("input", input);
+  //console.log("input", input);
   const response = await openai.embeddings.create({
     model: "text-embedding-3-small",
     input,
@@ -65,14 +77,14 @@ function embeddingFunction() {
   return fn;
 }
 
-function parseHtml(html, selector = "*") {
+function parseHtml({ html, selector, containerNumber }, filter = "*") {
   const $ = html.length ? cheerio.load(html) : null;
-  console.log("html-->", html, selector);
-  return $(selector)
+
+  return $(filter)
     .map((i, element) => ({
       tagName: $(element).get(0).tagName,
-      selector: getFullSelector($(element)),
-      html: $.html(element).toString(),
+      selector: getFullSelector($(element)).replace("body >", `body`),
+      // html: $.html(element).toString(),
       attributes: Object.keys(element.attribs)
         .filter((attr) => !["class", "style"].includes(attr))
         .map((attr) => `${attr}="${element.attribs[attr]}"`)
@@ -83,69 +95,72 @@ function parseHtml(html, selector = "*") {
         .map((word) => word.trim())
         .filter((word) => word)
         .join(" "),
-      number: i + 1,
       type: getElementType(element),
+      container: selector,
+      number: i + 1,
+      containerNumber,
     }))
     .get();
 }
 function getSelector(el) {
-  //console.log("el.attr", el.attr);
   if (!el) return "";
-  if (el.attr("id") && /^[a-zA-Z_-][\w-]*$/.test(el.attr("id")))
-    return `#${el.attr("id")}`;
-  const selector = el.get(0).tagName;
-  if (selector !== "body" && el.parent().children().length > 1) {
-    if (el.attr("class")) {
-      return getClassSelector(el);
-    } else {
-      return getChildSelector(el);
-    }
-  }
-  return selector;
-}
-function getClassSelector(el) {
-  let selector = el.get(0).tagName;
 
-  if (el.attr("class")) {
-    const classes = el
-      .attr("class")
-      .split(" ")
-      .filter((str) => /^[a-zA-Z_-][\w-]*$/.test(str))
-      .join(".")
-      .trim();
-    selector += `.${classes}`;
+  // Use ID if available and valid
+  const id = el.attr("id");
+  if (id && /^[a-zA-Z_-][\w-]*$/.test(id)) {
+    return `#${id}`;
   }
-  return selector;
+
+  // Attempt to use class selectors if available
+  const classSelector = getClassSelector(el);
+  if (classSelector) {
+    return classSelector;
+  }
+
+  // Fall back to tag name with nth-child if necessary
+  return getChildSelector(el);
 }
+
+function getClassSelector(el) {
+  const tagName = el.get(0).tagName.toLowerCase();
+  const classList = el.attr("class") ? el.attr("class").split(/\s+/) : [];
+
+  // Filter valid class names and join them with '.'
+  const validClasses = classList
+    .filter((cls) => /^[a-zA-Z_-][\w-]*$/.test(cls))
+    .join(".");
+  return validClasses ? `${tagName}.${validClasses}` : null;
+}
+
 function getChildSelector(el) {
-  let selector = el.get(0).tagName;
-  if (selector !== "body" && el.parent().children().length > 1) {
-    const index = el.index();
-    if (index !== -1) {
-      const nthChild = index + 1; // nth-child is 1-indexed
-      selector += `:nth-child(${nthChild})`;
-    }
+  const tagName = el.get(0).tagName.toLowerCase();
+  // Skip nth-child for the body tag
+  if (tagName === "body") {
+    return tagName;
   }
-  return selector;
+  const index = el.index() + 1; // nth-child is 1-indexed
+
+  return `${tagName}:nth-child(${index})`;
 }
+
 function getFullSelector(element) {
-  // console.log("tag1", element.get(0).tagName);
-  if (element.get(0).tagName === "html") return "html";
-  let parent = element.parent();
-  let selector = getSelector(element);
-  if (selector.charAt(0) === "#") return selector;
-  // Iterate through parent nodes until reaching the document root or a parent with more than one child
-  while (!["body", "html"].includes(parent.get(0).tagName) && !parent.attr("id")) {
-    // if (parent.get(0)) console.log("tag2", parent.get(0).tagName);
-    selector = `${getSelector(parent)} > ${selector}`;
-    console.log("selector->", selector);
+  if (element.get(0).tagName.toLowerCase() === "html") return "html";
+
+  let path = [];
+  let parent = element;
+
+  while (parent.length && parent.get(0).tagName.toLowerCase() !== "html") {
+    const selector = getSelector(parent);
+    path.unshift(selector);
+    if (selector.startsWith("#")) {
+      break;
+    }
     parent = parent.parent();
   }
-  // console.log("tag3", parent.get(0).tagName);
 
-  // Return the first parent with more than one child or with an ID
-  return getSelector(parent) + " > " + selector;
+  return path.join(" > ");
 }
+
 function getElementType(element) {
   const tagName = element.tagName;
   const attributes = element.attribs;
@@ -174,7 +189,7 @@ function getElementType(element) {
     return "content";
   }
 }
-const test = `<!DOCTYPE html>
+const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -232,10 +247,10 @@ const test = `<!DOCTYPE html>
 </body>
 </html>
 `;
-// htmlVectorSearch(test, ["Nested Div"], 3)
+// htmlVectorSearch([{ html }, { html }], ["Nested Div"], 3)
 //   .then(async (res) => {
 //     console.log("results -->", res);
 //     //await vectorStore.reset();
 //   })
 //   .catch(console.error);
-// console.log(parseHtml(test));
+// console.log(parseHtml({ html }));

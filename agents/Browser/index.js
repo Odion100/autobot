@@ -1,12 +1,10 @@
 import Agentci from "agentci";
 import BrowserController from "./BrowserController.js";
-import NaturalLanguageSelector from "./NaturalLanguageSelector.js";
-import ElementSelector from "./ElementSelector.js";
+import ElementIdentifier from "./ElementIdentifier.js";
 
 const BrowserAgent = Agentci()
   .rootAgent(BrowserController)
-  .agent("NaturalLanguageSelector", NaturalLanguageSelector)
-  .agent("ElementSelector", ElementSelector)
+  .agent("ElementIdentifier", ElementIdentifier)
   .config(function () {
     this.use({ exitConditions: { errors: 1 } });
   });

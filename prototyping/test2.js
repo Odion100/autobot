@@ -219,7 +219,7 @@ function getFullSelector(element) {
   while (!["body", "html"].includes(parent.get(0).tagName) && !parent.attr("id")) {
     if (parent.get(0)) console.log("tag2", parent.get(0).tagName);
     selector = `${getSelector(parent)} > ${selector}`;
-    console.log("selector->", selector);
+    // console.log("selector->", selector);
     parent = parent.parent();
   }
   console.log("tag3", parent.get(0).tagName);
