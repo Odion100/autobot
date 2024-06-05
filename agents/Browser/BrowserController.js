@@ -7,24 +7,7 @@ import { insertScreenshot } from "./middleware.js";
 import selectorStore from "./utils/selectorStore.js";
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-function getSearchText({ elementText, elementName, elementDescription, containerText }) {
-  return `${elementName}, ${elementText}, ${containerText}`;
-}
-function numberList(number) {
-  if (number < 1) return "";
 
-  const numbers = [];
-  for (let i = 1; i <= number; i++) {
-    numbers.push(i);
-  }
-
-  if (numbers.length === 1) {
-    return numbers[0].toString();
-  } else {
-    const lastNumber = numbers.pop();
-    return numbers.join(", ") + " and " + lastNumber;
-  }
-}
 async function getScreenShots(identifiedElements) {
   const uniqueContainers = [];
   const screenshots = [];
@@ -40,63 +23,159 @@ async function getScreenShots(identifiedElements) {
   return screenshots;
 }
 
-async function searchPage(ElementIdentifier, searchData) {
-  console.log("calling searchPage");
-  const query = getSearchText(searchData);
-  const identifiedElements = await driver.searchPage(query);
-  console.log("identifiedElements", identifiedElements);
-  if (!identifiedElements.length) return;
-  await driver.hideContainers();
-  const fullScreenshot = await driver.getScreenShot();
+async function searchDescriptions(
+  identifiedElements,
+  fullScreenshot,
+  type,
+  { args, agents }
+) {
+  const { ElementIdentifier } = agents;
   console.log("fullScreenshot", fullScreenshot);
   const screenshots = await getScreenShots(identifiedElements);
 
   console.log("screenshots -->1111", screenshots);
-  async function getDescriptions(containerImage) {
+  async function describeElements(containerImage) {
     const descriptions = await ElementIdentifier.invoke({
       message: `Please identify the highlighted elements`,
       images: [fullScreenshot, containerImage],
     });
-    console.log("getDescriptions", containerImage, descriptions, descriptions.length);
+    console.log("describeElements", containerImage, descriptions);
     return descriptions;
     // elementDescriptions.push(...descriptions);
   }
-  const descriptionArrays = await Promise.all(
-    screenshots.map((image) => getDescriptions(image))
+  const combinedDescriptions = await Promise.all(
+    screenshots.map((image) => describeElements(image))
   );
-  console.log("descriptionArrays", descriptionArrays);
-  const elementDescriptions = descriptionArrays.reduce(
-    (acc, descArr) => acc.concat(descArr),
-    []
-  );
-  console.log("elementDescriptions -->1111", elementDescriptions);
-  const newIdentifiers = elementDescriptions.map(
-    ({ elementNumber, elementDescription: description, elementName: label }) => {
-      const { selector, container, type } =
-        identifiedElements.find(({ number }) => number === elementNumber) || {};
-      console.log("elementNumber", elementNumber, selector, container);
-      return { label, selector, description, container, elementNumber, type };
-    }
-  );
-  console.log("newIdentifiers", newIdentifiers);
+  console.log("combinedDescriptions", combinedDescriptions);
+  const elementDescriptions = combinedDescriptions
+    .reduce((acc, results) => acc.concat(results), [])
+    .reduce(
+      (acc, { elementNumber, elementDescription: description, elementName: label }) => {
+        const { selector, container, type } =
+          identifiedElements.find(({ number }) => number === elementNumber) || {};
+        console.log("elementNumber", elementNumber, selector, container);
 
-  //await driver.cacheSelectors(newIdentifiers);
-  const { results, distances: dist } = await selectorStore.quickSearch(
-    newIdentifiers,
-    `${searchData.elementName}: ${searchData.elementDescription}`,
-    2
+        if (selector)
+          acc.push({ label, selector, description, container, elementNumber, type });
+        return acc;
+      },
+      []
+    );
+  await driver.cacheSelectors(elementDescriptions);
+  return await selectorStore.quickSearch(
+    elementDescriptions,
+    `${args.elementName}: ${args.elementDescription}`,
+    2,
+    { type }
   );
-  console.log(
-    "search term",
-    `${searchData.elementName} ${searchData.elementDescription}`
-  );
-  console.log("results and dist", results, dist);
-  if (results.length) {
-    // if (dist[0] <= 0.5)
-    return results[0];
+}
+async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
+  const { VisualConfirmation } = agents;
+  for (const i in newIdentifiers) {
+    const identifier = newIdentifiers[i];
+    const dist = distances[i];
+    if (dist < 0.35) return await driver.selectElement(identifier, true);
+
+    if (dist < 0.4 && dist) {
+      const image = await driver.captureElement(identifier.container);
+      const elementFound = await VisualConfirmation.invoke({
+        message: `Is the/a ${args.elementName} the selected element (surrounded by a green box) in the screenshot?`,
+        image,
+      });
+      console.log("elementFound", elementFound);
+      if (elementFound) return await driver.selectElement(identifier, true);
+    }
   }
 }
+async function searchPage(mwData, next) {
+  const { args, agents, state, exit, fn } = mwData;
+  const { innerText, elementName, containerText } = args;
 
+  if (args.selectedElement) return next();
+  let targetContainer;
+  if (containerText)
+    targetContainer = await driver.findContainers(`${containerText}, ${innerText}`);
+  const identifiedElements = await driver.searchPage(
+    `${elementName}, ${innerText}`,
+    targetContainer
+  );
+  if (identifiedElements.length) {
+    await driver.hideContainers();
+    const fullScreenshot = await driver.getScreenShot();
+    const elementType = fn === "findAndType" ? "typeable" : "clickable";
+    const { results, distances } = await searchDescriptions(
+      identifiedElements,
+      fullScreenshot,
+      elementType,
+      mwData
+    );
+    console.log("results, distances", results, distances);
+    if (results.length) {
+      const selectedElement = await evaluateSelection(results, distances, mwData);
+      console.log("selectedElement-->", selectedElement);
+      if (selectedElement) {
+        args.selectedElement = selectedElement;
+        return next();
+      }
+    }
+  }
+  if (exit) return next();
+  const { ElementSelector } = agents;
+
+  await driver.clearLabels();
+  await driver.showContainers();
+  const image = await driver.getScreenShot();
+
+  const searchData = await ElementSelector.invoke(
+    {
+      message:
+        "Please use this screenshot to analyze and select the target element. Please capture as much containerText as possible",
+      image,
+      ...args,
+    },
+    { messages: [...state.messages] }
+  );
+  console.log("new searchData", searchData);
+  Object.assign(args, searchData);
+  searchPage({ ...mwData, exit: true }, next);
+}
+
+async function checkMemory(mwData, next) {
+  const { fn, args } = mwData;
+  const filter = {
+    type: fn === "findAndType" ? "typeable" : "clickable",
+  };
+
+  const { results: savedIdentifiers, distances: dist } = await driver.getSelector(
+    `${args.elementName}: ${args.elementDescription}`,
+    filter
+  );
+
+  console.log("savedIdentifiers, distances", savedIdentifiers, dist);
+  if (savedIdentifiers.length) {
+    const selectedElement = await evaluateSelection(savedIdentifiers, dist, mwData);
+    if (selectedElement) {
+      args.selectedElement = selectedElement;
+      return next();
+    }
+  }
+
+  const { results: cachedIdentifiers, distances } = await driver.checkCache(
+    `${args.elementName}: ${args.elementDescription}`,
+    filter
+  );
+  console.log("cachedIdentifiers, distances", cachedIdentifiers, distances);
+
+  if (cachedIdentifiers.length) {
+    const selectedElement = await evaluateSelection(cachedIdentifiers, distances, mwData);
+    if (selectedElement) {
+      args.selectedElement = selectedElement;
+      return next();
+    }
+  }
+
+  next();
+}
 export default function BrowserController() {
   this.use({
     provider: "openai",
@@ -104,8 +183,8 @@ export default function BrowserController() {
     sdk: openai,
     schema,
     prompt,
-    exitConditions: { functionCall: "promptUser", errors: 1, iterations: 4 },
-    agents: ["ElementIdentifier"],
+    exitConditions: { functionCall: "promptUser", iterations: 4 },
+    agents: ["ElementIdentifier", "ElementSelector", "VisualConfirmation"],
   });
 
   this.navigate = async function ({ url }, { state }) {
@@ -116,52 +195,33 @@ export default function BrowserController() {
       "This is an image of the website you have just navigated to. Use this image to help you accomplish your object.";
     return results;
   };
-  this.findAndType = async function (data, { state, agents: { ElementIdentifier } }) {
-    // const savedIdentifier = await driver.getSelector(data.elementName, "typeable");
-    // if (savedIdentifier) {
-    //   const element = await driver.selectElement(savedIdentifier);
-    //   if (element) {
-    //     await element.type(data.inputText, { delay: 100 });
-    //     // state.screenshot = await driver.getScreenShot();
-    //     // state.screenshot_message = `Please ensure that the correct item (${data.elementDescription}) was selected (surrounded by a green box) and typed into before proceeding with your next action.`;
-    //     return `The ${data.elementDescription} was found.`;
-    //   }
-    // }
-    const newIdentifier = await searchPage(ElementIdentifier, data);
-
-    if (newIdentifier) {
-      const element = await driver.selectElement(newIdentifier, true);
-      if (element) {
-        await element.type(data.inputText, { delay: 100 });
-        state.screenshot = await driver.getScreenShot();
-        state.screenshot_message = `The ${data.elementName} was found and typed to. Please analyze the screenshot it is as expected`;
-        return `The ${data.elementName} was found.`;
-      }
+  this.findAndType = async function (
+    { selectedElement, elementName, inputText },
+    { state }
+  ) {
+    if (selectedElement) {
+      await selectedElement.type(inputText, { delay: 100 });
+      state.screenshot = await driver.getScreenShot();
+      state.screenshot_message = `The ${elementName} was found and typed to. Please analyze the screenshot it is as expected`;
+      return `The ${elementName} was found.`;
     }
-    return `The ${data.elementName} was not found.`;
+
+    return `The ${elementName} was not found.`;
   };
 
-  this.findAndClick = async function (data, { agents: { ElementIdentifier }, state }) {
-    // const savedIdentifier = await driver.getSelector(data.elementName, "clickable");
-    // if (savedIdentifier) {
-    //   const element = await driver.selectElement(savedIdentifier);
-    //   if (element) {
-    //     await driver.click();
-    //     return `The ${data.elementDescription} was clicked.`;
-    //   }
-    // }
-    const newIdentifier = await searchPage(ElementIdentifier, data);
-    if (newIdentifier) {
-      const element = await driver.selectElement(newIdentifier, true);
-      if (element) {
-        await element.click(newIdentifier);
-        state.screenshot = await driver.getScreenShot();
-        state.screenshot_message = `The ${data.elementName} was found and clicked. Please analyze the screenshot it is as expected`;
-
-        return `The ${data.elementName} was clicked.`;
+  this.findAndClick = async function ({ selectedElement, elementName }, { state }) {
+    if (selectedElement) {
+      try {
+        await selectedElement.click();
+      } catch (error) {
+        console.log("selectedElement.click error", error);
+        await driver.click();
       }
+      state.screenshot = await driver.getScreenShot();
+      state.screenshot_message = `The ${elementName} was found and clicked. Please analyze the screenshot it is as expected`;
+      return `The ${elementName} was clicked.`;
     }
-    return `The ${data.elementName} was not found.`;
+    return `The ${elementName} was not found.`;
   };
 
   this.saveContent = async function ({ content }) {
@@ -197,8 +257,8 @@ export default function BrowserController() {
     next();
   };
   this.after("$all", insertScreenshot);
-  this.before("findAndType", clearSelectionMW);
-  this.before("findAndClick", clearSelectionMW);
+  this.before("findAndType", clearSelectionMW, checkMemory, searchPage);
+  this.before("findAndClick", clearSelectionMW, checkMemory, searchPage);
   // this.before("$invoke", async function ({ state }, next) {
   //   await driver.navigate("https://google.com");
   //   driver.onPageLoad(async function () {

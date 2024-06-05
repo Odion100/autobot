@@ -16,18 +16,19 @@ function reformatData(identifiers) {
         selector,
         container,
         type,
-        additionalSelectors = [],
+        id = uniqueId(),
       } = identifier;
-      if (!identifier.id) identifier.id = uniqueId();
+
+      identifier.id = id;
       sum.documents.push(`${label}: ${description}`);
       sum.ids.push(identifier.id);
       sum.metadatas.push({
+        id,
         label,
         description,
         selector,
         container,
         type,
-        additionalSelectors,
       });
       return sum;
     },
@@ -43,6 +44,7 @@ async function getCollection(domain) {
     return await vectorStore.getCollection({
       name: domain,
       embeddingFunction: embeddingFunction(),
+      metadata: { "hnsw:space": "cosine" },
     });
   } catch (error) {}
 }
@@ -50,7 +52,9 @@ export async function save(domain, identifiers) {
   const collection = await vectorStore.getOrCreateCollection({
     name: domain,
     embeddingFunction: embeddingFunction(),
+    metadata: { "hnsw:space": "cosine" },
   });
+  console.log("saving selectors", domain, identifiers);
   const embeddingData = reformatData(identifiers);
   await collection.upsert(embeddingData);
   return identifiers;
@@ -60,16 +64,14 @@ export async function search(domain, description, nResults = 5, where) {
   const collection = await getCollection(domain);
   console.log("search", domain, description, nResults, where);
   if (collection) {
-    const results = await collection.query({
-      queryTexts: description,
-      nResults,
-    });
+    const results = await collection.query({ queryTexts: description, nResults, where });
     console.log("search results", results);
     return {
       results: results.metadatas[0],
       distances: results.distances[0],
     };
   }
+  console.log("collection not found", domain, description);
   return { results: [], distances: [] };
 }
 export async function clear(domain) {
@@ -79,9 +81,9 @@ export async function clear(domain) {
     console.log(error);
   }
 }
-export async function quickSearch(identifiers, queryTexts, nResults = 1) {
+export async function quickSearch(identifiers, queryTexts, nResults = 1, where) {
   const embeddingData = reformatData(identifiers);
-  console.log("quickSearch ->", embeddingData, identifiers, queryTexts);
+  console.log("quickSearch ->", embeddingData, queryTexts);
   await clear("temp");
   const collection = await vectorStore.createCollection({
     name: "temp",
@@ -89,7 +91,8 @@ export async function quickSearch(identifiers, queryTexts, nResults = 1) {
     metadata: { "hnsw:space": "cosine" },
   });
   await collection.add(embeddingData);
-  const results = await collection.query({ queryTexts, nResults });
+  const results = await collection.query({ queryTexts, nResults, where });
+  console.log("quickSearch results", results, results.metadatas);
   return {
     results: results.metadatas[0],
     distances: results.distances[0],
@@ -112,3 +115,16 @@ function embeddingFunction() {
 }
 const selectorStore = { save, search, quickSearch, clear };
 export default selectorStore;
+// Promise.all(
+//   [
+//     {
+//       name: "amazon_com",
+//       id: "d86e1227-fb6f-4dfe-b743-9c36e08ee01d",
+//       metadata: {
+//         "hnsw:space": "cosine",
+//       },
+//       tenant: "default_tenant",
+//       database: "default_database",
+//     },
+//   ].map(({ name }) => clear(name))
+// );

@@ -20,7 +20,7 @@ How to learn any new site quickly.
   An element, a description and a selector.
 - So if label a bunch of elements with numbers and ask the model to provide a description
   for each element, we would only have to then map each description to its selector and save it in memory
-  ---x
+  ---Failed to find correct Item found below
   search term search bar: input field to enter search terms
   results and dist [
   {
@@ -37,7 +37,7 @@ How to learn any new site quickly.
   }
   ] [ 0.4094160608265064, 0.4094160608265064 ]
 
----=
+---Correct Item found
 
 search term search bar: The input field to type the search query
 results and dist [
@@ -55,7 +55,7 @@ selector: '#nav-search-submit-button'
 }
 ] [ 0.3603773013292487, 0.38420645573529144 ]
 
----=
+---Correct Item found
 
 search term search input: the input field to search for products
 results and dist [
@@ -73,7 +73,7 @@ selector: '#nav-search-submit-button'
 }
 ] [ 0.2903735600018936, 0.45432181770641766 ]
 
----=
+---Correct Item found
 
 search term Search Button: Button to submit the search query
 results and dist [
@@ -91,7 +91,7 @@ selector: '#nav-bb-search'
 }
 ] [ 0.22249066732398737, 0.34572621484491817 ]
 
----=
+---Correct Item found
 
 search term search button: button to initiate search
 results and dist [
@@ -109,7 +109,7 @@ selector: '#twotabsearchtextbox'
 }
 ] [ 0.25862092655628555, 0.4325196782574596 ]
 
----=
+---Correct Item found
 
 search term search button: button to initiate search on Amazon
 results and dist [
@@ -127,7 +127,7 @@ selector: '#twotabsearchtextbox'
 }
 ] [ 0.38536916137185184, 0.4597425133704416 ]
 
----=
+---Correct Item found
 
 search term search bar: The input field used to search for items on Amazon's website.
 results and dist [
@@ -145,7 +145,7 @@ selector: '#CardInstancee9EohYdiYrmKAUr2coerRw > div.a-cardui-footer > a'
 }
 ] [ 0.2563117574853562, 0.7282013737712459 ]
 
----=
+---Correct Item found
 
 search term search button: button to initiate the search
 results and dist [
@@ -163,7 +163,7 @@ selector: '#twotabsearchtextbox'
 }
 ] [ 0.2504359889476575, 0.43121627338719626 ]
 
----=
+---Correct Item found
 
 search term search bar: input field for the search query
 results and dist [
@@ -181,7 +181,7 @@ selector: '#nav-search-submit-button'
 }
 ] [ 0.3978859497866376, 0.4131034335280319 ]
 
----=
+---Correct Item found
 
 search term search button Button to submit the search query
 results and dist [
@@ -199,7 +199,7 @@ selector: '#twotabsearchtextbox'
 }
 ] [ 0.2485228564563513, 0.42333299059679497 ]
 
----x
+---Failed to find correct Item found below
 
 search term search bar Input field to type search queries
 results and dist [
@@ -218,7 +218,7 @@ selector: '#twotabsearchtextbox'
 ] [ 0.43998209211615624, 0.5036579201614126 ]
 
 -- After updating prompt --
----=
+---Correct Item found
 search term Search Bar This element allows users to search for products on Amazon by typing keywords.
 results and dist [
 {
@@ -234,7 +234,7 @@ label: 'Shop All Link',
 selector: '#nav-xshop > a.nav-a'
 }
 ] [ 0.16371620489376804, 0.5778720173902736 ]
----=
+---Correct Item found
 results and dist [
 {
 container: '#navbar-main',
@@ -268,7 +268,7 @@ selector: '#icp-nav-flyout'
 }
 ] [ 0.560230982979641, 0.6408175165343586 ]
 
----x
+---Failed to find correct Item found below
 search term Search Bar This element allows users to input search queries to find products on the website.
 results and dist [
 {
@@ -303,7 +303,7 @@ selector: '#nav-search-submit-button'
 }
 ] [ 0.11479814802900834, 0.3114428544286685 ]
 
----x
+---Failed to find correct Item found below
 search term Search Button This element initiates the search based on the input in the search bar.
 results and dist [
 {
@@ -319,3 +319,47 @@ label: 'Account & Lists',
 selector: '#nav-link-accountList'
 }
 ] [ 0.6439885357764434, 0.6991084455538954 ]
+---Failed to find correct Item found below
+search term Custom Price Minimum This element allows users to input the minimum price for the filter.
+results and dist [
+{
+container: '#a-page > div.a-section.a-padding-medium.auth-workflow',
+description: "This element contains links to Amazon's Conditions of Use and Privacy Notice, which users must agree to in order to continue using the service.",
+label: 'Conditions of Use and Privacy Notice Links',
+selector: '#legalTextRow > a:nth-child(1)'
+}
+] [ 0.7628619577332714 ]
+
+---Failed to find correct Item found below
+search term search button button to trigger search
+results and dist [
+{
+container: '#navbar-backup-backup',
+description: 'This element is a search bar where users can input keywords to search for products or content on the website.',
+label: 'Search Bar',
+selector: '#nav-bb-search',
+type: 'typeable'
+},
+{
+container: '#navbar-backup-backup',
+description: "This element is the cart icon that shows the number of items in the user's shopping cart. Clicking it takes the user to the cart page.",
+label: 'Cart Icon',
+selector: '#navbar-backup-backup > div.nav-bb > div.nav-bb-right > a:nth-child(3)',
+type: 'clickable'
+}
+] [ 0.4316488191925615, 0.7053611378897349 ]
+---Correct Item found
+search term search bar input field to search products on Amazon
+results and dist [
+{
+container: '#navbar-main',
+description: 'This is the search bar where users can type in keywords to search for products on the website.',
+label: 'Search Bar',
+selector: '#twotabsearchtextbox',
+type: 'typeable'
+},
+{
+description: "This element is a link that directs users to sales and deals related to women's fashion items under $30.",
+label: 'Shop Sales and Deals Link'
+}
+] [ 0.35938135780868596, 0.721913169356438 ]

@@ -1,5 +1,5 @@
 export default function getViewport(containers) {
-  return containers.reduce((sum, container) => {
+  return containers.reduce((acc, container) => {
     const element = document.querySelector(container.selector);
     if (!element) return false;
 
@@ -15,8 +15,8 @@ export default function getViewport(containers) {
       rect.right <= windowWidth
     ) {
       const html = element.outerHtml;
-      sum.push(container);
+      acc.push(container);
     }
-    return sum;
+    return acc;
   }, []);
 }

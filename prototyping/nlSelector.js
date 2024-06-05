@@ -118,10 +118,10 @@ function parseHtml(html, chunkSize = 1500) {
       const uniqueAttributes = {};
       const elementsTxt = interActiveElements
         .map((index, element) => {
-          const elementText = $(element).text();
-          innerText = innerText.replace(elementText, "");
+          const innerText = $(element).text();
+          innerText = innerText.replace(innerText, "");
           $(element).empty();
-          $(element).text(elementText);
+          $(element).text(innerText);
           //remove repetitive attributes
           const attributes = element.attribs;
           // console.log("attributes-->", Object.keys(attributes));

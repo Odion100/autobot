@@ -19,7 +19,7 @@ const findAndType = {
   function: {
     name: "findAndType",
     description:
-      "Types the given text into the first element matching the element matching a search using a description of the element and text found in and around the element.",
+      "Types the given text into the first element matching the element matching a search using a description of the element and text found within the same red box as the element.",
     parameters: {
       type: "object",
       properties: {
@@ -32,14 +32,14 @@ const findAndType = {
           description:
             "Describe the element's purpose and functionality as it relates to the entire page.",
         },
-        elementText: {
+        innerText: {
           type: "string",
-          description: "Any text that is visible within the element.",
+          description: "As much text as can be seen within the element.",
         },
         containerText: {
           type: "string",
           description:
-            "As much text as can be seen within the same red container as the target element. The boundaries of the container are the red box in which the element is inside",
+            "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
         },
         inputText: {
           type: "string",
@@ -49,7 +49,7 @@ const findAndType = {
       required: [
         "elementName",
         "elementDescription",
-        "elementText",
+        "innerText",
         "containerText",
         "inputText",
       ],
@@ -61,7 +61,7 @@ const findAndClick = {
   function: {
     name: "findAndClick",
     description:
-      "Clicks on the first element matching a search using a description of the element and text found in and around the element.",
+      "Clicks on the first element matching a search using a description of the element and text found within the same red box as the element.",
     parameters: {
       type: "object",
       properties: {
@@ -74,17 +74,17 @@ const findAndClick = {
           description:
             "Describe the element's purpose and functionality as it relates to the entire page.",
         },
-        elementText: {
+        innerText: {
           type: "string",
-          description: "Any text that is visible within the element.",
+          description: "As much text as can be seen within the element.",
         },
         containerText: {
           type: "string",
           description:
-            "As much text as can be seen within the same red container as the target element. The boundaries of the container are the red box in which the element is inside",
+            "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
         },
       },
-      required: ["elementName", "elementDescription", "elementText", "containerText"],
+      required: ["elementName", "elementDescription", "innerText", "containerText"],
     },
   },
 };

@@ -24,6 +24,11 @@ function browserController() {
   };
   const state = () => browserState;
   const getContainer = (n) => browserState.containers[n - 1];
+  const getContainers = (numbers) => {
+    return browserState.containers.filter(({ containerNumber }) =>
+      numbers.includes(containerNumber)
+    );
+  };
   const getLabeledElement = (n) => browserState.labeledElements[n - 1];
   async function navigate(url) {
     if (!browser) {
@@ -39,7 +44,7 @@ function browserController() {
         browserState.containers = [];
         browserState.labeledElements = [];
         browserState.scrollHeight = 0;
-        await searchContainers();
+        await driver.setContainers();
         await selectorStore.clear("active-page");
       });
     }
@@ -58,15 +63,29 @@ function browserController() {
   const both = clickable + ", " + typeable;
   const elementType = { clickable, typeable, both };
 
-  async function searchContainers(containers = [], searchText, target = "both") {
-    return await htmlVectorSearch(containers, searchText, 5, both);
+  async function findContainers(searchText) {
+    const viewportContainers = await page.evaluate(getViewport, browserState.containers);
+    const { results, distances } = await htmlVectorSearch.findContainers(
+      viewportContainers,
+      searchText,
+      5
+    );
+    return results;
   }
-  async function searchPage(searchText, target = "both") {
+  async function searchPage(searchText, targetContainers) {
+    console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
-    const viewportContainers = await page.evaluate(getViewport, browserState.containers);
-    console.log("viewportContainers-->", viewportContainers.length);
-    const { results } = await searchContainers(viewportContainers, searchText, target);
+    const viewportContainers = targetContainers
+      ? targetContainers
+      : await page.evaluate(getViewport, browserState.containers);
+    // console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
+    const { results } = await htmlVectorSearch.findElements(
+      viewportContainers,
+      searchText,
+      5,
+      both
+    );
     if (!results.length) return;
     const filteredIdentifiers = await page.evaluate(function filterHiddenElements(
       results
@@ -187,24 +206,13 @@ function browserController() {
   }
 
   async function selectElement(identifier, shouldSave) {
-    const { selector, additionalSelectors = [] } = identifier;
-    const selectors = [selector, ...additionalSelectors];
-    let elementHandler;
-    console.log("selectElement", identifier, selectors);
-    for (const selector of selectors) {
-      elementHandler = await page.$(selector);
-      if (elementHandler) {
-        if (selector !== identifier.selector) {
-          identifier.additionalSelectors.unshift(identifier.selector);
-          identifier.selector = selector;
-          identifier.additionalSelectors.filter((s) => s !== selector);
-          saveSelectors(identifier);
-        } else if (shouldSave) saveSelectors(identifier);
-        break;
-      }
-    }
+    const { selector } = identifier;
+    console.log("selectElement", identifier);
+
+    const elementHandler = await page.$(selector);
 
     if (elementHandler) {
+      if (shouldSave) await saveSelectors(identifier);
       browserState.selectedElement = undefined;
       if (browserState.showSelection) await page.evaluate(setSelection, elementHandler);
       browserState.selectedElement = identifier;
@@ -316,39 +324,17 @@ function browserController() {
   async function showContainers(input, excludeNumber) {
     return toggleContainers(input, true, excludeNumber);
   }
-  async function getSelector(description = "", { type, types = [], nIds }) {
-    const filter = {};
-    const targets = type ? [type] : types;
-    if (targets.length) filter.type = { $in: targets };
-    if (nIds) filter.id = { $nin: nIds };
-    const domain = parseDomain(browserState.currentPage);
-    const { results: savedIdentifiers, distances: dist } = await selectorStore.search(
-      domain,
-      description,
-      1,
-      filter
-    );
-
-    if (savedIdentifiers.length) {
-      console.log("savedIdentifier x", savedIdentifiers[0], dist[0]);
-      if (dist[0] <= 0.45) return savedIdentifiers[0];
-    }
-
-    const { results: activeIdentifiers, distances } = await selectorStore.search(
-      "active-page",
-      description,
-      1,
-      filter
-    );
-
-    if (activeIdentifiers.length) {
-      console.log("activeIdentifier x", activeIdentifiers[0], distances[0]);
-      if (distances[0] <= 0.45) return activeIdentifiers[0];
-    }
+  async function getSelector(description = "", where) {
+    const domain = parseDomain(page.url());
+    return await selectorStore.search(domain, description, 5, where);
   }
+  async function checkCache(description = "", where) {
+    return await selectorStore.search("active-page", description, 5, where);
+  }
+
   async function saveSelectors(identifiers) {
     const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
-    const domain = parseDomain(browserState.currentPage);
+    const domain = parseDomain(page.url());
     await selectorStore.save(domain, newIdentifiers);
   }
   async function cacheSelectors(identifiers) {
@@ -374,17 +360,19 @@ function browserController() {
     getHtml,
     state,
     getContainer,
+    getContainers,
     searchPage,
-    searchContainers,
+    findContainers,
     captureElement,
     captureContainer,
     hideContainers,
     getSelector,
+    checkCache,
     saveSelectors,
     cacheSelectors,
     showContainers,
     toggleContainers,
-    clearLabels,
+    clearLabels: clearInsertedLabels,
     addLabels,
     updateLabels,
     insertLabels,

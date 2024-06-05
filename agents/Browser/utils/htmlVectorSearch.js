@@ -9,7 +9,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const vectorStore = new ChromaClient();
 
-export default async function htmlVectorSearch(
+export async function findElements(
   containers = [],
   queryTexts = [],
   nResults = 3,
@@ -54,15 +54,66 @@ export default async function htmlVectorSearch(
 
   await collection.add(embeddingData);
   const results = await collection.query({ queryTexts, nResults });
-  console.log("results1", results, results.metadatas[0]);
+  console.log("results12", results, results.metadatas[0], queryTexts);
   return {
     results: results.metadatas[0],
     distances: results.distances[0],
   };
 }
 
+export async function findContainers(
+  containers = [],
+  queryTexts = [],
+  nResults = 3,
+  filter
+) {
+  const targetElements = containers.reduce((acc, { selector, html, containerNumber }) => {
+    const innerText = cheerio.load(html)("html").text();
+    if (innerText) acc.push({ selector, html, innerText, containerNumber });
+    return acc;
+  }, []);
+  console.log("findContainers", targetElements);
+  if (!targetElements.length) return { results: [], distances: [] };
+  const embeddingData = targetElements.reduce(
+    (sum, { selector, innerText, containerNumber, html }, i) => {
+      sum.documents.push(`${innerText}`);
+      sum.ids.push(`id${i}`);
+      sum.metadatas.push({ selector, containerNumber, html });
+      return sum;
+    },
+    {
+      ids: [],
+      documents: [],
+      metadatas: [],
+    }
+  );
+  try {
+    await vectorStore.deleteCollection({
+      name: "test5",
+    });
+  } catch (error) {
+    console.log(error);
+  }
+
+  const collection = await vectorStore.createCollection({
+    name: "test5",
+    embeddingFunction: embeddingFunction(),
+    metadata: { "hnsw:space": "cosine" },
+  });
+  //console.log("embeddingData", embeddingData);
+
+  await collection.add(embeddingData);
+  const results = await collection.query({ queryTexts, nResults });
+  console.log("results1", results, results.metadatas[0], queryTexts);
+  return {
+    results: results.metadatas[0],
+    distances: results.distances[0],
+  };
+}
+const htmlVectorSearch = { findContainers, findElements };
+export default htmlVectorSearch;
 async function getEmbeddings(input) {
-  //console.log("input", input);
+  // console.log("embeddings input", input);
   const response = await openai.embeddings.create({
     model: "text-embedding-3-small",
     input,
@@ -247,7 +298,7 @@ const html = `<!DOCTYPE html>
 </body>
 </html>
 `;
-// htmlVectorSearch([{ html }, { html }], ["Nested Div"], 3)
+// findElement([{ html }, { html }], ["Nested Div"], 3)
 //   .then(async (res) => {
 //     console.log("results -->", res);
 //     //await vectorStore.reset();

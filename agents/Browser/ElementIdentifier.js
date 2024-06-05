@@ -36,7 +36,7 @@ identifyElements([
 Make sure to include all highlighted elements from the focus screenshot in your answer. Provide clear and concise descriptions and names for each element based on its appearance and the context provided by the full page screenshot.
 Please respond with all identifiers in one function call, with each element identifier in the array of identifiers. 
 
-Please remember that highlighted element's ID number is in the top-right corner of the element. Please examine and describe each element, while making sure you description matches the highlighted element.
+Please remember that highlighted element's ID number is in the top-right corner of the element. If you do not see a number to apply use number 0. Please examine and describe each element, while making sure you description matches the highlighted element.
 `;
 const schema = [
   {
@@ -73,15 +73,17 @@ export default function ElementIdentifier() {
     sdk: openai,
     schema,
     prompt,
-    exitConditions: { errors: 1, iterations: 1, functionCall: null },
+    exitConditions: { errors: 1, iterations: 1, functionCall: "identifyElements" },
     temperature: 0.5,
   });
 
   this.identifyElements = async function (identifier, { state }) {
     state.identifiedElements.push(identifier);
+    console.log("returin", state.identifiedElements);
     return state.identifiedElements;
   };
   this.before("$invoke", function ({ state }, next) {
+    console.log("vefore invoke");
     state.identifiedElements = [];
     next();
   });
@@ -93,8 +95,8 @@ export default function ElementIdentifier() {
 //   .invoke({
 //     message: "Please identify the highlighted elements 1, 2 and 3.",
 //     images: [
-//       "/Users/odionedwards/autobot/screenshots/1716826912054.png",
-//       "/Users/odionedwards/autobot/screenshots/1716826781849.png",
+//       "/Users/odionedwards/autobot/screenshots/1717271184789.png",
+//       "/Users/odionedwards/autobot/screenshots/1717271185235.png",
 //     ],
 //   })
 //   .then((r) => console.log("results", r))
