@@ -8,7 +8,7 @@ async function startLineReader() {
     input: process.stdin,
     output: process.stdout,
   });
-  // await driver.navigate("https://google.com");
+  await driver.navigate("https://google.com");
   // await driver.setContainers();
   // await driver.getScreenShot();
   // const r = await driver.searchPage("search bar");

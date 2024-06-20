@@ -67,18 +67,20 @@ export async function findContainers(
   nResults = 3,
   filter
 ) {
-  const targetElements = containers.reduce((acc, { selector, html, containerNumber }) => {
-    const innerText = cheerio.load(html)("html").text();
-    if (innerText) acc.push({ selector, html, innerText, containerNumber });
-    return acc;
-  }, []);
+  const targetElements = containers.reduce(
+    (acc, { selector, html, containerNumber, innerText }) => {
+      if (innerText) acc.push({ selector, html, innerText, containerNumber });
+      return acc;
+    },
+    []
+  );
   console.log("findContainers", targetElements);
   if (!targetElements.length) return { results: [], distances: [] };
   const embeddingData = targetElements.reduce(
     (sum, { selector, innerText, containerNumber, html }, i) => {
       sum.documents.push(`${innerText}`);
       sum.ids.push(`id${i}`);
-      sum.metadatas.push({ selector, containerNumber, html });
+      sum.metadatas.push({ selector, containerNumber, html, innerText });
       return sum;
     },
     {
@@ -134,18 +136,16 @@ function parseHtml({ html, selector, containerNumber }, filter = "*") {
   return $(filter)
     .map((i, element) => ({
       tagName: $(element).get(0).tagName,
-      selector: getFullSelector($(element)).replace("body >", `body`),
+      selector: getFullSelector($(element)).replace(
+        /^body\s*>\s*[^ >]+\s*>\s*/,
+        `${selector} `
+      ),
       // html: $.html(element).toString(),
       attributes: Object.keys(element.attribs)
         .filter((attr) => !["class", "style"].includes(attr))
         .map((attr) => `${attr}="${element.attribs[attr]}"`)
         .join(" "),
-      innerText: $(element)
-        .text()
-        .split("\n")
-        .map((word) => word.trim())
-        .filter((word) => word)
-        .join(" "),
+      innerText: $(element).text().replace(/\s+/g, " ").trim(),
       type: getElementType(element),
       container: selector,
       number: i + 1,

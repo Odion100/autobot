@@ -1,9 +1,11 @@
 export default function setContentContainers(contentContainers) {
   function getRect(element) {
+    const scrollOffsetX = window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollOffsetY = window.pageYOffset || document.documentElement.scrollTop;
     const rect = element.getBoundingClientRect();
     return {
-      top: `${rect.top}px`,
-      left: `${rect.left}px`,
+      top: `${rect.top + scrollOffsetY}px`,
+      left: `${rect.left + scrollOffsetX}px`,
       bottom: `${rect.bottom}px`,
       right: `${rect.right}px`,
       width: `${rect.width}px`,
@@ -47,8 +49,7 @@ export default function setContentContainers(contentContainers) {
       !visible ||
       width < 10 ||
       height < 10 ||
-      (width > windowWidth * 0.9 &&
-        height > windowHeight * 0.9 &&
+      ((width > windowWidth || height > windowHeight * 0.9) &&
         (position === "absolute" ||
           position === "fixed" ||
           position === "static" ||

@@ -33,7 +33,7 @@ function browserController() {
   async function navigate(url) {
     if (!browser) {
       browser = await puppeteer.launch({ headless: false, args: ["--start-maximized"] });
-      page = await browser.newPage();
+      page = (await browser.pages())[0];
       page.on("load", async function () {
         console.log("page load event --->");
         browserState.lastPage = browserState.currentPage;
@@ -65,21 +65,20 @@ function browserController() {
 
   async function findContainers(searchText) {
     const viewportContainers = await page.evaluate(getViewport, browserState.containers);
-    const { results, distances } = await htmlVectorSearch.findContainers(
-      viewportContainers,
-      searchText,
-      5
-    );
-    return results;
+    console.log("viewportContainers <----", viewportContainers);
+    return await htmlVectorSearch.findContainers(viewportContainers, searchText, 5);
   }
+
   async function searchPage(searchText, targetContainers) {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
-    const viewportContainers = targetContainers
+    const viewportContainers = !targetContainers
+      ? await page.evaluate(getViewport, browserState.containers)
+      : Array.isArray(targetContainers)
       ? targetContainers
-      : await page.evaluate(getViewport, browserState.containers);
-    // console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
+      : getContainers(targetContainers);
+    console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
     const { results } = await htmlVectorSearch.findElements(
       viewportContainers,
       searchText,
@@ -187,11 +186,29 @@ function browserController() {
     if (test) console.log("failed to remove labels <--------------");
     browserState.labeledElements = [];
   }
+  function isUnderScreenSize(selector) {
+    return page.evaluate((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+
+      const elementRect = element.getBoundingClientRect();
+      const screenWidth = window.innerWidth;
+      const screenHeight = window.innerHeight;
+
+      return elementRect.width <= screenWidth && elementRect.height <= screenHeight;
+    }, selector);
+  }
+
   async function setContainers(chunkSize, elementLimit) {
     if (browserState.containers.length) return await showContainers();
 
     const html = await page.content();
-    browserState.containers = getContentContainers(html, chunkSize, elementLimit);
+    browserState.containers = await getContentContainers(
+      html,
+      chunkSize,
+      elementLimit,
+      isUnderScreenSize
+    );
 
     await page.evaluate(setContentContainers, browserState.containers);
     return "setting search containers";
@@ -282,10 +299,17 @@ function browserController() {
 
   async function captureElement(selector) {
     const clip = await page.evaluate((selector) => {
+      const scrollOffsetX = window.pageXOffset || document.documentElement.scrollLeft;
+      const scrollOffsetY = window.pageYOffset || document.documentElement.scrollTop;
       const element = document.querySelector(selector);
       const { x, y, width, height } = element.getBoundingClientRect();
 
-      return { x, y, width, height };
+      return {
+        x: x + scrollOffsetX,
+        y: y + scrollOffsetY,
+        width,
+        height,
+      };
     }, selector);
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
     await page.screenshot({ clip, path });
@@ -344,6 +368,14 @@ function browserController() {
   function onPageLoad(handler) {
     page.on("load", handler);
   }
+  async function scrollIntoView(selector) {
+    await page.evaluate((selector) => {
+      const element = document.querySelector(selector);
+      if (element) {
+        element.scrollIntoView();
+      }
+    }, selector);
+  }
   return {
     navigate,
     click,
@@ -377,6 +409,8 @@ function browserController() {
     updateLabels,
     insertLabels,
     onPageLoad,
+    scrollIntoView,
+    page: () => page,
   };
 }
 function parseDomain(url) {

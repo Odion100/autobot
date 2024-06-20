@@ -5,6 +5,9 @@ import driver from "./utils/driver.js";
 import dotenv from "dotenv";
 import { insertScreenshot } from "./middleware.js";
 import selectorStore from "./utils/selectorStore.js";
+const wait = (timeout = 0) =>
+  new Promise((resolve) => setTimeout(() => resolve(new Date()), timeout));
+
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -19,7 +22,7 @@ async function getScreenShots(identifiedElements) {
       screenshots.push(await driver.captureContainer(containerNumber));
     }
   }
-  await driver.hideContainers();
+  //await driver.hideContainers();
   return screenshots;
 }
 
@@ -74,16 +77,20 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
   for (const i in newIdentifiers) {
     const identifier = newIdentifiers[i];
     const dist = distances[i];
-    if (dist < 0.35) return await driver.selectElement(identifier, true);
+    if (dist < 0.35) {
+      return await driver.selectElement(identifier, true);
+    }
 
     if (dist < 0.4 && dist) {
       const image = await driver.captureElement(identifier.container);
-      const elementFound = await VisualConfirmation.invoke({
+      const elementMatched = await VisualConfirmation.invoke({
         message: `Is the/a ${args.elementName} the selected element (surrounded by a green box) in the screenshot?`,
         image,
       });
-      console.log("elementFound", elementFound);
-      if (elementFound) return await driver.selectElement(identifier, true);
+      console.log("elementMatched", elementMatched);
+      if (elementMatched) {
+        return await driver.selectElement(identifier, true);
+      }
     }
   }
 }
@@ -92,12 +99,21 @@ async function searchPage(mwData, next) {
   const { innerText, elementName, containerText } = args;
 
   if (args.selectedElement) return next();
-  let targetContainer;
-  if (containerText)
-    targetContainer = await driver.findContainers(`${containerText}, ${innerText}`);
+  let targetContainers;
+  if (containerText) {
+    const { results, distances } = await driver.findContainers(
+      `${containerText}, ${innerText}`
+    );
+    if (containerText.length >= 25 && distances[0] < 0.35) {
+      targetContainers = [results[0]];
+      await driver.scrollIntoView(results[0].selector);
+    } else {
+      targetContainers = results;
+    }
+  }
   const identifiedElements = await driver.searchPage(
     `${elementName}, ${innerText}`,
-    targetContainer
+    targetContainers
   );
   if (identifiedElements.length) {
     await driver.hideContainers();
@@ -182,8 +198,9 @@ export default function BrowserController() {
     model: "gpt-4o",
     sdk: openai,
     schema,
+    state: {},
     prompt,
-    exitConditions: { functionCall: "promptUser", iterations: 4 },
+    exitConditions: { functionCall: "promptUser" },
     agents: ["ElementIdentifier", "ElementSelector", "VisualConfirmation"],
   });
 
@@ -256,16 +273,48 @@ export default function BrowserController() {
     driver.clearSelection();
     next();
   };
+  this.after("$all", async function ({ state }, next) {
+    if (state.navigationStarted) {
+      while (state.navigationStarted) {
+        console.log("waiting for page to load...");
+        await wait(500);
+      }
+      next();
+    } else next();
+  });
   this.after("$all", insertScreenshot);
   this.before("findAndType", clearSelectionMW, checkMemory, searchPage);
   this.before("findAndClick", clearSelectionMW, checkMemory, searchPage);
-  // this.before("$invoke", async function ({ state }, next) {
-  //   await driver.navigate("https://google.com");
-  //   driver.onPageLoad(async function () {
-  //     state.screenshot = await driver.getScreenShot();
-  //     state.screenshot_message = `A new page has loaded.`;
-  //     console.log("adding screen shot after page load", state.screenshot);
-  //   });
-  //   next();
-  // });
+
+  this.before("$invoke", async function ({ state }, next) {
+    const page = driver.page();
+    state.pageLoadStart = (request) => {
+      if (
+        !state.navigationStarted &&
+        request.isNavigationRequest() &&
+        request.frame() === page.mainFrame() &&
+        request.url() !== "about:blank"
+      ) {
+        state.navigationStarted = true;
+        console.log(`Page is starting to load: ${request.url()}`);
+      }
+    };
+    state.pageLoadEnd = async () => {
+      console.log("Page has finished loading");
+      await driver.clearContainers();
+      await driver.setContainers();
+      state.screenshot = await driver.getScreenShot();
+      state.screenshot_message = `You have navigated to a new page: ${page.url()}`;
+      state.navigationStarted = false;
+    };
+    page.on("request", state.pageLoadStart);
+    page.once("load", state.pageLoadEnd);
+    next();
+  });
+  this.after("$invoke", function ({ state }, next) {
+    const page = driver.page();
+    page.on("load", state.pageLoadEnd);
+    page.off("request", state.pageLoadStart);
+    next();
+  });
 }

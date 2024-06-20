@@ -37,11 +37,13 @@ async function getPage({ url }) {
   // Get the position of the element using evaluate function
   const elementPosition = await page.evaluate((contentContainers) => {
     function getRect(element) {
+      const scrollOffsetX = window.pageXOffset || document.documentElement.scrollLeft;
+      const scrollOffsetY = window.pageYOffset || document.documentElement.scrollTop;
       const rect = element.getBoundingClientRect();
       // Convert the position and dimensions to string values with "px" units
       return {
-        top: `${rect.top}px`,
-        left: `${rect.left}px`,
+        top: `${rect.top + scrollOffsetY}px`,
+        left: `${rect.left + scrollOffsetX}px`,
         bottom: `${rect.bottom}px`,
         right: `${rect.right}px`,
         width: `${rect.width - rect.width * 0.01}px`,

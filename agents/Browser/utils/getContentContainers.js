@@ -1,5 +1,10 @@
 import cheerio from "cheerio";
-export default function getContentContainers(html, chunkSize, elementLimit) {
+export default async function getContentContainers(
+  html,
+  chunkSize,
+  elementLimit,
+  isUnderScreenSize
+) {
   // Load HTML content using Cheerio
   const $ = html.length ? cheerio.load(html) : null;
   const pageLength = $("body").text().length;
@@ -21,41 +26,43 @@ export default function getContentContainers(html, chunkSize, elementLimit) {
   ];
   let containerNumber = 0;
   async function extractContent(parent) {
-    let innerText = parent
-      .text()
-      .split("\n")
-      .map((word) => word.trim())
-      .filter((word) => word)
-      .join(" ");
+    let innerText = parent.text().replace(/\s+/g, " ").trim();
     const interActiveElements = parent.find(
       'button, input[type="text"], input[type="checkbox"], input[type="radio"], select, textarea, a, input[type="submit"], form, img'
     );
 
     if (innerText.length <= chunkSize && interActiveElements.length <= 250) {
       const selector = getFullSelector(parent);
-      const html = $.html(parent).toString();
-      parent.empty();
-      parent.text(innerText);
+      // console.log("before inSizeRange-->", selector);
+      const inSizeRange = await isUnderScreenSize(selector);
+      // console.log("after inSizeRange-->", inSizeRange);
+      if (inSizeRange) {
+        // parent.empty();
+        // parent.text(innerText);
+        const html = $.html(parent).toString();
+        // console.log({ section, container });
+        containerNumber++;
+        return htmlContent.push({ selector, html, innerText, containerNumber });
+      }
+    }
 
-      // console.log({ section, container });
-      containerNumber++;
-      htmlContent.push({ selector, html, containerNumber });
-    } else {
-      // console.log("checking children -->");
-      parent.children().each((index, child) => {
-        // console.log("next child -->");
+    const childPromises = parent
+      .children()
+      .map(async (index, child) => {
         const el = $(child);
         const tagName = el.get(0).tagName;
 
         if (!skipElements.includes(tagName)) {
-          extractContent(el);
-        } // else console.log("skipping -->", tagName);
-      });
-    }
+          await extractContent(el);
+        }
+      })
+      .get();
+
+    await Promise.all(childPromises);
   }
 
   // Start chunking from the body element
-  extractContent($("body"));
+  await extractContent($("body"));
   // console.log('$("body").text.length', $("body").text().length, chunkSize);
 
   // Return the array of chunked HTML strings
@@ -105,7 +112,7 @@ function getFullSelector(element) {
   // console.log("tag1", element.get(0).tagName);
   if (element.get(0).tagName === "html") return "html";
   let parent = element.parent();
-  let selector = getSelector(element);
+  let selector = getChildSelector(element);
   if (selector.charAt(0) === "#") return selector;
   // Iterate through parent nodes until reaching the document root or a parent with more than one child
   while (!["body", "html"].includes(parent.get(0).tagName) && !parent.attr("id")) {
