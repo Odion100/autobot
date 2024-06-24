@@ -79,11 +79,9 @@ export default function ElementIdentifier() {
 
   this.identifyElements = async function (identifier, { state }) {
     state.identifiedElements.push(identifier);
-    console.log("returin", state.identifiedElements);
     return state.identifiedElements;
   };
   this.before("$invoke", function ({ state }, next) {
-    console.log("vefore invoke");
     state.identifiedElements = [];
     next();
   });

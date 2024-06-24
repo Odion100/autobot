@@ -75,7 +75,7 @@ export default function prompt({ input } = {}) {
   # Important
   - Don't forget to call promptUser({text}) to let the user know you are finished handling the request.
   - Gather as much containerText as possible when calling findAndType and findAndClick methods.
+  - Remember, You can only interact with the element you can see, so be sure scroll so the element you want to interact with is in view.
   Good luck!
-  - Remember, You can only interact with the element you can see, so be sure scroll so the button you want to click is in view.
   `;
 }

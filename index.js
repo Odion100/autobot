@@ -34,7 +34,7 @@ async function startLineReader() {
         const response = await BrowserAgent.invoke(input, state);
         console.log("response", response);
       } catch (error) {
-        console.log("error:", error);
+        console.log("error output:", error);
       }
     }
     lineReader.prompt();

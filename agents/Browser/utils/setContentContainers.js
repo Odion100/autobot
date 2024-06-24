@@ -65,7 +65,7 @@ export default function setContentContainers(contentContainers) {
     box.style.left = rect.left;
     box.style.width = rect.width;
     box.style.height = rect.height;
-    box.style.border = "3px solid red";
+    box.style.border = "2px solid red";
     box.style.pointerEvents = "none";
     box.style.zIndex = `${zIndex}`;
     box.id = `container_${i + 1}`;

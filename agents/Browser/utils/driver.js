@@ -1,5 +1,5 @@
 import puppeteer from "puppeteer";
-import getContentContainers from "./getContentContainers.js";
+import getContentBoxes from "./getContentBoxes.js";
 import setContentContainers from "./setContentContainers.js";
 import setSelection from "./setSelection.js";
 import htmlVectorSearch from "./htmlVectorSearch.js";
@@ -69,7 +69,7 @@ function browserController() {
     return await htmlVectorSearch.findContainers(viewportContainers, searchText, 5);
   }
 
-  async function searchPage(searchText, targetContainers) {
+  async function searchPage(searchText, targetContainers, elementType = both) {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
@@ -79,13 +79,14 @@ function browserController() {
       ? targetContainers
       : getContainers(targetContainers);
     console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
+    console.log("elementType:", elementType);
     const { results } = await htmlVectorSearch.findElements(
       viewportContainers,
       searchText,
-      5,
-      both
+      10,
+      elementType
     );
-    if (!results.length) return;
+    if (!results.length) return [];
     const filteredIdentifiers = await page.evaluate(function filterHiddenElements(
       results
     ) {
@@ -127,7 +128,7 @@ function browserController() {
   }
   //1. insert label into the container so that they are hidden with them
   // - create a function called insertLabels
-  // - container number must be added in the getContentContainers function
+  // - container number must be added in the getContentBoxes function
   // - containerNumber must then be added to the htmlVectorSearch
   // - it will take a list of identifiers and use the containerNumber to insert it
   // - show and hide only the target container when getting descriptions
@@ -203,11 +204,10 @@ function browserController() {
     if (browserState.containers.length) return await showContainers();
 
     const html = await page.content();
-    browserState.containers = await getContentContainers(
-      html,
+    browserState.containers = await page.evaluate(
+      getContentBoxes,
       chunkSize,
-      elementLimit,
-      isUnderScreenSize
+      elementLimit
     );
 
     await page.evaluate(setContentContainers, browserState.containers);
@@ -305,10 +305,10 @@ function browserController() {
       const { x, y, width, height } = element.getBoundingClientRect();
 
       return {
-        x: x + scrollOffsetX,
-        y: y + scrollOffsetY,
-        width,
-        height,
+        x: 0,
+        y: y + scrollOffsetY - 10,
+        width: window.innerWidth,
+        height: height + 20,
       };
     }, selector);
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;

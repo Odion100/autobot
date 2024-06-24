@@ -19,7 +19,8 @@ export async function findElements(
   for (const container of containers) {
     targetElements.push(...parseHtml(container, filter));
   }
-  if (!targetElements.length) return [];
+  console.log("targetElements", targetElements, targetElements.length);
+  if (!targetElements.length) return { results: [], distances: [] };
   const embeddingData = targetElements.reduce(
     (
       sum,

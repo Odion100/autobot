@@ -78,18 +78,24 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
     const identifier = newIdentifiers[i];
     const dist = distances[i];
     if (dist < 0.35) {
-      return await driver.selectElement(identifier, true);
+      const element = await driver.selectElement(identifier, true);
+      if (element) return element;
     }
 
     if (dist < 0.4 && dist) {
-      const image = await driver.captureElement(identifier.container);
-      const elementMatched = await VisualConfirmation.invoke({
-        message: `Is the/a ${args.elementName} the selected element (surrounded by a green box) in the screenshot?`,
-        image,
-      });
-      console.log("elementMatched", elementMatched);
-      if (elementMatched) {
-        return await driver.selectElement(identifier, true);
+      const element = await driver.selectElement(identifier, true);
+      if (element) {
+        const image = identifier.container
+          ? await driver.captureElement(identifier.container)
+          : await driver.getScreenShot();
+        const elementMatched = await VisualConfirmation.invoke({
+          message: `Is the/a ${args.elementName} the selected element (surrounded by a green box) in the screenshot?`,
+          image,
+        });
+        console.log("elementMatched", elementMatched);
+        if (elementMatched) {
+          return element;
+        }
       }
     }
   }
@@ -104,7 +110,7 @@ async function searchPage(mwData, next) {
     const { results, distances } = await driver.findContainers(
       `${containerText}, ${innerText}`
     );
-    if (containerText.length >= 25 && distances[0] < 0.35) {
+    if (containerText.length >= 25 && distances[0] < 0.31) {
       targetContainers = [results[0]];
       await driver.scrollIntoView(results[0].selector);
     } else {
@@ -200,7 +206,7 @@ export default function BrowserController() {
     schema,
     state: {},
     prompt,
-    exitConditions: { functionCall: "promptUser" },
+    exitConditions: { functionCall: "promptUser", iterations: 3 },
     agents: ["ElementIdentifier", "ElementSelector", "VisualConfirmation"],
   });
 
@@ -279,6 +285,11 @@ export default function BrowserController() {
         console.log("waiting for page to load...");
         await wait(500);
       }
+      const page = driver.page();
+      await driver.clearContainers();
+      await driver.setContainers();
+      state.screenshot = await driver.getScreenShot();
+      state.screenshot_message = `You have navigated to a new page: ${page.url()}`;
       next();
     } else next();
   });
@@ -301,14 +312,10 @@ export default function BrowserController() {
     };
     state.pageLoadEnd = async () => {
       console.log("Page has finished loading");
-      await driver.clearContainers();
-      await driver.setContainers();
-      state.screenshot = await driver.getScreenShot();
-      state.screenshot_message = `You have navigated to a new page: ${page.url()}`;
       state.navigationStarted = false;
     };
     page.on("request", state.pageLoadStart);
-    page.once("load", state.pageLoadEnd);
+    page.on("load", state.pageLoadEnd);
     next();
   });
   this.after("$invoke", function ({ state }, next) {
