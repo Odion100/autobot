@@ -9,16 +9,11 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const vectorStore = new ChromaClient();
 
-export async function findElements(
-  containers = [],
-  queryTexts = [],
-  nResults = 3,
-  filter
-) {
-  const targetElements = [];
-  for (const container of containers) {
-    targetElements.push(...parseHtml(container, filter));
-  }
+export async function findElements(targetElements = [], queryTexts = [], nResults = 3) {
+  // const targetElements = [];
+  // for (const container of containers) {
+  //   targetElements.push(...parseHtml(container, filter));
+  // }
   console.log("targetElements", targetElements, targetElements.length);
   if (!targetElements.length) return { results: [], distances: [] };
   const embeddingData = targetElements.reduce(

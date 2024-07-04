@@ -47,7 +47,20 @@ export default function getContentBoxes(chunkSize, elementLimit) {
     }
     return path.join(" > ");
   };
-
+  function getRelevantText(element) {
+    let texts = "";
+    const childrenWithAttributes = element.querySelectorAll(
+      "[aria-label], [alt], [title]"
+    );
+    childrenWithAttributes.forEach((child) => {
+      const relevantAttributes = ["aria-label", "alt", "title"];
+      relevantAttributes.forEach((attr) => {
+        const text = child.getAttribute(attr);
+        if (text) texts += ` ${text}`;
+      });
+    });
+    return texts;
+  }
   let containerNumber = 0;
   async function extractContent(parent) {
     let innerText = parent.innerText.replace(/\s+/g, " ").trim();
@@ -58,8 +71,7 @@ export default function getContentBoxes(chunkSize, elementLimit) {
     console.log(parent);
     if (
       interActiveElements.length &&
-      innerText.length <= chunkSize &&
-      interActiveElements.length <= 250
+      (innerText.length <= chunkSize || interActiveElements.length <= 250)
     ) {
       const selector = cssPath(parent);
       const isValidSelector = isValidCSSSelector(selector);
@@ -69,7 +81,12 @@ export default function getContentBoxes(chunkSize, elementLimit) {
         const html = parent.outerHTML.toString();
         containerNumber++;
         console.log("saving container", selector);
-        return htmlContent.push({ selector, html, innerText, containerNumber });
+        return htmlContent.push({
+          selector,
+          html,
+          innerText: innerText + " " + getRelevantText(parent),
+          containerNumber,
+        });
       } else {
         console.log("over screen size", parent);
       }

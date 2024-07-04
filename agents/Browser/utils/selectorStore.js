@@ -83,7 +83,6 @@ export async function clear(domain) {
 }
 export async function quickSearch(identifiers, queryTexts, nResults = 1, where) {
   const embeddingData = reformatData(identifiers);
-  console.log("quickSearch ->", embeddingData, queryTexts);
   await clear("temp");
   const collection = await vectorStore.createCollection({
     name: "temp",
@@ -116,16 +115,16 @@ function embeddingFunction() {
 }
 const selectorStore = { save, search, quickSearch, clear };
 export default selectorStore;
-// Promise.all(
-//   [
-//     {
-//       name: "amazon_com",
-//       id: "d86e1227-fb6f-4dfe-b743-9c36e08ee01d",
-//       metadata: {
-//         "hnsw:space": "cosine",
-//       },
-//       tenant: "default_tenant",
-//       database: "default_database",
-//     },
-//   ].map(({ name }) => clear(name))
-// );
+Promise.all(
+  [
+    {
+      name: "amazon_com",
+      id: "d86e1227-fb6f-4dfe-b743-9c36e08ee01d",
+      metadata: {
+        "hnsw:space": "cosine",
+      },
+      tenant: "default_tenant",
+      database: "default_database",
+    },
+  ].map(({ name }) => clear(name))
+);

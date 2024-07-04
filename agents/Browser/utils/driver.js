@@ -1,5 +1,6 @@
 import puppeteer from "puppeteer";
 import getContentBoxes from "./getContentBoxes.js";
+import getInteractiveElements from "./getInteractiveElements.js";
 import setContentContainers from "./setContentContainers.js";
 import setSelection from "./setSelection.js";
 import htmlVectorSearch from "./htmlVectorSearch.js";
@@ -46,6 +47,48 @@ function browserController() {
         browserState.scrollHeight = 0;
         await driver.setContainers();
         await selectorStore.clear("active-page");
+        // Expose a function to start recording actions
+        // await page.exposeFunction("startRecording", (selectors) => {
+        //   const actions = [];
+
+        //   const logAction = async (action, element, event) => {
+        //     event.stopImmediatePropagation(); // Stop the event from propagating further
+        //     const timeStamp = new Date().toISOString();
+        //     const selector = element.getAttribute("autobot-selector");
+        //     actions.push({ action, selector, timeStamp });
+        //     console.log({ action, selector, timeStamp });
+
+        //     // Call the exposed function to take a screenshot
+        //     await window.takeScreenshot(action, selector, timeStamp);
+        //     // Delay event propagation
+
+        //     const newEvent = new event.constructor(event.type, event);
+        //     element.dispatchEvent(newEvent);
+        //   };
+
+        //   window.stopRecording = () => {
+        //     selectors.forEach((selector) => {
+        //       const elements = document.querySelectorAll(selector);
+        //       elements.forEach((element) => {
+        //         element.removeEventListener("click", element.clickListener);
+        //       });
+        //     });
+        //     console.log("Recording stopped");
+        //   };
+
+        //   selectors.forEach((selector) => {
+        //     const elements = document.querySelectorAll(selector);
+        //     elements.forEach((element) => {
+        //       element.setAttribute("autobot-selector", selector); // Add a unique identifier for each element
+
+        //       element.clickListener = (event) => logAction("click", event.target, event);
+        //       element.addEventListener("click", element.clickListener);
+        //     });
+        //   });
+
+        //   window.getRecordedActions = () => actions;
+        //   console.log("Recording started");
+        // });
       });
     }
 
@@ -69,7 +112,7 @@ function browserController() {
     return await htmlVectorSearch.findContainers(viewportContainers, searchText, 5);
   }
 
-  async function searchPage(searchText, targetContainers, elementType = both) {
+  async function searchPage(searchText, targetContainers, cssFilter = both) {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
@@ -79,12 +122,16 @@ function browserController() {
       ? targetContainers
       : getContainers(targetContainers);
     console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
-    console.log("elementType:", elementType);
-    const { results } = await htmlVectorSearch.findElements(
+    console.log("cssFilter:", cssFilter);
+    const interActiveElements = await page.evaluate(
+      getInteractiveElements,
       viewportContainers,
+      cssFilter
+    );
+    const { results } = await htmlVectorSearch.findElements(
+      interActiveElements,
       searchText,
-      10,
-      elementType
+      5
     );
     if (!results.length) return [];
     const filteredIdentifiers = await page.evaluate(function filterHiddenElements(
@@ -102,11 +149,13 @@ function browserController() {
         const height = parseFloat(rect.height);
         if (
           !(
-            width <= 1 ||
-            height <= 1 ||
-            style.display === "none" ||
-            style.visibility === "hidden" ||
-            element.offsetParent === null
+            (
+              width <= 1 ||
+              height <= 1 ||
+              style.display === "none" ||
+              style.visibility === "hidden"
+            )
+            // element.offsetParent === null
           )
         ) {
           identifier.number = acc.length + 1;
@@ -116,6 +165,14 @@ function browserController() {
           identifier.visibility = style.visibility;
           identifier.offset = element.offsetParent === null;
           acc.push(identifier);
+        } else {
+          identifier.number = acc.length + 1;
+          identifier.width = rect.width;
+          identifier.height = rect.height;
+          identifier.display = style.display;
+          identifier.visibility = style.visibility;
+          identifier.offset = element.offsetParent === null;
+          console.log(identifier);
         }
         return acc;
       }, []);
@@ -269,7 +326,7 @@ function browserController() {
   async function scrollUp() {
     browserState.scrollEnded = false;
     const scrollHeight = await page.evaluate(() => {
-      window.scrollBy(0, -window.innerHeight);
+      window.scrollBy(0, -window.innerHeight * 0.6);
       return document.body.scrollHeight;
     });
     if (scrollHeight === browserState.scrollHeight) return "scroll complete";
@@ -281,7 +338,7 @@ function browserController() {
   async function scrollDown() {
     browserState.scrollEnded = false;
     const scrollHeight = await page.evaluate(() => {
-      window.scrollBy(0, window.innerHeight);
+      window.scrollBy(0, window.innerHeight * 0.6);
       return document.body.scrollHeight;
     });
     if (scrollHeight === browserState.scrollHeight) return "scroll complete";
@@ -376,6 +433,18 @@ function browserController() {
       }
     }, selector);
   }
+
+  async function startRecording(targetSelectors) {
+    await page.evaluate((selectors) => {
+      window.startRecording(selectors);
+    }, targetSelectors);
+  }
+
+  async function endRecording() {
+    await page.evaluate(() => {
+      window.stopRecording();
+    });
+  }
   return {
     navigate,
     click,
@@ -410,6 +479,8 @@ function browserController() {
     insertLabels,
     onPageLoad,
     scrollIntoView,
+    startRecording,
+    endRecording,
     page: () => page,
   };
 }

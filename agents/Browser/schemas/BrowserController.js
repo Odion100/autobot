@@ -30,7 +30,12 @@ const findAndType = {
         elementDescription: {
           type: "string",
           description:
-            "Describe the element's purpose and functionality as it relates to the entire page.",
+            "Describe the element's visible features and identifiers including general description, colors, text, and position.",
+        },
+        elementPurpose: {
+          type: "string",
+          description:
+            "Describe the element's purpose and functionality as it relates it's larger component and to the entire page.",
         },
         innerText: {
           type: "string",
@@ -48,7 +53,7 @@ const findAndType = {
       },
       required: [
         "elementName",
-        "elementDescription",
+        "elementPurpose",
         "innerText",
         "containerText",
         "inputText",
@@ -67,12 +72,18 @@ const findAndClick = {
       properties: {
         elementName: {
           type: "string",
-          description: "A concise name or label to describe the element.",
+          description:
+            "A concise name or label to call the element including the element type (textbox, checkbox, button, link, etc)",
         },
         elementDescription: {
           type: "string",
           description:
-            "Describe the element's purpose and functionality as it relates to the entire page.",
+            "Describe the element's visible features and identifiers including general description, colors, text, and position.",
+        },
+        elementPurpose: {
+          type: "string",
+          description:
+            "Describe the element's purpose and functionality as it relates it's larger component and to the entire page.",
         },
         innerText: {
           type: "string",
@@ -84,7 +95,7 @@ const findAndClick = {
             "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
         },
       },
-      required: ["elementName", "elementDescription", "innerText", "containerText"],
+      required: ["elementName", "elementPurpose", "innerText", "containerText"],
     },
   },
 };

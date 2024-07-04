@@ -4,15 +4,19 @@ import Agentci from "agentci";
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const prompt = `You will be provided with two screenshots to analyze:
+const prompt = ({ input }) => `You will be provided with two screenshots to analyze:
 
 First, carefully examine the full page screenshot to understand the context and purpose of the webpage. 
 
 Next, focus on the highlighted elements in the focus screenshot. Each highlighted element is surrounded by a green box with an ID number in the right corner.
 
-Your task is to provide a description of each highlighted element using the identifyElements function. The function takes an array of objects as its argument, with each object containing the following properties:
+Your task is to identify the target element using the identifyElement function. Identify the element that match the following search criteria.
 
-- elementNumber: The number in the right corner of the highlighted element
+
+
+The identifyElement function takes an object which contains the following properties:
+
+- elementNumber: The ID number in the right corner of the target element
 - elementDescription: Describe the element visible features and identifiers including general description, colors, text, and position.
 - elementPurpose: Describe the element's purpose and functionality as it relates it's larger component and to the entire page.
 - elementName: A concise name or label to describe the element.
@@ -20,33 +24,38 @@ Your task is to provide a description of each highlighted element using the iden
 Please provide your answer in the following format:
 
 <answer>
-identifyElements([
+identifyElement(
   {
     elementNumber: 1,
     elementDescription: "This element white button...",
     elementPurpose: "This element appears to be the main navigation menu of the website, allowing users to access different sections of the site.",
     elementName: "Main Navigation Menu"
   },
-  {
-    elementNumber: 2,
-    elementDescription: "This element white text box, located at the top of the page.",
-    elementPurpose: "This element is a search bar, enabling users to search for specific content within the website.",
-    elementName: "Search Bar"
-  }
-])
+)
 </answer>
 
-Make sure to include all highlighted elements from the focus screenshot in your answer. Provide clear and concise descriptions and names for each element based on its appearance and the context provided by the full page screenshot.
-Please respond with all identifiers in one function call, with each element identifier in the array of identifiers. 
+If the element can not be seen, or is not highlighted, in the screen shot return 0 as the elementNumber and an empty string for the remaining values.
+<answer>
+identifyElement(
+  {
+    elementNumber: 0,
+    elementDescription: "",
+    elementPurpose: "",
+    elementName: ""
+  },
+)
+</answer>
 
-Please remember that highlighted element's ID number is in the top-right corner of the element. If you do not see a number to apply use number 0. Please examine and describe each element, while making sure you description matches the highlighted element.
+
+Provide clear and concise descriptions and names for each element based on its appearance and the context provided by the full page screenshot.
+Please respond with all identifiers in one function call, with each element identifier in the array of identifiers. 
 `;
 const schema = [
   {
     type: "function",
     function: {
-      name: "identifyElements",
-      description: "Provide a description for each highlighted element",
+      name: "identifyElement",
+      description: "Provide a description for the target element",
       parameters: {
         type: "object",
         properties: {
@@ -75,17 +84,20 @@ const schema = [
     },
   },
 ];
-export default function ElementIdentifier() {
+export default function ElementIdentifier2() {
   this.use({
     provider: "openai",
     model: "gpt-4o",
     sdk: openai,
     schema,
     prompt,
-    exitConditions: { errors: 1, iterations: 1, functionCall: "identifyElements" },
+    exitConditions: { errors: 1, functionCall: "identifyElement" },
     temperature: 0.5,
   });
 
+  this.identifyElement = async function (identifier, { state }) {
+    return identifier;
+  };
   this.identifyElements = async function (identifier, { state }) {
     state.identifiedElements.push(identifier);
     return state.identifiedElements;
@@ -96,14 +108,15 @@ export default function ElementIdentifier() {
   });
 }
 
-// const testAgent = Agentci().rootAgent(ElementIdentifier);
+const testAgent = Agentci().rootAgent(ElementIdentifier2);
 
 // testAgent
 //   .invoke({
-//     message: "Please identify the highlighted elements 1, 2 and 3.",
+//     message:
+//       "Please identify the link into the second listing, Everything You Need to Ace Math in One Big Fat Notebook: The Complete Mid - GOOD $4.42 Buy It Now Free shipping Free returns second.sale (3,394,342) 98.3%.",
 //     images: [
-//       "/Users/odionedwards/autobot/screenshots/1717271184789.png",
-//       "/Users/odionedwards/autobot/screenshots/1717271185235.png",
+//       "/Users/odionedwards/autobot/screenshots/1720106490598.png",
+//       "/Users/odionedwards/autobot/screenshots/1720106834911.png",
 //     ],
 //   })
 //   .then((r) => console.log("results", r))

@@ -52,23 +52,65 @@ async function searchDescriptions(
   console.log("combinedDescriptions", combinedDescriptions);
   const elementDescriptions = combinedDescriptions
     .reduce((acc, results) => acc.concat(results), [])
-    .reduce(
-      (acc, { elementNumber, elementDescription: description, elementName: label }) => {
-        const { selector, container, type } =
-          identifiedElements.find(({ number }) => number === elementNumber) || {};
-        console.log("elementNumber", elementNumber, selector, container);
+    .reduce((acc, { elementNumber, elementPurpose: description, elementName: label }) => {
+      const { selector, container, type } =
+        identifiedElements.find(({ number }) => number === elementNumber) || {};
+      console.log("elementNumber", elementNumber, selector, container);
 
-        if (selector)
-          acc.push({ label, selector, description, container, elementNumber, type });
-        return acc;
-      },
-      []
-    );
+      if (selector)
+        acc.push({ label, selector, description, container, elementNumber, type });
+      return acc;
+    }, []);
   await driver.cacheSelectors(elementDescriptions);
   return await selectorStore.quickSearch(
     elementDescriptions,
-    `${args.elementName}: ${args.elementDescription}`,
+    `${args.elementName}: ${args.elementPurpose}`,
     2,
+    { type }
+  );
+}
+async function searchDescription2(
+  identifiedElements,
+  fullScreenshot,
+  type,
+  { args, agents }
+) {
+  const { ElementIdentifier2 } = agents;
+  console.log("fullScreenshot", fullScreenshot);
+  const screenshots = await getScreenShots(identifiedElements);
+
+  console.log("screenshots -->1111", screenshots);
+  async function describeElements(containerImage) {
+    const description = await ElementIdentifier2.invoke({
+      message: `Please identify the ${args.elementName}, ${args.elementPurpose}`,
+      images: [fullScreenshot, containerImage],
+    });
+    console.log("describeElement2", containerImage, description);
+    return description;
+    // elementDescriptions.push(...descriptions);
+  }
+  const combinedDescriptions = await Promise.all(
+    screenshots.map((image) => describeElements(image))
+  );
+
+  console.log("combinedDescriptions", combinedDescriptions);
+  const elementDescriptions = combinedDescriptions
+    .reduce((acc, results) => acc.concat(results), [])
+    .reduce((acc, { elementNumber, elementPurpose: description, elementName: label }) => {
+      const { selector, container, type } =
+        identifiedElements.find(({ number }) => number === elementNumber) || {};
+      console.log("elementNumber", elementNumber, selector, container);
+
+      if (selector)
+        acc.push({ label, selector, description, container, elementNumber, type });
+      return acc;
+    }, []);
+  if (!elementDescriptions.length) return { results: [], distances: [] };
+  await driver.cacheSelectors(elementDescriptions);
+  return await selectorStore.quickSearch(
+    elementDescriptions,
+    `${args.elementName}: ${args.elementPurpose}`,
+    1,
     { type }
   );
 }
@@ -100,6 +142,18 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
     }
   }
 }
+
+//evaluate containers
+// add abort state to exit loop from command line
+// Plan off of full page
+// scroll to any position
+async function evaluateContainers(containers, { args, agents }) {
+  const { VisualConfirmation } = agents;
+  for (const container of containers) {
+  }
+  //you've selected the following container is this the correct container for the item you are loooking for?
+  await Promise.all(containers.map(() => async function () {}));
+}
 async function searchPage(mwData, next) {
   const { args, agents, state, exit, fn } = mwData;
   const { innerText, elementName, containerText } = args;
@@ -110,8 +164,9 @@ async function searchPage(mwData, next) {
     const { results, distances } = await driver.findContainers(
       `${containerText}, ${innerText}`
     );
-    if (containerText.length >= 25 && distances[0] < 0.31) {
-      targetContainers = [results[0]];
+    if (distances[0] <= 0.3) {
+    } else if (distances[0] <= 0.35) {
+      targetContainers = results.filter((item, index) => distances[index] <= 0.35);
       await driver.scrollIntoView(results[0].selector);
     } else {
       targetContainers = results;
@@ -125,12 +180,13 @@ async function searchPage(mwData, next) {
     await driver.hideContainers();
     const fullScreenshot = await driver.getScreenShot();
     const elementType = fn === "findAndType" ? "typeable" : "clickable";
-    const { results, distances } = await searchDescriptions(
+    const { results, distances } = await searchDescription2(
       identifiedElements,
       fullScreenshot,
       elementType,
       mwData
     );
+    await driver.hideContainers();
     console.log("results, distances", results, distances);
     if (results.length) {
       const selectedElement = await evaluateSelection(results, distances, mwData);
@@ -141,7 +197,7 @@ async function searchPage(mwData, next) {
       }
     }
   }
-  if (exit) return next();
+  if (true) return next();
   const { ElementSelector } = agents;
 
   await driver.clearLabels();
@@ -168,22 +224,22 @@ async function checkMemory(mwData, next) {
     type: fn === "findAndType" ? "typeable" : "clickable",
   };
 
-  const { results: savedIdentifiers, distances: dist } = await driver.getSelector(
-    `${args.elementName}: ${args.elementDescription}`,
-    filter
-  );
+  // const { results: savedIdentifiers, distances: dist } = await driver.getSelector(
+  //   `${args.elementName}: ${args.elementPurpose}`,
+  //   filter
+  // );
 
-  console.log("savedIdentifiers, distances", savedIdentifiers, dist);
-  if (savedIdentifiers.length) {
-    const selectedElement = await evaluateSelection(savedIdentifiers, dist, mwData);
-    if (selectedElement) {
-      args.selectedElement = selectedElement;
-      return next();
-    }
-  }
+  // console.log("savedIdentifiers, distances", savedIdentifiers, dist);
+  // if (savedIdentifiers.length) {
+  //   const selectedElement = await evaluateSelection(savedIdentifiers, dist, mwData);
+  //   if (selectedElement) {
+  //     args.selectedElement = selectedElement;
+  //     return next();
+  //   }
+  // }
 
   const { results: cachedIdentifiers, distances } = await driver.checkCache(
-    `${args.elementName}: ${args.elementDescription}`,
+    `${args.elementName}: ${args.elementPurpose}`,
     filter
   );
   console.log("cachedIdentifiers, distances", cachedIdentifiers, distances);
@@ -206,8 +262,13 @@ export default function BrowserController() {
     schema,
     state: {},
     prompt,
-    exitConditions: { functionCall: "promptUser", iterations: 3 },
-    agents: ["ElementIdentifier", "ElementSelector", "VisualConfirmation"],
+    exitConditions: { functionCall: "promptUser", shortCircuit: 3 },
+    agents: [
+      "ElementIdentifier",
+      "ElementIdentifier2",
+      "ElementSelector",
+      "VisualConfirmation",
+    ],
   });
 
   this.navigate = async function ({ url }, { state }) {
@@ -229,7 +290,7 @@ export default function BrowserController() {
       return `The ${elementName} was found.`;
     }
 
-    return `The ${elementName} was not found.`;
+    return `The ${elementName} was not found. Remember to search the page based on what you can see and identify. Consider improving your search terms by using the text you can see in the image concerning the ${elementName} you want to type into. If you do not see the ${elementName} scroll to look for the item elsewhere.`;
   };
 
   this.findAndClick = async function ({ selectedElement, elementName }, { state }) {
@@ -239,12 +300,13 @@ export default function BrowserController() {
       } catch (error) {
         console.log("selectedElement.click error", error);
         await driver.click();
+        await wait(1000);
       }
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `The ${elementName} was found and clicked. Please analyze the screenshot it is as expected`;
       return `The ${elementName} was clicked.`;
     }
-    return `The ${elementName} was not found.`;
+    return `The ${elementName} was not found. Remember to search the page based on what you can see and identify. Consider improving your search terms by using the text you can see in the image concerning the ${elementName} you want to click. If you do not see the ${elementName} scroll to look for the item elsewhere.`;
   };
 
   this.saveContent = async function ({ content }) {
@@ -275,8 +337,10 @@ export default function BrowserController() {
   this.promptUser = async function ({ text }) {
     return text;
   };
-  const clearSelectionMW = function ({}, next) {
-    driver.clearSelection();
+  const clearSelectionMW = async function ({}, next) {
+    await driver.clearContainers();
+    await driver.setContainers();
+    await driver.clearSelection();
     next();
   };
   this.after("$all", async function ({ state }, next) {
@@ -325,3 +389,10 @@ export default function BrowserController() {
     next();
   });
 }
+// Add a script to add a click event to all visible interactive elements
+// -- record the element selector and set selection and get screenshot
+// -- stop event from propagating
+// Create / update ElementIdentifier agent to describe container
+// Update browserController prompt to use container description
+// save multiple unique selectors for the container element
+// check container description in parallel

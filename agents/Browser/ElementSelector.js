@@ -9,11 +9,11 @@ const prompt = ({
 
 You have access to the following 2 functions:
 
-1. selectElement({ elementName, elementDescription, innerText, containerText }): 
+1. selectElement({ elementName, elementPurpose, innerText, containerText }): 
 following properties to help find the element:
 
     - elementName: A concise name or label to describe the element.
-    - elementDescription: Describe the element's purpose and functionality as it relates to the entire page.
+    - elementPurpose: Describe the element's purpose and functionality as it relates it's larger component and to the entire page.
     - innerText: As much text as can be seen within the element.
     - containerText: As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found.
  
@@ -23,7 +23,7 @@ following properties to help find the element:
   selectElement(
     {
       elementName: "${input.elementName}",
-      elementDescription: "${input.elementDescription}",
+      elementPurpose: "${input.elementPurpose}",
       innerText: "${input.innerText}",
       containerText: "${input.containerText}", 
     }
@@ -55,10 +55,10 @@ const selectElement = {
           type: "string",
           description: "A concise name or label to describe the element.",
         },
-        elementDescription: {
+        elementPurpose: {
           type: "string",
           description:
-            "Describe the element's purpose and functionality as it relates to the entire page.",
+            "Describe the element's purpose and functionality as it relates it's larger component and to the entire page.",
         },
         innerText: {
           type: "string",
@@ -74,7 +74,7 @@ const selectElement = {
           description: "The text to type into the input",
         },
       },
-      required: ["elementName", "elementDescription", "innerText", "containerText"],
+      required: ["elementName", "elementPurpose", "innerText", "containerText"],
     },
   },
 };

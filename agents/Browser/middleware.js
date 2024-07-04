@@ -1,6 +1,7 @@
 import imageEncoder from "agentci/agentci/utils/imageEncoder.mjs";
 
 export async function insertScreenshot({ state }, next) {
+  console.log("state.screenshot-->", state.screenshot);
   if (state.screenshot) {
     const encodedImage = imageEncoder(state.screenshot);
     const message = state.screenshot_message;
