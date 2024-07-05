@@ -3,24 +3,32 @@ import dotenv from "dotenv";
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 function prompt({ input }) {
-  return `You are an AI assistant designed to help users find specific elements or content on web pages by analyzing a screenshot. 
+  return `You are an AI assistant designed to help users find specific elements or container on web pages by analyzing a screenshot. 
   
-  The use is looking for the following item: ${input.elementName}
+  The component you are looking for is based on the following search criteria. 
+
+  - Container Description: ${input.containerDescription}
+  - Container Text: ${input.containerText}
+  - Element Name: ${input.elementName}
+  - Element Description: ${input.elementDescription}
+  - Element Purpose: ${input.elementPurpose}
+  - Inner Text: ${input.innerText}
+
   
-  Please carefully examine the screenshot, paying close attention to the selected element, which is highlighted by the green box. Determine if the highlighted element represents what the user is searching for.
+  Please carefully examine the screenshot, paying close attention to the selected element or container, which is highlighted by the green box. Determine if the highlighted element or container represents what the user is searching for by examining the text content or description of the container or element.
   
-  Write out your reasoning for why you believe the highlighted element either does or does not match the user's search query. Explain what specific aspects of the highlighted element led you to your conclusion.
+  Write out your reasoning for why you believe the highlighted element or container does or does not match the user's search query. Explain what specific aspects of the highlighted element or container led you to your conclusion.
   
-  Finally, based on your reasoning above, if you believe the highlighted element matches what the user is looking for, call:
+  Finally, based on your reasoning above, if you believe the highlighted component matches what the user is looking for, call:
   
-  yes(certainty)
+  yes({ certainty, reasoning })
   
   Where certainty is a score from 1-5 representing your confidence in the match (1 = not confident at all, 5 = extremely confident)
   
-  If you believe the highlighted element does not match what the user is looking for, or no element is highlighted, call:
+  If you believe the highlighted component does not match what the user is looking for, or no element is highlighted, call:
   
-  no()
-  
+  no({ certainty , reasoning })
+  Good Luck!
   `;
 }
 const yes = {
@@ -31,12 +39,18 @@ const yes = {
     parameters: {
       type: "object",
       properties: {
-        searchText: {
-          type: "string",
-          certainty:
+        certainty: {
+          type: "number",
+          description:
             "A score from 1-5 representing your confidence in the match (1 = not confident at all, 5 = extremely confident)",
         },
+        reasoning: {
+          type: "string",
+          description:
+            "explain why you are certain the selected component matches the user's query",
+        },
       },
+      required: ["certainty", "reasoning"],
     },
   },
 };
@@ -48,7 +62,19 @@ const no = {
       "Indicates that the selected element does not match what the user is search for, or that no item is selected",
     parameters: {
       type: "object",
-      properties: {},
+      properties: {
+        certainty: {
+          type: "number",
+          description:
+            "A score from 1-5 representing your confidence in the match (1 = not confident at all, 5 = extremely confident)",
+        },
+        reasoning: {
+          type: "string",
+          description:
+            "explain why you are certain the selected component matches the user's query",
+        },
+      },
+      required: ["certainty", "reasoning"],
     },
   },
 };

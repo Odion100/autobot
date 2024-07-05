@@ -279,7 +279,7 @@ function browserController() {
     return "Clearing search containers";
   }
 
-  async function selectElement(identifier, shouldSave) {
+  async function selectElement(identifier, shouldSave, isContainer) {
     const { selector } = identifier;
     console.log("selectElement", identifier);
 
@@ -288,10 +288,14 @@ function browserController() {
     if (elementHandler) {
       if (shouldSave) await saveSelectors(identifier);
       browserState.selectedElement = undefined;
-      if (browserState.showSelection) await page.evaluate(setSelection, elementHandler);
+      if (browserState.showSelection)
+        await page.evaluate(setSelection, elementHandler, isContainer);
       browserState.selectedElement = identifier;
       return elementHandler;
     }
+  }
+  async function selectContainer(identifier) {
+    return await selectElement(identifier, false, true);
   }
 
   async function clearSelection() {
@@ -326,7 +330,7 @@ function browserController() {
   async function scrollUp() {
     browserState.scrollEnded = false;
     const scrollHeight = await page.evaluate(() => {
-      window.scrollBy(0, -window.innerHeight * 0.6);
+      window.scrollBy(0, -window.innerHeight * 0.9);
       return document.body.scrollHeight;
     });
     if (scrollHeight === browserState.scrollHeight) return "scroll complete";
@@ -338,7 +342,7 @@ function browserController() {
   async function scrollDown() {
     browserState.scrollEnded = false;
     const scrollHeight = await page.evaluate(() => {
-      window.scrollBy(0, window.innerHeight * 0.6);
+      window.scrollBy(0, window.innerHeight * 0.9);
       return document.body.scrollHeight;
     });
     if (scrollHeight === browserState.scrollHeight) return "scroll complete";
@@ -354,28 +358,41 @@ function browserController() {
     return path;
   }
 
-  async function captureElement(selector) {
-    const clip = await page.evaluate((selector) => {
-      const scrollOffsetX = window.pageXOffset || document.documentElement.scrollLeft;
-      const scrollOffsetY = window.pageYOffset || document.documentElement.scrollTop;
-      const element = document.querySelector(selector);
-      const { x, y, width, height } = element.getBoundingClientRect();
+  async function captureElement(selector, containerOnly) {
+    const clip = await page.evaluate(
+      (selector, containerOnly) => {
+        const scrollOffsetX = window.pageXOffset || document.documentElement.scrollLeft;
+        const scrollOffsetY = window.pageYOffset || document.documentElement.scrollTop;
+        const element = document.querySelector(selector);
+        const { x, y, width, height } = element.getBoundingClientRect();
 
-      return {
-        x: 0,
-        y: y + scrollOffsetY - 10,
-        width: window.innerWidth,
-        height: height + 20,
-      };
-    }, selector);
+        if (containerOnly) {
+          return {
+            x: x + scrollOffsetY - 5,
+            y: y + scrollOffsetY - 10,
+            width: width + 10,
+            height: height + 20,
+          };
+        } else {
+          return {
+            x: 0,
+            y: y + scrollOffsetY - 10,
+            width: window.innerWidth,
+            height: height + 20,
+          };
+        }
+      },
+      selector,
+      containerOnly
+    );
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
     await page.screenshot({ clip, path });
     return path;
   }
 
-  async function captureContainer(number) {
+  async function captureContainer(number, containerOnly) {
     const { selector } = getContainer(number);
-    return await captureElement(selector);
+    return await captureElement(selector, containerOnly);
   }
   async function toggleContainers(input, show = true, excludeNumber) {
     const numbers = !input
@@ -457,6 +474,7 @@ function browserController() {
     clearContainers,
     clearSelection,
     selectElement,
+    selectContainer,
     getInnerText,
     getHtml,
     state,

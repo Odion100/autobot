@@ -53,7 +53,8 @@ const selectElement = {
       properties: {
         elementName: {
           type: "string",
-          description: "A concise name or label to describe the element.",
+          description:
+            "A concise name or label to call the element including the element functionality and type (i.e search bar, delete button, etc)",
         },
         elementPurpose: {
           type: "string",

@@ -11,7 +11,7 @@ const wait = (timeout = 0) =>
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function getScreenShots(identifiedElements) {
+async function getScreenShots(identifiedElements, containerOnly) {
   const uniqueContainers = [];
   const screenshots = [];
   for (const { containerNumber } of identifiedElements) {
@@ -19,7 +19,7 @@ async function getScreenShots(identifiedElements) {
       uniqueContainers.push(containerNumber);
       await driver.hideContainers();
       await driver.showContainers(containerNumber);
-      screenshots.push(await driver.captureContainer(containerNumber));
+      screenshots.push(await driver.captureContainer(containerNumber, containerOnly));
     }
   }
   //await driver.hideContainers();
@@ -131,8 +131,9 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
           ? await driver.captureElement(identifier.container)
           : await driver.getScreenShot();
         const elementMatched = await VisualConfirmation.invoke({
-          message: `Is the/a ${args.elementName} the selected element (surrounded by a green box) in the screenshot?`,
+          message: `Is the correct element selected (surrounded by a green box) in the screenshot?`,
           image,
+          ...args,
         });
         console.log("elementMatched", elementMatched);
         if (elementMatched) {
@@ -147,12 +148,28 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
 // add abort state to exit loop from command line
 // Plan off of full page
 // scroll to any position
-async function evaluateContainers(containers, { args, agents }) {
+async function compareContainers(containers, { args, agents }) {
   const { VisualConfirmation } = agents;
-  for (const container of containers) {
+  const fullScreenshot = await driver.getScreenShot();
+  await Promise.all(containers.map((identifier) => driver.selectContainer(identifier)));
+  const screenshots = await getScreenShots(containers, true);
+  const filteredContainers = [];
+  console.log("screenshots -->2222", screenshots, fullScreenshot);
+  async function getConfirmation(containerImage, container) {
+    const isCorrectContainer = await VisualConfirmation.invoke({
+      message: `Is the selected container in this image the ${args.containerDescription}. Please carefully analyze the container text and description to see if it matches.`,
+      images: [fullScreenshot, containerImage],
+      ...args,
+    });
+    console.log("getConfirmation", containerImage, isCorrectContainer);
+    if (isCorrectContainer) filteredContainers.push(container);
   }
-  //you've selected the following container is this the correct container for the item you are loooking for?
-  await Promise.all(containers.map(() => async function () {}));
+  await Promise.all(
+    screenshots.map((image, index) => getConfirmation(image, containers[index]))
+  );
+  console.log("filteredContainers -->2222", filteredContainers);
+  driver.clearSelection();
+  return filteredContainers;
 }
 async function searchPage(mwData, next) {
   const { args, agents, state, exit, fn } = mwData;
@@ -164,10 +181,17 @@ async function searchPage(mwData, next) {
     const { results, distances } = await driver.findContainers(
       `${containerText}, ${innerText}`
     );
-    if (distances[0] <= 0.3) {
+    if (distances[0] <= 0.3 && distances[1] > 0.3) {
+      targetContainers = [results[0]];
     } else if (distances[0] <= 0.35) {
-      targetContainers = results.filter((item, index) => distances[index] <= 0.35);
-      await driver.scrollIntoView(results[0].selector);
+      targetContainers = results.filter(
+        (item, index) => distances[index] <= distances[0] + 0.05
+      );
+      if (targetContainers.length > 1)
+        targetContainers = await compareContainers(targetContainers, mwData);
+
+      if (!targetContainers.length) targetContainers = [results[0]];
+      await driver.scrollIntoView(targetContainers[0].selector);
     } else {
       targetContainers = results;
     }
@@ -260,9 +284,12 @@ export default function BrowserController() {
     model: "gpt-4o",
     sdk: openai,
     schema,
-    state: {},
     prompt,
-    exitConditions: { functionCall: "promptUser", shortCircuit: 3 },
+    exitConditions: {
+      functionCall: "promptUser",
+      shortCircuit: 3,
+      state: (state) => state.abort,
+    },
     agents: [
       "ElementIdentifier",
       "ElementIdentifier2",
@@ -382,6 +409,8 @@ export default function BrowserController() {
     page.on("load", state.pageLoadEnd);
     next();
   });
+  this.before("$invoke", insertScreenshot);
+
   this.after("$invoke", function ({ state }, next) {
     const page = driver.page();
     page.on("load", state.pageLoadEnd);

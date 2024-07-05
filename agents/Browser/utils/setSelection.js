@@ -1,4 +1,4 @@
-export default function setSelection(element) {
+export default function setSelection(element, isContainer) {
   function getRect(element) {
     const scrollOffsetX = window.pageXOffset || document.documentElement.scrollLeft;
     const scrollOffsetY = window.pageYOffset || document.documentElement.scrollTop;
@@ -37,9 +37,9 @@ export default function setSelection(element) {
   box.id = `selected-element`;
 
   const label = document.createElement("div");
-  label.textContent = "Selected Element";
+  label.textContent = `Selected ${isContainer ? "Container" : "Element"}`;
   label.style.position = "absolute";
-  label.style.top = rect.height;
+  label.style.top = isContainer ? 0 : rect.height;
   label.style.right = "0";
   label.style.background = "#0eff0e";
   label.style.color = "black";

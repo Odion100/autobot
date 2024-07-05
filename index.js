@@ -15,6 +15,10 @@ async function startLineReader() {
   // console.log("searchPage", r, r[0].identifiedElements);
   //await driver.updateLabels({ number: 5, label: "Nav bar" }, "containers");
   const handleInput = async (input = "") => {
+    if (input.trim() === "abort") {
+      state.abort = true;
+      return;
+    }
     if (input.charAt(0) === ".") {
       const [fn, args] = input.substring(1).split(/:(.*)/);
       console.log(fn, args);
@@ -30,8 +34,10 @@ async function startLineReader() {
       return;
     }
     if (input) {
+      state.abort = false;
       try {
         const response = await BrowserAgent.invoke(input, state);
+
         console.log("response", response);
       } catch (error) {
         console.log("error output:", error);

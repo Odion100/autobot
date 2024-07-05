@@ -25,7 +25,8 @@ const findAndType = {
       properties: {
         elementName: {
           type: "string",
-          description: "A concise name or label to describe the element.",
+          description:
+            "A concise name or label to call the element including the element functionality and type (i.e search bar, delete button, etc)",
         },
         elementDescription: {
           type: "string",
@@ -40,6 +41,10 @@ const findAndType = {
         innerText: {
           type: "string",
           description: "As much text as can be seen within the element.",
+        },
+        containerDescription: {
+          type: "string",
+          description: "Describe the entire container of the element you are looking for",
         },
         containerText: {
           type: "string",
@@ -73,7 +78,7 @@ const findAndClick = {
         elementName: {
           type: "string",
           description:
-            "A concise name or label to call the element including the element type (textbox, checkbox, button, link, etc)",
+            "A concise name or label to call the element including the element functionality and type (i.e search bar, delete button, etc)",
         },
         elementDescription: {
           type: "string",
@@ -88,6 +93,10 @@ const findAndClick = {
         innerText: {
           type: "string",
           description: "As much text as can be seen within the element.",
+        },
+        containerDescription: {
+          type: "string",
+          description: "Describe the entire container of the element you are looking for",
         },
         containerText: {
           type: "string",

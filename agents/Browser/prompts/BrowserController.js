@@ -5,10 +5,11 @@ export default function prompt({ input } = {}) {
   
   2. findAndClick({ elementName, elementPurpose, innerText, containerText, elementDescription }): Clicks on the first element matching a natural language search for the item you want to click.
   The search for an element must be based on what is visible in the screenshot. Only provide arguments based on what you can see. Use the following properties to help find the element:
-    - elementName: A concise name or label to describe the element.
+    - elementName: "A concise name or label to call the element including the element functionality and type (delete button, etc)",.
     - elementPurpose: Describe the element's purpose and functionality as it relates to its larger component and to the entire page.
     - innerText: As much text as can be seen within the element.
     - containerText: As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found.
+    - containerDescription: Describe the entire container of the element you are looking for.
     - elementDescription: Describe the element's visible features and identifiers including general description, colors, text, and position.
    
     Please provide your answer in the following format:
@@ -21,30 +22,33 @@ export default function prompt({ input } = {}) {
         innerText: "[Any text you can see within the element itself]",
         containerText: "[Any text you can see in the same red container as the element]", 
         elementDescription: "[Visible features, identifiers, colors, text, position]"
+        containerDescription: "The navigation bar..."
       }
     )
     </answer>
 
   3. findAndType({ elementName, elementPurpose, innerText, containerText, inputText, elementDescription }): Types the given text into the first element matching a natural language search for the input to type into. 
   The search for an element must be based on what is visible in the screenshot. Only provide arguments based on what you can see. Use the following properties to help find the element:
-    - elementName: A concise name or label to describe the element.
+    - elementName: "A concise name or label to call the element including the element functionality and type (delete button, etc)",.
     - elementPurpose: Describe the element's purpose and functionality as it relates to its larger component and to the entire page.
     - innerText: As much text as can be seen within the element.
     - containerText: As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found.
     - inputText: The text to type into the input.
     - elementDescription: Describe the element's visible features and identifiers including general description, colors, text, and position.
+    - containerDescription: Describe the entire container of the element you are looking for.
 
     Please provide your answer in the following format:
 
     <answer>
     findAndType(
       {
-        elementName: "contact form",
+        elementName: "contact form submit button",
+        elementDescription: "[Visible features, identifiers, colors, text, position]",
         elementPurpose: "This element allows users to send messages or inquiries directly to the website's support team.",
         innerText: "[Any text you can see within the element itself]",
+        containerDescription: "contact form"
         containerText: "[Any text you can see in the same red container as the element]", 
-        inputText: "Hello, I need help with my order.",
-        elementDescription: "[Visible features, identifiers, colors, text, position]"
+        inputText: "Hello, I need help with my order."
       }
     )
     </answer>
