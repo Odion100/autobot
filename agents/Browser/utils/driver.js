@@ -370,6 +370,13 @@ function browserController() {
     }, multiple);
     return await getCurrentSection();
   }
+  async function goToSection(sectionNumber) {
+    await page.evaluate((sectionNumber) => {
+      const windowHeight = window.innerHeight;
+      const targetScrollTop = windowHeight * (sectionNumber - 1);
+      window.scrollTo(0, targetScrollTop);
+    }, sectionNumber);
+  }
   async function scrollDown(multiple = 1) {
     browserState.scrollEnded = false;
     await page.evaluate((multiple) => {
@@ -528,6 +535,7 @@ function browserController() {
     endRecording,
     setupSections,
     getCurrentSection,
+    goToSection,
     clearSections,
     viewFilter,
     page: () => page,
