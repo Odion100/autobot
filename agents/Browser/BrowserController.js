@@ -227,25 +227,6 @@ async function searchPage(mwData, next) {
       }
     }
   }
-  if (true) return next();
-  const { ElementSelector } = agents;
-
-  await driver.clearLabels();
-  await driver.showContainers();
-  const image = await driver.getScreenShot();
-
-  const searchData = await ElementSelector.invoke(
-    {
-      message:
-        "Please use this screenshot to analyze and select the target element. Please capture as much containerText as possible",
-      image,
-      ...args,
-    },
-    { messages: [...state.messages] }
-  );
-  console.log("new searchData", searchData);
-  Object.assign(args, searchData);
-  searchPage({ ...mwData, exit: true }, next);
 }
 
 async function checkMemory(mwData, next) {
@@ -304,7 +285,6 @@ export default function BrowserController() {
     agents: [
       "ElementIdentifier",
       "ElementIdentifier2",
-      "ElementSelector",
       "VisualConfirmation",
       "ElementLocator",
     ],
