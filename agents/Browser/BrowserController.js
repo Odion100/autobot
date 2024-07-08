@@ -299,34 +299,28 @@ export default function BrowserController() {
     state.screenshot = await driver.getScreenShot();
     state.screenshot_message =
       "This is an image of the website you have just navigated to. Use this image to help you accomplish your object.";
-    await getElementLocations({ state, agents });
+    //await getElementLocations({ state, agents });
     return results;
   };
   this.findAndType = async function (
-    { selectedElement, elementName, inputText },
+    { selectedElement, elementName, inputText, wrongPageMessage = "" },
     { state }
   ) {
-    const currentSection = await driver.getCurrentSection();
     if (selectedElement) {
       await selectedElement.type(inputText, { delay: 100 });
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `The ${elementName} was found and typed to. Please analyze the screenshot it is as expected`;
-      return `The ${elementName} was found.      
-      Here is some more info which may help execute the next task:
-        1. You are in section ${currentSection} with section 1 being at the top of the page.
-        2. ${state.elementsLocationDetails}`;
+      return `The ${elementName} was found. ${wrongPageMessage}`;
     }
     // You are in section ${currentSection} with section 1 being at the top of the page
 
-    return `The ${elementName} was not found. Consider revising all your search terms by using the text you can see concerning the element you want to type into and its container. If you do not see the ${elementName} in the screen shot, please think about where it may be found and scroll to that area.
-    
-    Here is some more info which may help:
-    1. You are in section ${currentSection} with section 1 being at the top of the page.
-    2. ${state.elementsLocationDetails}`;
+    return `The ${elementName} was not found.`;
   };
 
-  this.findAndClick = async function ({ selectedElement, elementName }, { state }) {
-    const currentSection = await driver.getCurrentSection();
+  this.findAndClick = async function (
+    { selectedElement, elementName, wrongPageMessage = "" },
+    { state }
+  ) {
     if (selectedElement) {
       try {
         await selectedElement.click();
@@ -336,17 +330,9 @@ export default function BrowserController() {
         await wait(1000);
       }
       state.screenshot = await driver.getScreenShot();
-      state.screenshot_message = `The ${elementName} was found and clicked. Please analyze the screenshot it is as expected`;
-      return `The ${elementName} was clicked. 
-       Here is some more info which may help execute the next task:
-        1. You are in section ${currentSection} with section 1 being at the top of the page.
-        2. ${state.elementsLocationDetails}`;
+      state.screenshot_message = `The ${elementName} was found and clicked.`;
     }
-    return `The ${elementName} was not found. Consider revising all your search terms by using the text you can see concerning the element you want to click and its container. If you do not see the ${elementName} in the screen shot, please think about where it may be found and scroll to that area.
-    
-    Here is some more info which may help:
-    1. You are in section ${currentSection} with section 1 being at the top of the page.
-    2. ${state.elementsLocationDetails}`;
+    return `The ${elementName} was not found. ${wrongPageMessage}`;
   };
 
   this.saveContent = async function ({ content }) {
@@ -382,28 +368,58 @@ export default function BrowserController() {
     await driver.clearSelection();
     next();
   };
-  async function getElementLocations({ state, agents: { ElementLocator } }) {
-    state.elementsLocationDetails = "";
-    console.log("getElementLocations-->");
-    const { totalSections } = await driver.setupSections();
-    console.log("totalSections2-->", totalSections);
-    if (totalSections > 1) {
-      const fullPage = await driver.getScreenShot(true);
-      await driver.clearSections();
-      ElementLocator.invoke(
-        {
-          message: `You have navigated to a new page. Please create an execution plan for this tasks that must be completed on this page.`,
+  async function getElementLocations(mwData, next) {
+    const {
+      state,
+      agents: { ElementLocator },
+      args,
+    } = mwData;
+    console.log("getElementLocations-->", args.selectedElement);
+    if (!args.selectedElement) {
+      await driver.hideContainers();
+      const { totalSections } = await driver.setupSections();
+      console.log("totalSections2-->", totalSections);
+      if (totalSections > 1) {
+        const fullPage = await driver.getScreenShot(true);
+        await driver.clearSections();
+        const currentSection = await driver.getCurrentSection();
+        const { sectionNumber, reasoning } = await ElementLocator.invoke({
+          message: `We are currently in section ${currentSection} of the web page. Please locate the section of the element we are looking for based on the follow search criteria: 
+            - Element Name: ${args.elementName}.
+            - Element Purpose: ${args.elementName}
+            - Element Description: ${args.elementName}
+            - Element InnerText: ${args.elementName}
+            - Container Text: ${args.elementName}
+            - Container Description: ${args.elementName}`,
           image: fullPage,
-          totalSections,
-        },
-        { messages: [...state.messages] }
-      ).then((results) => (state.elementsLocationDetails = results));
-    } else {
-      await driver.clearSections();
+        });
+        console.log("sectionNumber, reasoning", sectionNumber, reasoning);
+        if (sectionNumber) {
+          await driver.goToSection(sectionNumber);
+          return searchPage(mwData, next);
+        } else {
+          args.wrongPageMessage = reasoning;
+        }
+      } else {
+        await driver.clearSections();
+      }
     }
+    next();
   }
-  this.before("findAndType", clearSelectionMW, checkMemory, searchPage);
-  this.before("findAndClick", clearSelectionMW, checkMemory, searchPage);
+  this.before(
+    "findAndType",
+    clearSelectionMW,
+    checkMemory,
+    searchPage,
+    getElementLocations
+  );
+  this.before(
+    "findAndClick",
+    clearSelectionMW,
+    checkMemory,
+    searchPage,
+    getElementLocations
+  );
 
   //this.before("$invoke", insertScreenshot);
   this.after("$all", async function ({ state, agents }, next) {
@@ -414,7 +430,7 @@ export default function BrowserController() {
         await wait(500);
       }
       console.log("page load is now complete");
-      await getElementLocations({ state, agents });
+      //    await getElementLocations({ state, agents });
       const page = driver.page();
       await driver.clearSections();
       await driver.setContainers();
@@ -437,7 +453,6 @@ export default function BrowserController() {
         request.url() !== "about:blank"
       ) {
         state.navigationStarted = true;
-        state.elementsLocationDetails = "";
         console.log(`Page is starting to load: ${request.url()}`);
       }
     };
