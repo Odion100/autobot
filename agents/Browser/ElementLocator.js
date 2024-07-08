@@ -36,7 +36,8 @@ locateElements({
 })
 </answer>
 
-Make sure to include all necessary elements and components relevant to achieving the user's goal. If you do not see any relevant elements in the current page please call wrongPage({ certainty, reasoning }).
+Make sure to include all necessary elements and components relevant to achieving all goals on this web page. Also include any element that might be useful later.
+If you do not see any relevant elements in the current page please call wrongPage({ certainty, reasoning }).
 
 Good luck!`;
 

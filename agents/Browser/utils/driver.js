@@ -321,7 +321,7 @@ function browserController() {
     const elementHandler = await page.$(selector);
 
     if (elementHandler) {
-      if (shouldSave) await saveSelectors(identifier);
+      // if (shouldSave) await saveSelectors(identifier);
       browserState.selectedElement = undefined;
       if (browserState.showSelection)
         await page.evaluate(setSelection, elementHandler, isContainer);
