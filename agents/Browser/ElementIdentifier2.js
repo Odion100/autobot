@@ -10,11 +10,11 @@ First, carefully examine the full page screenshot to understand the context and 
 
 Next, focus on the highlighted elements in the focus screenshot. Each highlighted element is surrounded by a green box with an ID number in the right corner.
 
-Your task is to identify the target element using the identifyElement function. Identify the element that match the following search criteria.
+Your task is to identify the target element using the identifyElements function. Identify the element that match the following search criteria.
 
 
 
-The identifyElement function takes an object which contains the following properties:
+The identifyElements function takes an object which contains the following properties:
 
 - elementNumber: The ID number in the right corner of the target element
 - elementDescription: Describe the element visible features and identifiers including general description, colors, text, and position.
@@ -24,7 +24,7 @@ The identifyElement function takes an object which contains the following proper
 Please provide your answer in the following format:
 
 <answer>
-identifyElement(
+identifyElements(
   {
     elementNumber: 1,
     elementDescription: "This element white button...",
@@ -36,7 +36,7 @@ identifyElement(
 
 If the element can not be seen, or is not highlighted, in the screen shot return 0 as the elementNumber and an empty string for the remaining values.
 <answer>
-identifyElement(
+identifyElements(
   {
     elementNumber: 0,
     elementDescription: "",
@@ -54,7 +54,7 @@ const schema = [
   {
     type: "function",
     function: {
-      name: "identifyElement",
+      name: "identifyElements",
       description: "Provide a description for the target element",
       parameters: {
         type: "object",
@@ -72,7 +72,7 @@ const schema = [
           elementPurpose: {
             type: "string",
             description:
-              "A description of the element's purpose and functionality in relation to the rest of the page or component (surrounded by red boarders).",
+              "Describe the element's purpose and it's functionality as it relates to the entire page.",
           },
           elementName: {
             type: "string",
@@ -91,13 +91,10 @@ export default function ElementIdentifier2() {
     sdk: openai,
     schema,
     prompt,
-    exitConditions: { errors: 1, functionCall: "identifyElement" },
+    exitConditions: { errors: 1, functionCall: "identifyElements" },
     temperature: 0.5,
   });
 
-  this.identifyElement = async function (identifier, { state }) {
-    return identifier;
-  };
   this.identifyElements = async function (identifier, { state }) {
     state.identifiedElements.push(identifier);
     return state.identifiedElements;
@@ -108,7 +105,7 @@ export default function ElementIdentifier2() {
   });
 }
 
-const testAgent = Agentci().rootAgent(ElementIdentifier2);
+// const testAgent = Agentci().rootAgent(ElementIdentifier2);
 
 // testAgent
 //   .invoke({

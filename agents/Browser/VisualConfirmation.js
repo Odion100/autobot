@@ -49,6 +49,10 @@ const yes = {
           description:
             "explain why you are certain the selected component matches the user's query",
         },
+        // matchingText: {
+        //   type: "string",
+        //   description: "print all matching text that helped you draw a conclusion",
+        // },
       },
       required: ["certainty", "reasoning"],
     },

@@ -1,6 +1,11 @@
 export default function getViewport(containers) {
   return containers.reduce((acc, container) => {
     const element = document.querySelector(container.selector);
+    const style = window.getComputedStyle(element);
+    if (style.position === "fixed") {
+      acc.push(container);
+      return acc;
+    }
     if (!element) return acc; // Continue to the next container if element is not found
 
     const rect = element.getBoundingClientRect();
@@ -15,7 +20,7 @@ export default function getViewport(containers) {
     const elementArea = rect.width * rect.height;
 
     // Check if the visible area is at least 50% of the element's total area
-    if (visibleArea / elementArea >= 0.5) {
+    if (visibleArea / elementArea >= 0.05) {
       acc.push(container);
     }
     return acc;

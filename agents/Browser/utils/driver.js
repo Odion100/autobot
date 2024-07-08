@@ -3,6 +3,7 @@ import getContentBoxes from "./getContentBoxes.js";
 import getInteractiveElements from "./getInteractiveElements.js";
 import setContentContainers from "./setContentContainers.js";
 import setSelection from "./setSelection.js";
+import setupPageSections from "./setupPageSections.js";
 import htmlVectorSearch from "./htmlVectorSearch.js";
 import getViewport from "./getViewport.js";
 import selectorStore from "./selectorStore.js";
@@ -14,6 +15,7 @@ function browserController() {
   let page;
   const browserState = {
     currentPage: "",
+    totalSections: 0,
     lastPage: "",
     actions: [],
     selectedElement: undefined,
@@ -45,7 +47,7 @@ function browserController() {
         browserState.containers = [];
         browserState.labeledElements = [];
         browserState.scrollHeight = 0;
-        await driver.setContainers();
+        // await driver.setContainers();
         await selectorStore.clear("active-page");
         // Expose a function to start recording actions
         // await page.exposeFunction("startRecording", (selectors) => {
@@ -111,13 +113,15 @@ function browserController() {
     console.log("viewportContainers <----", viewportContainers);
     return await htmlVectorSearch.findContainers(viewportContainers, searchText, 5);
   }
-
+  async function viewFilter(identifiers) {
+    return await page.evaluate(getViewport, identifiers);
+  }
   async function searchPage(searchText, targetContainers, cssFilter = both) {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
     const viewportContainers = !targetContainers
-      ? await page.evaluate(getViewport, browserState.containers)
+      ? await viewFilter(browserState.containers)
       : Array.isArray(targetContainers)
       ? targetContainers
       : getContainers(targetContainers);
@@ -256,6 +260,37 @@ function browserController() {
       return elementRect.width <= screenWidth && elementRect.height <= screenHeight;
     }, selector);
   }
+  async function clearSections() {
+    await page.evaluate(() => {
+      const elementToRemove = document.getElementById("cambrian-ai-sections"); // Replace '.className' with the class name of the elements you want to remove
+      if (elementToRemove) elementToRemove.remove();
+    });
+    browserState.containers = [];
+    return "Clearing search containers";
+  }
+
+  async function setupSections() {
+    const pageSectionData = await page.evaluate(setupPageSections);
+    console.log("pageSectionData-->", pageSectionData);
+    Object.assign(browserState, pageSectionData);
+    return pageSectionData;
+  }
+  async function getCurrentSection() {
+    const currentSection = await page.evaluate(() => {
+      const windowHeight = window.innerHeight;
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+
+      const currentSection = Math.round(((scrollTop + 1) / windowHeight) * 100) / 100;
+
+      return currentSection;
+    });
+    console.log(
+      "currentSection-->",
+      browserState.totalSections - currentSection,
+      typeof currentSection
+    );
+    return currentSection + 1;
+  }
 
   async function setContainers(chunkSize, elementLimit) {
     if (browserState.containers.length) return await showContainers();
@@ -327,33 +362,25 @@ function browserController() {
     return await page.evaluate((element) => element.textContent, element);
   }
 
-  async function scrollUp() {
+  async function scrollUp(multiple = 1) {
     browserState.scrollEnded = false;
-    const scrollHeight = await page.evaluate(() => {
-      window.scrollBy(0, -window.innerHeight * 0.9);
+    await page.evaluate((multiple) => {
+      window.scrollBy(0, -window.innerHeight * multiple);
       return document.body.scrollHeight;
-    });
-    if (scrollHeight === browserState.scrollHeight) return "scroll complete";
-    browserState.scrollHeight = scrollHeight;
-    const action = `scrolling up`;
-    browserState.actions.push(action);
-    return action;
+    }, multiple);
+    return await getCurrentSection();
   }
-  async function scrollDown() {
+  async function scrollDown(multiple = 1) {
     browserState.scrollEnded = false;
-    const scrollHeight = await page.evaluate(() => {
-      window.scrollBy(0, window.innerHeight * 0.9);
+    await page.evaluate((multiple) => {
+      window.scrollBy(0, window.innerHeight * multiple);
       return document.body.scrollHeight;
-    });
-    if (scrollHeight === browserState.scrollHeight) return "scroll complete";
-    browserState.scrollHeight = scrollHeight;
-    const action = `scrolling down`;
-    browserState.actions.push(action);
-    return action;
+    }, multiple);
+    return await getCurrentSection();
   }
-  async function getScreenShot() {
+  async function getScreenShot(fullPage = false) {
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
-    await page.screenshot({ path });
+    await page.screenshot({ path, fullPage });
     browserState.actions.push("getting screen shot");
     return path;
   }
@@ -499,6 +526,10 @@ function browserController() {
     scrollIntoView,
     startRecording,
     endRecording,
+    setupSections,
+    getCurrentSection,
+    clearSections,
+    viewFilter,
     page: () => page,
   };
 }

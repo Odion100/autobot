@@ -114,7 +114,7 @@ async function searchDescription2(
     { type }
   );
 }
-async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
+async function evaluateSelection(newIdentifiers, distances, { args, agents, state }) {
   const { VisualConfirmation } = agents;
   for (const i in newIdentifiers) {
     const identifier = newIdentifiers[i];
@@ -130,11 +130,14 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
         const image = identifier.container
           ? await driver.captureElement(identifier.container)
           : await driver.getScreenShot();
-        const elementMatched = await VisualConfirmation.invoke({
-          message: `Is the correct element selected (surrounded by a green box) in the screenshot?`,
-          image,
-          ...args,
-        });
+        const elementMatched = await VisualConfirmation.invoke(
+          {
+            message: `Is the correct element selected (surrounded by a green box) in the screenshot?`,
+            image,
+            ...args,
+          },
+          { messages: [...state.messages] }
+        );
         console.log("elementMatched", elementMatched);
         if (elementMatched) {
           return element;
@@ -148,7 +151,7 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents }) {
 // add abort state to exit loop from command line
 // Plan off of full page
 // scroll to any position
-async function compareContainers(containers, { args, agents }) {
+async function compareContainers(containers, { args, agents, state }) {
   const { VisualConfirmation } = agents;
   const fullScreenshot = await driver.getScreenShot();
   await Promise.all(containers.map((identifier) => driver.selectContainer(identifier)));
@@ -156,11 +159,14 @@ async function compareContainers(containers, { args, agents }) {
   const filteredContainers = [];
   console.log("screenshots -->2222", screenshots, fullScreenshot);
   async function getConfirmation(containerImage, container) {
-    const isCorrectContainer = await VisualConfirmation.invoke({
-      message: `Is the selected container in this image the ${args.containerDescription}. Please carefully analyze the container text and description to see if it matches.`,
-      images: [fullScreenshot, containerImage],
-      ...args,
-    });
+    const isCorrectContainer = await VisualConfirmation.invoke(
+      {
+        message: `Is the selected container in this image the ${args.containerDescription}. Please carefully analyze the container text and description to see if it matches.`,
+        images: [fullScreenshot, containerImage],
+        ...args,
+      },
+      { messages: [...state.messages] }
+    );
     console.log("getConfirmation", containerImage, isCorrectContainer);
     if (isCorrectContainer) filteredContainers.push(container);
   }
@@ -174,7 +180,7 @@ async function compareContainers(containers, { args, agents }) {
 async function searchPage(mwData, next) {
   const { args, agents, state, exit, fn } = mwData;
   const { innerText, elementName, containerText } = args;
-
+  if (state.navigationStarted) return next();
   if (args.selectedElement) return next();
   let targetContainers;
   if (containerText) {
@@ -269,7 +275,12 @@ async function checkMemory(mwData, next) {
   console.log("cachedIdentifiers, distances", cachedIdentifiers, distances);
 
   if (cachedIdentifiers.length) {
-    const selectedElement = await evaluateSelection(cachedIdentifiers, distances, mwData);
+    const filteredIdentifiers = await driver.viewFilter(cachedIdentifiers);
+    const selectedElement = await evaluateSelection(
+      filteredIdentifiers,
+      distances,
+      mwData
+    );
     if (selectedElement) {
       args.selectedElement = selectedElement;
       return next();
@@ -295,32 +306,44 @@ export default function BrowserController() {
       "ElementIdentifier2",
       "ElementSelector",
       "VisualConfirmation",
+      "ElementLocator",
     ],
   });
 
-  this.navigate = async function ({ url }, { state }) {
+  this.navigate = async function ({ url }, { state, agents }) {
     const results = await driver.navigate(url);
     await driver.setContainers();
     state.screenshot = await driver.getScreenShot();
     state.screenshot_message =
       "This is an image of the website you have just navigated to. Use this image to help you accomplish your object.";
+    await getElementLocations({ state, agents });
     return results;
   };
   this.findAndType = async function (
     { selectedElement, elementName, inputText },
     { state }
   ) {
+    const currentSection = await driver.getCurrentSection();
     if (selectedElement) {
       await selectedElement.type(inputText, { delay: 100 });
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `The ${elementName} was found and typed to. Please analyze the screenshot it is as expected`;
-      return `The ${elementName} was found.`;
+      return `The ${elementName} was found.      
+      Here is some more info which may help execute the next task:
+        1. You are in section ${currentSection} with section 1 being at the top of the page.
+        2. ${state.elementsLocationDetails}`;
     }
+    // You are in section ${currentSection} with section 1 being at the top of the page
 
-    return `The ${elementName} was not found. Remember to search the page based on what you can see and identify. Consider improving your search terms by using the text you can see in the image concerning the ${elementName} you want to type into. If you do not see the ${elementName} scroll to look for the item elsewhere.`;
+    return `The ${elementName} was not found. Consider revising all your search terms by using the text you can see concerning the element you want to type into and its container. If you do not see the ${elementName} in the screen shot, please think about where it may be found and scroll to that area.
+    
+    Here is some more info which may help:
+    1. You are in section ${currentSection} with section 1 being at the top of the page.
+    2. ${state.elementsLocationDetails}`;
   };
 
   this.findAndClick = async function ({ selectedElement, elementName }, { state }) {
+    const currentSection = await driver.getCurrentSection();
     if (selectedElement) {
       try {
         await selectedElement.click();
@@ -331,9 +354,16 @@ export default function BrowserController() {
       }
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `The ${elementName} was found and clicked. Please analyze the screenshot it is as expected`;
-      return `The ${elementName} was clicked.`;
+      return `The ${elementName} was clicked. 
+       Here is some more info which may help execute the next task:
+        1. You are in section ${currentSection} with section 1 being at the top of the page.
+        2. ${state.elementsLocationDetails}`;
     }
-    return `The ${elementName} was not found. Remember to search the page based on what you can see and identify. Consider improving your search terms by using the text you can see in the image concerning the ${elementName} you want to click. If you do not see the ${elementName} scroll to look for the item elsewhere.`;
+    return `The ${elementName} was not found. Consider revising all your search terms by using the text you can see concerning the element you want to click and its container. If you do not see the ${elementName} in the screen shot, please think about where it may be found and scroll to that area.
+    
+    Here is some more info which may help:
+    1. You are in section ${currentSection} with section 1 being at the top of the page.
+    2. ${state.elementsLocationDetails}`;
   };
 
   this.saveContent = async function ({ content }) {
@@ -342,23 +372,22 @@ export default function BrowserController() {
   };
 
   this.scrollUp = async function (data, { state }) {
-    const result = await driver.scrollUp();
-    if (result !== "scroll complete") {
-      state.screenshot = await driver.getScreenShot();
-      state.screenshot_message = result;
-      return result;
-    }
-    return result;
+    const scrollPosition = await driver.scrollUp();
+    const message = `You have scrolled up to section ${scrollPosition}`;
+    state.screenshot = await driver.getScreenShot();
+    state.screenshot_message = message;
+
+    return message;
   };
 
   this.scrollDown = async function (data, { state }) {
-    const result = await driver.scrollDown();
-    if (result !== "scroll complete") {
-      state.screenshot = await driver.getScreenShot();
-      state.screenshot_message = result;
-      return result;
-    }
-    return result;
+    const scrollPosition = await driver.scrollDown();
+    const message = `You have scrolled down to section ${scrollPosition}`;
+
+    state.screenshot = await driver.getScreenShot();
+    state.screenshot_message = message;
+
+    return message;
   };
 
   this.promptUser = async function ({ text }) {
@@ -370,14 +399,41 @@ export default function BrowserController() {
     await driver.clearSelection();
     next();
   };
-  this.after("$all", async function ({ state }, next) {
+  async function getElementLocations({ state, agents: { ElementLocator } }) {
+    state.elementsLocationDetails = "";
+    console.log("getElementLocations-->");
+    const { totalSections } = await driver.setupSections();
+    console.log("totalSections2-->", totalSections);
+    if (totalSections > 1) {
+      const fullPage = await driver.getScreenShot(true);
+      await driver.clearSections();
+      ElementLocator.invoke(
+        {
+          message: `You have navigated to a new page. Please create an execution plan for this tasks that must be completed on this page.`,
+          image: fullPage,
+          totalSections,
+        },
+        { messages: [...state.messages] }
+      ).then((results) => (state.elementsLocationDetails = results));
+    } else {
+      await driver.clearSections();
+    }
+  }
+  this.before("findAndType", clearSelectionMW, checkMemory, searchPage);
+  this.before("findAndClick", clearSelectionMW, checkMemory, searchPage);
+
+  //this.before("$invoke", insertScreenshot);
+  this.after("$all", async function ({ state, agents }, next) {
+    // console.log("state.navigationStarted", state.navigationStarted);
     if (state.navigationStarted) {
       while (state.navigationStarted) {
         console.log("waiting for page to load...");
         await wait(500);
       }
+      console.log("page load is now complete");
+      await getElementLocations({ state, agents });
       const page = driver.page();
-      await driver.clearContainers();
+      await driver.clearSections();
       await driver.setContainers();
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `You have navigated to a new page: ${page.url()}`;
@@ -385,12 +441,12 @@ export default function BrowserController() {
     } else next();
   });
   this.after("$all", insertScreenshot);
-  this.before("findAndType", clearSelectionMW, checkMemory, searchPage);
-  this.before("findAndClick", clearSelectionMW, checkMemory, searchPage);
-
   this.before("$invoke", async function ({ state }, next) {
     const page = driver.page();
+    state.currentSection = 0;
+    state.totalSections = 0;
     state.pageLoadStart = (request) => {
+      //console.log("state.navigationStarted, pageLoadStart", state.navigationStarted);
       if (
         !state.navigationStarted &&
         request.isNavigationRequest() &&
@@ -398,6 +454,7 @@ export default function BrowserController() {
         request.url() !== "about:blank"
       ) {
         state.navigationStarted = true;
+        state.elementsLocationDetails = "";
         console.log(`Page is starting to load: ${request.url()}`);
       }
     };
@@ -409,7 +466,6 @@ export default function BrowserController() {
     page.on("load", state.pageLoadEnd);
     next();
   });
-  this.before("$invoke", insertScreenshot);
 
   this.after("$invoke", function ({ state }, next) {
     const page = driver.page();
@@ -418,10 +474,13 @@ export default function BrowserController() {
     next();
   });
 }
-// Add a script to add a click event to all visible interactive elements
-// -- record the element selector and set selection and get screenshot
-// -- stop event from propagating
-// Create / update ElementIdentifier agent to describe container
-// Update browserController prompt to use container description
-// save multiple unique selectors for the container element
-// check container description in parallel
+
+// fix position-fixed containers
+// maybe search the containers for any element that is position fixed
+// -- because anything that is position-fixed is in view
+// turn caching back on and filter out any element not in view
+// do visual confirmation when using cached memory
+// update compare containers to choose between the containers instead of doing a visual confirmation
+// on ebay when you click a list a pop shows up figure that out
+// on home depot the Navbar container is being skipped
+//add a $all middleware to check for consecutive non function calls and then tell the ai to prompt the user for help or if the task is complete

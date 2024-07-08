@@ -50,17 +50,14 @@ export default function setContentContainers(contentContainers) {
       width < 10 ||
       height < 10 ||
       ((width > windowWidth || height > windowHeight * 0.9) &&
-        (position === "absolute" ||
-          position === "fixed" ||
-          position === "static" ||
-          position === "sticky"))
+        (position === "absolute" || position === "static" || position === "sticky"))
     ) {
       console.log(element);
       box.style.display = "none";
     }
 
     zIndex--;
-    box.style.position = "absolute";
+    box.style.position = position === "fixed" ? position : "absolute";
     box.style.top = rect.top;
     box.style.left = rect.left;
     box.style.width = rect.width;
