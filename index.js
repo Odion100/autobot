@@ -2,6 +2,7 @@ import readline from "readline";
 import driver from "./agents/Browser/utils/driver.js";
 import BrowserAgent from "./agents/Browser/index.js";
 import deleteScreenshots from "./utils/deleteScreenshots.js";
+import { stat } from "fs";
 const state = { messages: [] };
 async function startLineReader() {
   const lineReader = readline.createInterface({
@@ -31,6 +32,10 @@ async function startLineReader() {
           console.log("error:", error);
         }
       }
+      return;
+    }
+    if (state.promptUserCallback) {
+      state.promptUserCallback(input);
       return;
     }
     if (input) {

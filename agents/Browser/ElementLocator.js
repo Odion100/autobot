@@ -53,30 +53,27 @@ const schema = [
       parameters: {
         type: "object",
         properties: {
-          type: "object",
-          properties: {
-            sectionNumber: {
-              type: "number",
-              description: "The section the element is located on the page.",
-            },
-            certainty: {
-              type: "number",
-              description:
-                "A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident)",
-            },
-            reasoning: {
-              type: "string",
-              description:
-                "Explain why you are certain the correct element was found in that location.",
-            },
-            innerPosition: {
-              type: "string",
-              description:
-                "Is the element in the bottom, middle or top part of the specified section.",
-            },
+          sectionNumber: {
+            type: "number",
+            description: "The section the element is located on the page.",
           },
-          required: ["sectionNumber", "certainty", "reasoning", "innerPosition"],
+          certainty: {
+            type: "number",
+            description:
+              "A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident)",
+          },
+          reasoning: {
+            type: "string",
+            description:
+              "Explain why you are certain the correct element was found in that location.",
+          },
+          innerPosition: {
+            type: "string",
+            description:
+              "Is the element in the bottom, middle or top part of the specified section.",
+          },
         },
+        required: ["sectionNumber", "certainty", "reasoning", "innerPosition"],
       },
     },
   },
