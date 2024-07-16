@@ -22,6 +22,25 @@ Provide the location of the desired elements by calling the following function:
   - innerPosition: Is the element in the bottom, middle or top part of the specified section.
 
 Remember, If you do not see the desired elements in the current page please call wrongPage({ certainty, reasoning }).
+Please provide your answer in the following format:
+
+<answer>
+locateElements({
+  searchResults: [
+    {
+      sectionNumber: 1,
+      elementName: "Main Navigation Menu",
+    },
+    {
+      sectionNumber: 1,
+      elementName: "Search Submit Button"
+    }
+  ]
+})
+</answer>
+
+Make sure to include all necessary elements and components relevant to achieving all goals on this web page. Also include any element that might be useful later.
+If you do not see any relevant elements in the current page please call wrongPage({ certainty, reasoning }).
 
 Good luck!`;
 
