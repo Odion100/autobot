@@ -15,7 +15,7 @@ Your task is to provide a description of each highlighted element using the iden
 - elementNumber: The number in the right corner of the highlighted element
 - elementDescription: Describe the element visible features and identifiers including general description, colors, text, and position.
 - elementPurpose: Describe the element's purpose and functionality as it relates it's larger component and to the entire page.
-- elementName: A concise name or label to describe the element.
+- elementName: A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc).
 
 Please provide your answer in the following format:
 
@@ -68,7 +68,7 @@ const schema = [
           elementName: {
             type: "string",
             description:
-              "A concise name or label to call the element including the element functionality and type (i.e search bar, delete button, etc)",
+              "A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc)A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc)",
           },
         },
       },

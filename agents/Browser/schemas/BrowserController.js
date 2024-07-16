@@ -15,10 +15,10 @@ export default function ({ state }) {
       },
     },
   };
-  const findAndType = {
+  const type = {
     type: "function",
     function: {
-      name: "findAndType",
+      name: "type",
       description:
         "Types the given text into the first element matching the element matching a search using a description of the element and text found within the same red box as the element.",
       parameters: {
@@ -27,7 +27,7 @@ export default function ({ state }) {
           elementName: {
             type: "string",
             description:
-              "A concise name or label to call the element including the element functionality and type (i.e search bar, delete button, etc)",
+              "A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc)",
           },
           elementDescription: {
             type: "string",
@@ -61,6 +61,7 @@ export default function ({ state }) {
         required: [
           "elementName",
           "elementPurpose",
+          "elementDescription",
           "innerText",
           "containerText",
           "inputText",
@@ -68,10 +69,10 @@ export default function ({ state }) {
       },
     },
   };
-  const findAndClick = {
+  const click = {
     type: "function",
     function: {
-      name: "findAndClick",
+      name: "click",
       description:
         "Clicks on the first element matching a search using a description of the element and text found within the same red box as the element.",
       parameters: {
@@ -80,7 +81,7 @@ export default function ({ state }) {
           elementName: {
             type: "string",
             description:
-              "A concise name or label to call the element including the element functionality and type (i.e search bar, delete button, etc)",
+              "A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc)",
           },
           elementDescription: {
             type: "string",
@@ -107,7 +108,13 @@ export default function ({ state }) {
               "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
           },
         },
-        required: ["elementName", "elementPurpose", "innerText", "containerText"],
+        required: [
+          "elementName",
+          "elementPurpose",
+          "elementDescription",
+          "innerText",
+          "containerText",
+        ],
       },
     },
   };
@@ -184,13 +191,5 @@ export default function ({ state }) {
     },
   };
 
-  return [
-    navigate,
-    findAndType,
-    findAndClick,
-    saveContent,
-    scrollUp,
-    scrollDown,
-    promptUser,
-  ];
+  return [navigate, type, click, saveContent, scrollUp, scrollDown, promptUser];
 }
