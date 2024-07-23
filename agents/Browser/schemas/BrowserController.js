@@ -26,8 +26,7 @@ export default function ({ state }) {
         properties: {
           elementName: {
             type: "string",
-            description:
-              "A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc)",
+            description: `A specific, unique name or label for the element based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field"`,
           },
           elementDescription: {
             type: "string",
@@ -37,16 +36,20 @@ export default function ({ state }) {
           elementPurpose: {
             type: "string",
             description:
-              "Describe the element's purpose and functionality as it relates it's larger component and to the entire page.",
+              "Describe the element's specific purpose and functionality in relation to its component and the entire page.",
           },
           innerText: {
             type: "string",
             description: "As much text as can be seen within the element.",
           },
-          containerDescription: {
+          containerName: {
+            type: "string",
+            description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
+          },
+          containerPurpose: {
             type: "string",
             description:
-              "Describe the entire container of the element you are looking for",
+              "Describe the container's purpose and it's functionality as it relates to this specific component the page.",
           },
           containerText: {
             type: "string",
@@ -64,6 +67,8 @@ export default function ({ state }) {
           "elementDescription",
           "innerText",
           "containerText",
+          "containerName",
+          "containerPurpose",
           "inputText",
         ],
       },
@@ -97,10 +102,14 @@ export default function ({ state }) {
             type: "string",
             description: "As much text as can be seen within the element.",
           },
-          containerDescription: {
+          containerName: {
+            type: "string",
+            description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
+          },
+          containerPurpose: {
             type: "string",
             description:
-              "Describe the entire container of the element you are looking for",
+              "Describe the container's purpose and it's functionality as it relates to this specific component the page.",
           },
           containerText: {
             type: "string",
@@ -114,6 +123,8 @@ export default function ({ state }) {
           "elementDescription",
           "innerText",
           "containerText",
+          "containerName",
+          "containerPurpose",
         ],
       },
     },

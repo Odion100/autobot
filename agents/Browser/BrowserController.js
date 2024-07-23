@@ -25,90 +25,74 @@ async function getScreenShots(identifiedElements, containerOnly) {
   //await driver.hideContainers();
   return screenshots;
 }
-
-async function searchDescriptions(
-  identifiedElements,
+function saveSelectors(identifiers) {
+  for (const container of identifiers) {
+    if (container.positionRefresh === "static") {
+      driver.saveSelectors(
+        container.identifiedElements.map((data) => ({
+          ...data,
+          matchesCriteria: undefined,
+          containerName: container.containerName,
+          containerPurpose: container.containerPurpose,
+        }))
+      );
+    }
+  }
+}
+async function searchDescription2(
+  targetElements,
   fullScreenshot,
   type,
   { args, agents }
 ) {
   const { ElementIdentifier } = agents;
   console.log("fullScreenshot", fullScreenshot);
-  const screenshots = await getScreenShots(identifiedElements);
+  const screenshots = await getScreenShots(targetElements);
 
   console.log("screenshots -->1111", screenshots);
   async function describeElements(containerImage) {
-    const descriptions = await ElementIdentifier.invoke({
-      message: `Please identify the highlighted elements`,
+    const description = await ElementIdentifier.invoke({
+      message: `Please identify the highlighted elements with a main focus on the ${args.elementName}, ${args.elementPurpose}`,
       images: [fullScreenshot, containerImage],
-    });
-    console.log("describeElements", containerImage, descriptions);
-    return descriptions;
-    // elementDescriptions.push(...descriptions);
-  }
-  const combinedDescriptions = await Promise.all(
-    screenshots.map((image) => describeElements(image))
-  );
-  console.log("combinedDescriptions", combinedDescriptions);
-  const elementDescriptions = combinedDescriptions
-    .reduce((acc, results) => acc.concat(results), [])
-    .reduce((acc, { elementNumber, elementPurpose: description, elementName: label }) => {
-      const { selector, container, type } =
-        identifiedElements.find(({ number }) => number === elementNumber) || {};
-      console.log("elementNumber", elementNumber, selector, container);
-
-      if (selector)
-        acc.push({ label, selector, description, container, elementNumber, type });
-      return acc;
-    }, []);
-  await driver.cacheSelectors(elementDescriptions);
-  return await selectorStore.quickSearch(
-    elementDescriptions,
-    `${args.elementName}: ${args.elementPurpose}`,
-    2,
-    { type }
-  );
-}
-async function searchDescription2(
-  identifiedElements,
-  fullScreenshot,
-  type,
-  { args, agents }
-) {
-  const { ElementIdentifier2 } = agents;
-  console.log("fullScreenshot", fullScreenshot);
-  const screenshots = await getScreenShots(identifiedElements);
-
-  console.log("screenshots -->1111", screenshots);
-  async function describeElements(containerImage) {
-    const description = await ElementIdentifier2.invoke({
-      message: `Please identify the ${args.elementName}, ${args.elementPurpose}`,
-      images: [fullScreenshot, containerImage],
+      ...args,
     });
     console.log("describeElement2", containerImage, description);
     return description;
     // elementDescriptions.push(...descriptions);
   }
-  const combinedDescriptions = await Promise.all(
+  const identifiedContainers = await Promise.all(
     screenshots.map((image) => describeElements(image))
   );
+  console.log("identifiedContainers", identifiedContainers);
+  let fullMatch;
 
-  console.log("combinedDescriptions", combinedDescriptions);
-  const elementDescriptions = combinedDescriptions
-    .reduce((acc, results) => acc.concat(results), [])
-    .reduce((acc, { elementNumber, elementPurpose: description, elementName: label }) => {
+  const elementDescriptions = [];
+  for (const container of identifiedContainers) {
+    for (const identifier of container.identifiedElements) {
       const { selector, container, type } =
-        identifiedElements.find(({ number }) => number === elementNumber) || {};
-      console.log("elementNumber", elementNumber, selector, container);
+        targetElements.find(({ number }) => number === identifier.elementNumber) || {};
 
-      if (selector)
-        acc.push({ label, selector, description, container, elementNumber, type });
-      return acc;
-    }, []);
+      if (selector) {
+        identifier.selector = selector;
+        identifier.container = container;
+        identifier.type = type;
+        elementDescriptions.push(identifier);
+        if (identifier.matchesCriteria === "full-match") fullMatch = identifier;
+      }
+    }
+  }
+  saveSelectors(identifiedContainers);
+
+  if (fullMatch) return { results: [fullMatch], distances: [0.2] };
   if (!elementDescriptions.length) return { results: [], distances: [] };
-  await driver.cacheSelectors(elementDescriptions);
+  const filteredElements = elementDescriptions.filter(
+    ({ matchesCriteria }) => matchesCriteria !== "no-match"
+  );
+  console.log("filteredElements xx-->>", filteredElements);
+  if (!filteredElements.length) return { results: [], distances: [] };
+
   return await selectorStore.quickSearch(
-    elementDescriptions,
+    filteredElements,
     `${args.elementName}: ${args.elementPurpose}`,
     1,
     { type }
@@ -119,7 +103,7 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents, stat
   for (const i in newIdentifiers) {
     const identifier = newIdentifiers[i];
     const dist = distances[i];
-    if (dist < 0.35) {
+    if (dist < 0.34) {
       const element = await driver.selectElement(identifier, true);
       if (element) return element;
     }
@@ -161,7 +145,7 @@ async function compareContainers(containers, { args, agents, state }) {
   async function getConfirmation(containerImage, container) {
     const isCorrectContainer = await VisualConfirmation.invoke(
       {
-        message: `Is the selected container in this image the ${args.containerDescription}. Please carefully analyze the container text and description to see if it matches.`,
+        message: `Is the selected container in this image the ${args.containerName}, ${args.containerPurpose}. Please carefully analyze the container text and description to see if it matches.`,
         images: [fullScreenshot, containerImage],
         ...args,
       },
@@ -238,36 +222,43 @@ async function checkMemory(mwData, next) {
     type: fn === "type" ? "typeable" : "clickable",
   };
 
-  // const { results: savedIdentifiers, distances: dist } = await driver.getSelector(
-  //   `${args.elementName}: ${args.elementPurpose}`,
-  //   filter
-  // );
-
-  // console.log("savedIdentifiers, distances", savedIdentifiers, dist);
-  // if (savedIdentifiers.length) {
-  //   const selectedElement = await evaluateSelection(savedIdentifiers, dist, mwData);
-  //   if (selectedElement) {
-  //     args.selectedElement = selectedElement;
-  //     return next();
-  //   }
-  // }
-
-  const { results: cachedIdentifiers, distances } = await driver.checkCache(
+  const { results: savedIdentifiers, distances: dist } = await driver.getSelector(
     `${args.elementName}: ${args.elementPurpose}`,
     filter
   );
-  console.log("cachedIdentifiers, distances", cachedIdentifiers, distances);
 
-  if (cachedIdentifiers.length) {
-    const filteredIdentifiers = await driver.viewFilter(cachedIdentifiers);
-    const selectedElement = await evaluateSelection(
-      filteredIdentifiers,
-      distances,
-      mwData
+  console.log("savedIdentifiers, distances", savedIdentifiers, dist);
+  if (savedIdentifiers.length && dist[0] <= 0.4) {
+    const filteredIdentifiers = await driver.viewFilter(
+      savedIdentifiers.map((data, i) => ({ ...data, distance1: dist[i] }))
     );
-    if (selectedElement) {
-      args.selectedElement = selectedElement;
-      return next();
+    if (filteredIdentifiers.length) {
+      const { results, distances } = await selectorStore.quickSearch(
+        filteredIdentifiers.map(
+          ({ selector, container, containerName, containerPurpose, distance1 }, i) => ({
+            selector,
+            container,
+            containerName,
+            containerPurpose,
+            distance1,
+          })
+        ),
+        `${args.containerName}: ${args.containerPurpose}`,
+        1
+      );
+      if (distances[0] < 0.4) {
+        const averageDist = [(distances[0] + results[0].distance1) / 2];
+        console.log(
+          "containerMatch, distances, averageDist",
+          results,
+          distances,
+          averageDist
+        );
+        const selectedElement = await evaluateSelection(results, averageDist, mwData);
+        if (selectedElement) {
+          args.selectedElement = selectedElement;
+        }
+      }
     }
   }
 
@@ -283,11 +274,12 @@ export default function BrowserController() {
     exitConditions: {
       functionCall: "promptUser",
       shortCircuit: 3,
+      // iterations: 2,
       state: (state) => state.abort,
     },
     agents: [
       "ElementIdentifier",
-      "ElementIdentifier2",
+      "ComponentIdentifier",
       "VisualConfirmation",
       "ElementLocator",
     ],
@@ -367,7 +359,7 @@ export default function BrowserController() {
     return response;
   };
 
-  const clearSelectionMW = async function ({}, next) {
+  const resetContainers = async function ({}, next) {
     await driver.clearContainers();
     await driver.setContainers();
     await driver.clearSelection();
@@ -389,31 +381,27 @@ export default function BrowserController() {
         await driver.clearSections();
         const currentSection = await driver.getCurrentSection();
         console.log("invoking ElementLocation", fullPage, currentSection);
-        const { sectionNumber, reasoning } = await ElementLocator.invoke(
-          {
-            message: `We are currently in section ${currentSection} of the web page. Please locate the section of the element we are looking for based on the follow search criteria: 
+        const { sectionNumber, reasoning } = await ElementLocator.invoke({
+          message: `We are currently in section ${currentSection} of the web page. Please locate the section of the element we are looking for based on the follow search criteria: 
             - Element Name: ${args.elementName}.
-            - Element Purpose: ${args.elementName}
-            - Element Description: ${args.elementName}
-            - Element InnerText: ${args.elementName}
-            - Container Text: ${args.elementName}
-            - Container Description: ${args.elementName}`,
-            image: fullPage,
-          },
-          { messages: [...state.messages] }
-        );
+            - Element Purpose: ${args.elementPurpose}
+            - Element Description: ${args.elementDescriptions}
+            - Element InnerText: ${args.innerText}
+            - Container Text: ${args.containerText}
+            - Container Name: ${args.containerName}
+            - Container Purpose: ${args.containerPurpose}`,
+          image: fullPage,
+        });
         console.log("sectionNumber, reasoning", sectionNumber, reasoning);
         if (!sectionNumber) {
           args.searchHelpMessage = reasoning;
-        } else if (sectionNumber === parseInt(currentSection)) {
+        } else if (Math.abs(sectionNumber - currentSection) < 0.6) {
           args.searchHelpMessage = `The ${args.elementName} can be seen in your current location on the web page. ${reasoning}. Please refine your search parameters to properly get a handle on the element.`;
           await driver.goToSection(sectionNumber);
         } else {
           args.searchHelpMessage = reasoning;
           await driver.goToSection(sectionNumber);
-          state.screenshot = await driver.getScreenShot();
-          state.screenshot_message = `you have scrolled to section ${sectionNumber} of the web page.`;
-          return searchPage(mwData, next);
+          return checkMemory(mwData, () => searchPage(mwData, next));
         }
       } else {
         await driver.clearSections();
@@ -431,18 +419,18 @@ export default function BrowserController() {
       console.log("page load is now complete");
       //    await getElementLocations({ state, agents });
       const page = driver.page();
-      await driver.clearSections();
       await driver.setContainers();
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `You have navigated to a new page. Remember you can only interact with the elements you can see. So remember to scroll and browse the page to find the elements you want to interact with. Also remember to enough container text to help target the correct element when click and typing`;
       next();
     } else next();
   }
-  this.before("type", clearSelectionMW, checkMemory, searchPage, getElementLocations);
-  this.before("click", clearSelectionMW, checkMemory, searchPage, getElementLocations);
+  this.before("type", checkMemory, searchPage, getElementLocations);
+  this.before("click", checkMemory, searchPage, getElementLocations);
 
   //this.before("$invoke", insertScreenshot);
-  this.after("click", awaitNavigation);
+  this.after("click", awaitNavigation, resetContainers);
+  this.after("type", resetContainers);
   this.after("$all", awaitNavigation, insertScreenshot);
   this.before("$invoke", async function ({ state }, next) {
     const page = driver.page();
@@ -477,12 +465,11 @@ export default function BrowserController() {
   });
 }
 
-// fix position-fixed containers
-// maybe search the containers for any element that is position fixed
-// -- because anything that is position-fixed is in view
-// turn caching back on and filter out any element not in view
-// do visual confirmation when using cached memory
-// update compare containers to choose between the containers instead of doing a visual confirmation
-// on ebay when you click a list a pop shows up figure that out
-// on home depot the Navbar container is being skipped
-//add a $all middleware to check for consecutive non function calls and then tell the ai to prompt the user for help or if the task is complete
+//change the names of the selectorStore data to match the output of the element selector
+
+//if you have a full match skip quickSearch
+//if you have partial match use quickSearch then visual confirmation
+//if you use have to use visual confirmation save the selector with the input descriptions
+
+//when checking memory if multiple containers are under the distance compare the the text with an agent
+//if the search text is short the distance should be evaluated by a stricter standards

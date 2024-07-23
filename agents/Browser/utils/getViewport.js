@@ -1,12 +1,12 @@
 export default function getViewport(containers) {
   return containers.reduce((acc, container) => {
     const element = document.querySelector(container.selector);
+    if (!element) return acc; // Continue to the next container if element is not found
     const style = window.getComputedStyle(element);
     if (style.position === "fixed") {
       acc.push(container);
       return acc;
     }
-    if (!element) return acc; // Continue to the next container if element is not found
 
     const rect = element.getBoundingClientRect();
     const windowHeight = window.innerHeight || document.documentElement.clientHeight;

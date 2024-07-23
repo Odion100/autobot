@@ -135,7 +135,7 @@ function browserController() {
     const { results } = await htmlVectorSearch.findElements(
       interActiveElements,
       searchText,
-      5
+      6
     );
     if (!results.length) return [];
     const filteredIdentifiers = await page.evaluate(function filterHiddenElements(

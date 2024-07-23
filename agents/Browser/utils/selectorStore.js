@@ -7,29 +7,23 @@ import OpenAI from "openai";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const vectorStore = new ChromaClient();
-function reformatData(identifiers) {
+function reformatData(identifiers, containerSearch) {
   return identifiers.reduce(
     (sum, identifier) => {
       const {
-        label,
-        description,
-        selector,
-        container,
-        type,
+        elementName,
+        elementPurpose,
+        containerName,
+        containerPurpose,
         id = uniqueId(),
       } = identifier;
 
       identifier.id = id;
-      sum.documents.push(`${label}: ${description}`);
+      sum.documents.push(
+        `${elementName || containerName}: ${elementPurpose || containerPurpose}`
+      );
       sum.ids.push(identifier.id);
-      sum.metadatas.push({
-        id,
-        label,
-        description,
-        selector,
-        container,
-        type,
-      });
+      sum.metadatas.push(identifier);
       return sum;
     },
     {

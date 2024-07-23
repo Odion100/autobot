@@ -96,6 +96,10 @@ const schema = [
             description:
               "explain why you are certain we are on the wrong page for completing the current step in or objective.",
           },
+          sectionNumber: {
+            type: "number",
+            description: "The section the element is located on the page.",
+          },
         },
         required: ["certainty", "reasoning"],
       },
