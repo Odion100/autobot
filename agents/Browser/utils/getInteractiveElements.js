@@ -44,27 +44,42 @@ export default async function getInteractiveElements(containers, filter = "*") {
       return "content";
     }
   }
-
+  function isVisible(element) {
+    const rect = element.getBoundingClientRect();
+    const width = parseFloat(rect.width);
+    const height = parseFloat(rect.height);
+    const style = window.getComputedStyle(element);
+    return !(
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      element.offsetParent === null ||
+      width < 1 ||
+      height < 1
+    );
+  }
   function parseContainer({ selector, containerNumber }) {
     const container = document.querySelector(selector);
     if (!container) return [];
-    return Array.from(container.querySelectorAll(filter)).map((element, i) => {
+    return Array.from(container.querySelectorAll(filter)).reduce((acc, element, i) => {
       const attributes = Array.from(element.attributes)
         .filter((attr) => !["class", "style"].includes(attr.name))
         .map((attr) => attr.value)
         .join(" ");
 
-      return {
-        tagName: element.tagName.toLowerCase(),
-        selector: cssPath(element),
-        attributes,
-        innerText: element.innerText.replace(/\s+/g, " ").trim(),
-        type: getElementType(element),
-        container: selector,
-        number: i + 1,
-        containerNumber,
-      };
-    });
+      if (isVisible(element)) {
+        acc.push({
+          tagName: element.tagName.toLowerCase(),
+          selector: cssPath(element),
+          attributes,
+          innerText: element.innerText.replace(/\s+/g, " ").trim(),
+          type: getElementType(element),
+          container: selector,
+          number: i + 1,
+          containerNumber,
+        });
+      }
+      return acc;
+    }, []);
   }
 
   return containers.reduce(function (acc, container) {

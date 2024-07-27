@@ -48,7 +48,7 @@ function browserController() {
         browserState.labeledElements = [];
         browserState.scrollHeight = 0;
         // await driver.setContainers();
-        await selectorStore.clear("active-page");
+        // await selectorStore.clear( domain);
         // Expose a function to start recording actions
         // await page.exposeFunction("startRecording", (selectors) => {
         //   const actions = [];
@@ -113,8 +113,43 @@ function browserController() {
     console.log("viewportContainers <----", viewportContainers);
     return await htmlVectorSearch.findContainers(viewportContainers, searchText, 5);
   }
+  function addContainer(selector) {
+    const existingContainer = browserState.containers.find(
+      (container) => selector === container.selector
+    );
+    if (existingContainer) return existingContainer;
+    const container = {
+      containerNumber: browserState.containers.length,
+      html: "",
+      innerText: "",
+      selector,
+    };
+
+    browserState.containers.push(container);
+    return container;
+  }
   async function viewFilter(identifiers) {
     return await page.evaluate(getViewport, identifiers);
+  }
+  async function pageFilter(identifiers) {
+    return await page.evaluate(function (identifiers) {
+      function isVisible(element) {
+        const style = window.getComputedStyle(element);
+        return !(
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          element.offsetParent === null
+        );
+      }
+      return identifiers.filter((identifier) => {
+        const element = document.querySelector(identifier.selector);
+        if (!element) return false;
+        const { width, height } = element.getBoundingClientRect();
+        if (parseInt(width) < 1 && parseInt(height) < 1) return false;
+
+        return isVisible(element);
+      });
+    }, identifiers);
   }
   async function searchPage(searchText, targetContainers, cssFilter = both) {
     console.log("searchText, targetContainers", searchText, targetContainers);
@@ -206,33 +241,6 @@ function browserController() {
       elements.forEach((element) => element.remove());
     });
   }
-  async function updateLabels(updates = [], type = "labeledElements") {
-    const updatedLabels = [];
-    const labels = browserState[type];
-    const newLabels = Array.isArray(updates) ? updates : [updates];
-    for (const newLabel of newLabels) {
-      const oldLabel = labels[newLabel.number - 1];
-      if (oldLabel) {
-        Object.assign(oldLabel, newLabel);
-        updatedLabels.push(oldLabel);
-      }
-    }
-
-    const labelSelector =
-      type === "labeledElements" ? "#cambrian-ai-labels" : "#cambrian-ai-containers";
-    await page.evaluate(
-      (updatedLabels, labelSelector) => {
-        for (const label of updatedLabels) {
-          const selector = `${labelSelector} > div:nth-child(${label.number}) > div.box-label`;
-          const element = document.querySelector(selector);
-          if (element) element.textContent = label.label;
-        }
-      },
-      updatedLabels,
-      labelSelector
-    );
-    await selectorStore.save("active-page", updatedLabels);
-  }
 
   async function addLabels(identifiers) {
     await page.evaluate(setLabels, identifiers);
@@ -314,14 +322,21 @@ function browserController() {
     return "Clearing search containers";
   }
 
-  async function selectElement(identifier, shouldSave, isContainer) {
+  async function selectElement(identifier, isContainer) {
     const { selector } = identifier;
     console.log("selectElement", identifier);
 
     const elementHandler = await page.$(selector);
 
     if (elementHandler) {
-      // if (shouldSave) await saveSelectors(identifier);
+      if (identifier.positionRefresh === "static") {
+        if (typeof identifier.usage === "number") {
+          identifier.usage++;
+        } else {
+          identifier.usage = 1;
+        }
+        saveSelectors(identifier);
+      }
       browserState.selectedElement = undefined;
       if (browserState.showSelection)
         await page.evaluate(setSelection, elementHandler, isContainer);
@@ -330,7 +345,7 @@ function browserController() {
     }
   }
   async function selectContainer(identifier) {
-    return await selectElement(identifier, false, true);
+    return await selectElement(identifier, true);
   }
 
   async function clearSelection() {
@@ -387,7 +402,7 @@ function browserController() {
   }
   async function getScreenShot(fullPage = false) {
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
-    await page.screenshot({ path, fullPage });
+    await page.screenshot({ path, fullPage, captureBeyondView: false });
     browserState.actions.push("getting screen shot");
     return path;
   }
@@ -456,23 +471,29 @@ function browserController() {
   async function showContainers(input, excludeNumber) {
     return toggleContainers(input, true, excludeNumber);
   }
-  async function getSelector(description = "", where) {
+  async function searchSelectors(description = "", where) {
     const domain = parseDomain(page.url());
     return await selectorStore.search(domain, description, 5, where);
   }
-  async function checkCache(description = "", where) {
-    return await selectorStore.search("active-page", description, 5, where);
+  async function getSelectors(where) {
+    const domain = parseDomain(page.url());
+    return await selectorStore.get(domain, where);
   }
-
   async function saveSelectors(identifiers) {
     const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
     const domain = parseDomain(page.url());
     await selectorStore.save(domain, newIdentifiers);
   }
-  async function cacheSelectors(identifiers) {
-    const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
-    await selectorStore.save("active-page", newIdentifiers);
+  async function checkCache(description = "", where) {
+    const domain = `${parseDomain(page.url())}-cache`;
+    return await selectorStore.search(domain, description, 20, where);
   }
+  async function cacheSelectors(identifiers) {
+    const domain = `${parseDomain(page.url())}-cache`;
+    const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
+    await selectorStore.save(domain, newIdentifiers);
+  }
+
   function onPageLoad(handler) {
     page.on("load", handler);
   }
@@ -516,10 +537,12 @@ function browserController() {
     getContainers,
     searchPage,
     findContainers,
+    addContainer,
     captureElement,
     captureContainer,
     hideContainers,
-    getSelector,
+    searchSelectors,
+    getSelectors,
     checkCache,
     saveSelectors,
     cacheSelectors,
@@ -527,7 +550,6 @@ function browserController() {
     toggleContainers,
     clearLabels: clearInsertedLabels,
     addLabels,
-    updateLabels,
     insertLabels,
     onPageLoad,
     scrollIntoView,
@@ -538,6 +560,7 @@ function browserController() {
     goToSection,
     clearSections,
     viewFilter,
+    pageFilter,
     page: () => page,
   };
 }

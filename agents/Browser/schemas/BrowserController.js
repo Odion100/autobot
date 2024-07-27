@@ -33,7 +33,7 @@ export default function ({ state }) {
             description:
               "Describe the element's visible features and identifiers including general description, colors, text, and position.",
           },
-          elementPurpose: {
+          elementFunctionality: {
             type: "string",
             description:
               "Describe the element's specific purpose and functionality in relation to its component and the entire page.",
@@ -46,7 +46,7 @@ export default function ({ state }) {
             type: "string",
             description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
           },
-          containerPurpose: {
+          containerFunctionality: {
             type: "string",
             description:
               "Describe the container's purpose and it's functionality as it relates to this specific component the page.",
@@ -60,15 +60,19 @@ export default function ({ state }) {
             type: "string",
             description: "The text to type into the input",
           },
+          memoryId: {
+            type: "string",
+            description: `Use this value when selecting an element from Domain Memory.`,
+          },
         },
         required: [
           "elementName",
-          "elementPurpose",
+          "elementFunctionality",
           "elementDescription",
           "innerText",
           "containerText",
           "containerName",
-          "containerPurpose",
+          "containerFunctionality",
           "inputText",
         ],
       },
@@ -93,7 +97,7 @@ export default function ({ state }) {
             description:
               "Describe the element's visible features and identifiers including general description, colors, text, and position.",
           },
-          elementPurpose: {
+          elementFunctionality: {
             type: "string",
             description:
               "Describe the element's purpose and it's functionality as it relates to the entire page.",
@@ -106,7 +110,7 @@ export default function ({ state }) {
             type: "string",
             description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
           },
-          containerPurpose: {
+          containerFunctionality: {
             type: "string",
             description:
               "Describe the container's purpose and it's functionality as it relates to this specific component the page.",
@@ -116,15 +120,19 @@ export default function ({ state }) {
             description:
               "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
           },
+          memoryId: {
+            type: "string",
+            description: `Use this value when selecting an element from Domain Memory.`,
+          },
         },
         required: [
           "elementName",
-          "elementPurpose",
+          "elementFunctionality",
           "elementDescription",
           "innerText",
           "containerText",
           "containerName",
-          "containerPurpose",
+          "containerFunctionality",
         ],
       },
     },

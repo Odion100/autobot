@@ -16,23 +16,23 @@ A. Identify and describe all highlighted elements.
 B. Determine which element(s), if any, best match the following criteria:
 
 - Container Name: ${input.containerName}
-- Container Purpose: ${input.containerPurpose}
+- Container Purpose: ${input.containerFunctionality}
 - Container Text: ${input.containerText}
 - Element Name: ${input.elementName}
-- Element Purpose: ${input.elementPurpose}
+- Element Purpose: ${input.elementFunctionality}
 - Inner Text: ${input.innerText}
 
 IMPORTANT: For ALL descriptions, names, and purposes, avoid generic descriptors. Instead, use specific, distinguishing features, exact text content, or unique identifiers that relate directly to the specific items visible on the web page. This applies to both containers and individual elements.
 
 Use the identifyElements function to provide information about the container and all highlighted elements and indicate which ones match the criteria. The function expects an objects with these properties:
 
-- containerPurpose: Describe the container's specific purpose and its functionality as it relates to this specific item on the web page. 
+- containerFunctionality: Describe the container's specific purpose and its functionality as it relates to this specific item on the web page. 
 - containerName: Concise, specific label for the container based on its content visible on the page.
 - matchesCriteria: Indicate whether this container matches the specified search criteria regarding the target container (enum: "full-match", "partial-match", "no-match").
 - positionRefresh: Likelihood of the container's position changing when the page is refreshed. Use "dynamic" if the container is likely to change position, or "static" if it's likely to remain in the same place.
 - identifiedElements: An array of objects describing each highlighted element within the container, each with these properties:
   - elementNumber: The highlighted element's ID number (top-right corner of the green box)
-  - elementPurpose: Describe the element's specific purpose and functionality in relation to its component and the entire page. 
+  - elementFunctionality: Describe the element's specific purpose and functionality in relation to its component and the entire page. 
   - elementName: Concise, specific label for the element based on its visible details and functionality on this page.
   - matchesCriteria: Indicate whether this element matches the specified criteria (enum: "full-match", "partial-match", "no-match")
 
@@ -66,19 +66,19 @@ Provide your answer in this format:
 identifyElements([
   {
     containerName: "iPhone 14 Pro Product Configuration and Purchase Container",
-    containerPurpose: "Presents the 'iPhone 14 Pro' product page, showcasing its features, color options, storage capacities, and allowing users to customize and add the product to their cart.",
+    containerFunctionality: "Presents the 'iPhone 14 Pro' product page, showcasing its features, color options, storage capacities, and allowing users to customize and add the product to their cart.",
     matchesCriteria: "partial-match",
     positionRefresh: "static",
     identifiedElements: [
       {
         elementNumber: 1,
-        elementPurpose: "Adds the customized iPhone 14 Pro to the user's shopping cart with the selected color (Deep Purple), storage capacity (256GB), and other chosen options",
+        elementFunctionality: "Adds the customized iPhone 14 Pro to the user's shopping cart with the selected color (Deep Purple), storage capacity (256GB), and other chosen options",
         elementName: "iPhone 14 Pro 'Add to Bag' Purchase Initiation Button",
         matchesCriteria: "full-match"
       },
       {
         elementNumber: 2,
-        elementPurpose: "Allows users to select their preferred color for the iPhone 14 Pro, updating the product image and selected configuration accordingly",
+        elementFunctionality: "Allows users to select their preferred color for the iPhone 14 Pro, updating the product image and selected configuration accordingly",
         elementName: "iPhone 14 Pro Color Selection Swatch Row",
         matchesCriteria: "no-match"
       }
@@ -111,7 +111,7 @@ const schema = [
       parameters: {
         type: "object",
         properties: {
-          containerPurpose: {
+          containerFunctionality: {
             type: "string",
             description:
               "Describe the container's purpose and it's functionality as it relates to this specific component the page.",
@@ -141,7 +141,7 @@ const schema = [
                   description:
                     "The number in the right corner of the highlighted element you are describing.",
                 },
-                elementPurpose: {
+                elementFunctionality: {
                   type: "string",
                   description:
                     "Describe the element's purpose and it's functionality as it relates to the entire page.",

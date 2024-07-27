@@ -29,7 +29,7 @@ export default function setContentContainers(contentContainers) {
   const windowHeight = window.innerHeight;
   const existingContainer = document.querySelector(`#cambrian-ai-containers`);
   if (existingContainer) existingContainer.remove();
-  let zIndex = 8888;
+  let zIndex = 200000;
   const boxContainer = document.createElement("div");
   document.body.appendChild(boxContainer);
   boxContainer.id = `cambrian-ai-containers`;
@@ -56,7 +56,7 @@ export default function setContentContainers(contentContainers) {
       box.style.display = "none";
     }
 
-    zIndex--;
+    zIndex++;
     box.style.position = position === "fixed" ? position : "absolute";
     box.style.top = rect.top;
     box.style.left = rect.left;

@@ -21,7 +21,7 @@ export default function insertLabels(identifiers) {
     };
   }
 
-  let zIndex = 9999;
+  let zIndex = 200000;
   identifiers.forEach(
     ({ selector, label: lb, number, containerNumber, container }, i) => {
       console.log("selector", selector);
@@ -35,7 +35,7 @@ export default function insertLabels(identifiers) {
       const rect = getRect(element, elementContainer);
 
       const box = document.createElement("div");
-      zIndex--;
+      zIndex++;
       box.className = "inserted-identifiers";
       box.style.position = "absolute";
       box.style.top = rect.top;
@@ -65,7 +65,7 @@ export default function insertLabels(identifiers) {
       label.style.lineHeight = "13px";
       label.style.border = "1px solid #0eff0e";
       label.style.fontSize = "13px";
-
+      label.style.zIndex = `${zIndex + 1000}`;
       box.appendChild(label);
       labelContainer.appendChild(box);
     }

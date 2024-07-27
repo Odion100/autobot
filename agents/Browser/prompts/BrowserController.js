@@ -3,9 +3,9 @@ export default function prompt({ input, state } = {}) {
 
   1. navigate({ url }): Navigates to the given URL.
   
-  2. click({ elementName, elementPurpose, innerText, containerText, elementDescription, containerName, containerPurpose }): Clicks on the first element matching a natural language search for the item you want to click.
+  2. click({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality }): Clicks on the first element matching a natural language search for the item you want to click.
   
-  3. type({ elementName, elementPurpose, innerText, containerText, elementDescription, containerName, containerPurpose, inputText }): Types the given text into the first element matching a natural language search for the input to type into.
+  3. type({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, inputText }): Types the given text into the first element matching a natural language search for the input to type into.
   
   4. saveContent({ content }): Use this function to collect any data you can see on the screen. The content argument should be a list of the data collected in CSV format.
   
@@ -17,12 +17,13 @@ export default function prompt({ input, state } = {}) {
 
   For click and type functions, the search for an element must be based on what is visible in the screenshot. Only provide arguments based on what you can see. Use the following properties to help find the element:
     - elementName: A specific, unique name or label for the element based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field".
-    - elementPurpose: Describe the element's specific purpose and functionality in relation to its component and the entire page.
+    - elementFunctionality: Describe the element's specific purpose and functionality in relation to its component and the entire page.
     - innerText: text visible within the element. Include as much specific text as possible.
     - elementDescription: Describe the element's visible features in detail, including specific colors, text, position, and any unique identifiers.
     - containerText: text visible around the element and within the same red container. Provide as much context as possible to uniquely identify the element.
     - containerName: Concise, specific label for the container based on its content visible on the page.
-    - containerPurpose:Describe the container's specific purpose and its functionality as it relates to this specific item on the web page.
+    - containerFunctionality:Describe the container's specific purpose and its functionality as it relates to this specific item on the web page.
+    - memoryId: You will receive a Domain Memory document with info that will assist you in clicking on and typing to elements you've previously identified. Use this value when selecting an element using Domain Memory.
 
   IMPORTANT: For ALL descriptions, names, and purposes, avoid generic descriptors. Instead, use specific, distinguishing features, exact text content, or unique identifiers that relate directly to the specific items visible on the web page. This applies to both containers and individual elements.
   
