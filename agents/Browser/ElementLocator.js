@@ -5,75 +5,88 @@ dotenv.config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const prompt = `You will be provided with a screenshot of an entire webpage, which has been split in to multiple sections. Each section is separated by red container with a section number in the upper right corner of the section container. Your job is to locate the element or components the user is looking for. 
+const prompt = ({
+  input,
+}) => `You will be provided with a screenshot of an entire webpage, which has been split into multiple sections. Each section is separated by a red container with a section number in the upper right corner.
 
-If you think the item cannot be found on this page call wrongPage({ certainty, reasoning }).
+## Search Criteria
+Your task is to find the element or components that match the following search criteria:
 
-1. First ensure that you are on the correct page for the current task
+- **Container Name**: ${input.containerName}
+- **Container Functionality**: ${input.containerFunctionality}
+- **Element Name**: ${input.elementName}
+- **Element Functionality**: ${input.elementFunctionality}
+
+## Guidelines
+1. Ensure that you are on the correct page for the current task.
 2. Identify the relevant element or component.
-3. Identify in which section of the entire page the element is located by noting the section number in the top right corner.
+3. Note the section number where the element is located.
+4. Pay attention to the context and surrounding elements to ensure accuracy.
 
-Provide the location of the desired elements by calling the following function:
+## Reporting Functions
 
-## locateElement({ sectionNumber, certainty, reasoning, innerPosition })
-  - sectionNumber: The section of the page in which the element is located.
-  - certainty: A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident).
-  - reasoning: Explain why you are certain the correct element was found in that location. 
-  - innerPosition: Is the element in the bottom, middle or top part of the specified section.
+### If the element is found:
+Call the \`locateElement\` function with the following parameters:
 
-Please provide your answer in the following format:
+\`locateElement({ sectionNumber, certainty, reasoning, innerPosition })\`
+- **sectionNumber**: The section of the page where the element is located.
+- **certainty**: A score from 1-5 representing your confidence (1 = not confident at all, 5 = extremely confident).
+- **reasoning**: Explain why you are certain the correct element was found. Your reasoning should be helpful and instructive.
 
-<answer>
-locateElements({
-  searchResults: [
-    {
-      sectionNumber: 1,
-      elementName: "Main Navigation Menu",
-    },
-    {
-      sectionNumber: 1,
-      elementName: "Search Submit Button"
-    }
-  ]
+### If the element is not found:
+Call the \`wrongPage\` function with the following parameters:
+
+\`wrongPage({ certainty, reasoning })\`
+- **certainty**: A score from 1-5 representing your confidence that the page is incorrect.
+- **reasoning**: Explain why you believe we are on the wrong page for completing the current task.
+
+## Function Call Examples
+
+<example>
+locateElement({
+  sectionNumber: 1,
+  certainty: 5,
+  reasoning: "The search bar can be seen at the top of the web page in section 1. It matches the description of '${input.elementName}' and its functionality of '${input.elementFunctionality}'.",
+  innerPosition: "top-center"
 })
-</answer>
+</example>
 
-Make sure to include all necessary elements and components relevant to achieving all goals on this web page. Also include any element that might be useful later.
-If you do not see any relevant elements in the current page please call wrongPage({ certainty, reasoning }).
-Remember, If you do not see the desired elements in the current page please call wrongPage({ certainty, reasoning }).
+OR
 
-Good luck!`;
+<example>
+wrongPage({
+  certainty: 4,
+  reasoning: "The page does not contain any elements matching the description of '${input.elementName}' with the functionality of '${input.elementFunctionality}'. The content appears to be unrelated to the desired task."
+})
+</example>
+
+Remember to thoroughly examine all sections of the page before concluding that the element is not present. Good luck!`;
 
 const schema = [
   {
     type: "function",
     function: {
       name: "locateElement",
-      description: "Provide the location of all relevant elements.",
+      description: "Provide the location of the element matching the search criteria.",
       parameters: {
         type: "object",
         properties: {
           sectionNumber: {
             type: "number",
-            description: "The section the element is located on the page.",
+            description: "The section where the element is located.",
           },
           certainty: {
             type: "number",
             description:
-              "A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident)",
+              "A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident).",
           },
           reasoning: {
             type: "string",
             description:
-              "Explain why you are certain the correct element was found in that location.",
-          },
-          innerPosition: {
-            type: "string",
-            description:
-              "Is the element in the bottom, middle or top part of the specified section.",
+              "Explain why you are certain the correct element was found in that location. The reasoning should be helpful and instructive.",
           },
         },
-        required: ["sectionNumber", "certainty", "reasoning", "innerPosition"],
+        required: ["sectionNumber", "certainty", "reasoning"],
       },
     },
   },
@@ -82,23 +95,19 @@ const schema = [
     function: {
       name: "wrongPage",
       description:
-        "Provide a reasoning for why the necessary elements cannot be found on this page.",
+        "Provide reasoning for why the necessary elements cannot be found on this page.",
       parameters: {
         type: "object",
         properties: {
           certainty: {
             type: "number",
             description:
-              "A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident)",
+              "A score from 1-5 representing your confidence in your assessment (1 = not confident at all, 5 = extremely confident).",
           },
           reasoning: {
             type: "string",
             description:
-              "explain why you are certain we are on the wrong page for completing the current step in or objective.",
-          },
-          sectionNumber: {
-            type: "number",
-            description: "The section the element is located on the page.",
+              "Explain why you are certain we are on the wrong page for completing the current step or objective. The reasoning should be helpful and instructive.",
           },
         },
         required: ["certainty", "reasoning"],

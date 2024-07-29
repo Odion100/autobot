@@ -26,7 +26,7 @@ export default function ({ state }) {
         properties: {
           elementName: {
             type: "string",
-            description: `A specific, unique name or label for the element based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field"`,
+            description: `Provide a specific, distinguishing name or label for the element based on its visible details or functionality. Use distinguishing functionality or exact text content."`,
           },
           elementDescription: {
             type: "string",
@@ -44,7 +44,7 @@ export default function ({ state }) {
           },
           containerName: {
             type: "string",
-            description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
+            description: `Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel. For ALL containerName values, use highly specific, distinguishing labels that uniquely identify container. Avoid generic terms like "product container", "search results". Instead, use names that precisely describe the element's unique role or content on this specific page, such as "iPhone 14 Pro configuration panel" or "Prime Video categories dropdown".`,
           },
           containerFunctionality: {
             type: "string",
@@ -60,9 +60,9 @@ export default function ({ state }) {
             type: "string",
             description: "The text to type into the input",
           },
-          memoryId: {
+          domainMemoryId: {
             type: "string",
-            description: `Use this value when selecting an element from Domain Memory.`,
+            description: `Use this value ONLY when selecting an element from Domain Memory.`,
           },
         },
         required: [
@@ -89,8 +89,7 @@ export default function ({ state }) {
         properties: {
           elementName: {
             type: "string",
-            description:
-              "A concise name or label to call the element specific to details you can see about the element or its container (i.e search bar, delete button, etc)",
+            description: `Provide a specific, distinguishing name or label for the element based on its visible details or functionality. Use distinguishing functionality or exact text content."`,
           },
           elementDescription: {
             type: "string",
@@ -108,7 +107,7 @@ export default function ({ state }) {
           },
           containerName: {
             type: "string",
-            description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
+            description: `Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel. For ALL containerName values, use highly specific, distinguishing labels that uniquely identify container. Avoid generic terms like "product container", "search results". Instead, use names that precisely describe the element's unique role or content on this specific page, such as "iPhone 14 Pro configuration panel" or "Prime Video categories dropdown".`,
           },
           containerFunctionality: {
             type: "string",
@@ -120,9 +119,9 @@ export default function ({ state }) {
             description:
               "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
           },
-          memoryId: {
+          domainMemoryId: {
             type: "string",
-            description: `Use this value when selecting an element from Domain Memory.`,
+            description: `Use this value ONLY when selecting an element from Domain Memory.`,
           },
         },
         required: [
@@ -160,31 +159,32 @@ export default function ({ state }) {
     type: "function",
     function: {
       name: "scrollUp",
-      description: `Use scrollUp to move up a fullscreen-length section of the webpage. You are currently at section ${state.currentSection}. There are ${state.totalSections} in the webpage, wherein section 1 is the top of the page.`,
+      description: `Use scrollUp to move up a portion of the webpage. You are currently at section ${state.currentSection}. There are ${state.totalSections} in the webpage, where section 1 is the top of the page.`,
       parameters: {
         type: "object",
         properties: {
           scrollLength: {
             type: "number",
             description:
-              "a number greater than zero representing the amount of space to scroll to as a percentage of the screen size. For example 2 will scroll by the size of the screen twice, while .5 will scroll only half the length of the screen size.",
+              "A number representing the amount of scrolling. A value of 1 scrolls up half the screen's height, while a value of 2 scrolls up the full screen's height.",
           },
         },
       },
     },
   };
+
   const scrollDown = {
     type: "function",
     function: {
       name: "scrollDown",
-      description: `Use scrollDown to move down a fullscreen-length section of the webpage. You are currently at section ${state.currentSection}. There are ${state.totalSections} in the webpage, wherein section 1 is the top of the page.`,
+      description: `Use scrollDown to move down a portion of the webpage. You are currently at section ${state.currentSection}. There are ${state.totalSections} in the webpage, where section 1 is the top of the page.`,
       parameters: {
         type: "object",
         properties: {
           scrollLength: {
             type: "number",
             description:
-              "a number greater than zero representing the amount of space to scroll to as a percentage of the screen size. For example 2 will scroll by the size of the screen twice, while .5 will scroll only half the length of the screen size.",
+              "A number representing the amount of scrolling. A value of 1 scrolls down half the screen's height, while a value of 2 scrolls down the full screen's height.",
           },
         },
       },

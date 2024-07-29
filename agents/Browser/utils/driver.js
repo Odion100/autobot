@@ -47,50 +47,18 @@ function browserController() {
         browserState.containers = [];
         browserState.labeledElements = [];
         browserState.scrollHeight = 0;
-        // await driver.setContainers();
-        // await selectorStore.clear( domain);
-        // Expose a function to start recording actions
-        // await page.exposeFunction("startRecording", (selectors) => {
-        //   const actions = [];
+      });
+      const dimensions = await page.evaluate(() => {
+        return {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
+      });
 
-        //   const logAction = async (action, element, event) => {
-        //     event.stopImmediatePropagation(); // Stop the event from propagating further
-        //     const timeStamp = new Date().toISOString();
-        //     const selector = element.getAttribute("autobot-selector");
-        //     actions.push({ action, selector, timeStamp });
-        //     console.log({ action, selector, timeStamp });
-
-        //     // Call the exposed function to take a screenshot
-        //     await window.takeScreenshot(action, selector, timeStamp);
-        //     // Delay event propagation
-
-        //     const newEvent = new event.constructor(event.type, event);
-        //     element.dispatchEvent(newEvent);
-        //   };
-
-        //   window.stopRecording = () => {
-        //     selectors.forEach((selector) => {
-        //       const elements = document.querySelectorAll(selector);
-        //       elements.forEach((element) => {
-        //         element.removeEventListener("click", element.clickListener);
-        //       });
-        //     });
-        //     console.log("Recording stopped");
-        //   };
-
-        //   selectors.forEach((selector) => {
-        //     const elements = document.querySelectorAll(selector);
-        //     elements.forEach((element) => {
-        //       element.setAttribute("autobot-selector", selector); // Add a unique identifier for each element
-
-        //       element.clickListener = (event) => logAction("click", event.target, event);
-        //       element.addEventListener("click", element.clickListener);
-        //     });
-        //   });
-
-        //   window.getRecordedActions = () => actions;
-        //   console.log("Recording started");
-        // });
+      // Set the viewport size to match the window dimensions
+      await page.setViewport({
+        width: dimensions.width,
+        height: dimensions.height,
       });
     }
 
@@ -285,7 +253,7 @@ function browserController() {
   }
   async function getCurrentSection() {
     const currentSection = await page.evaluate(() => {
-      const windowHeight = window.innerHeight;
+      const windowHeight = window.innerHeight / 2;
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
 
       const currentSection = Math.round(((scrollTop + 1) / windowHeight) * 100) / 100;
@@ -329,14 +297,6 @@ function browserController() {
     const elementHandler = await page.$(selector);
 
     if (elementHandler) {
-      if (identifier.positionRefresh === "static") {
-        if (typeof identifier.usage === "number") {
-          identifier.usage++;
-        } else {
-          identifier.usage = 1;
-        }
-        saveSelectors(identifier);
-      }
       browserState.selectedElement = undefined;
       if (browserState.showSelection)
         await page.evaluate(setSelection, elementHandler, isContainer);
@@ -380,14 +340,14 @@ function browserController() {
   async function scrollUp(multiple = 1) {
     browserState.scrollEnded = false;
     await page.evaluate((multiple) => {
-      window.scrollBy(0, -window.innerHeight * multiple);
+      window.scrollBy(0, -(window.innerHeight / 2) * multiple);
       return document.body.scrollHeight;
     }, multiple);
     return await getCurrentSection();
   }
   async function goToSection(sectionNumber) {
     await page.evaluate((sectionNumber) => {
-      const windowHeight = window.innerHeight;
+      const windowHeight = window.innerHeight / 2;
       const targetScrollTop = windowHeight * (sectionNumber - 1);
       window.scrollTo(0, targetScrollTop);
     }, sectionNumber);
@@ -395,7 +355,7 @@ function browserController() {
   async function scrollDown(multiple = 1) {
     browserState.scrollEnded = false;
     await page.evaluate((multiple) => {
-      window.scrollBy(0, window.innerHeight * multiple);
+      window.scrollBy(0, (window.innerHeight / 2) * multiple);
       return document.body.scrollHeight;
     }, multiple);
     return await getCurrentSection();
@@ -417,7 +377,7 @@ function browserController() {
 
         if (containerOnly) {
           return {
-            x: x + scrollOffsetY - 5,
+            x: x + scrollOffsetX - 5,
             y: y + scrollOffsetY - 10,
             width: width + 10,
             height: height + 20,

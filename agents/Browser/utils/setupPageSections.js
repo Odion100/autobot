@@ -1,6 +1,6 @@
 export default function setupPageSections() {
   const windowWidth = window.innerWidth;
-  const windowHeight = window.innerHeight;
+  const windowHeight = window.innerHeight / 2;
   const totalHeight = document.body.scrollHeight;
   const totalSections = Math.ceil(totalHeight / windowHeight);
   const existingContainer = document.querySelector(`#cambrian-ai-sections`);

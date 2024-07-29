@@ -9,32 +9,39 @@ const prompt = ({
 }) => `You are an AI assistant specialized in web UI analysis and element identification. Analyze two provided screenshots:
 
 1. Full page screenshot: Examine carefully to understand the webpage's context and purpose.
-2. Focus screenshot: Concentrate on all elements highlighted with green boxes. Each box has an ID number in its top-right corner.
+2. Focus screenshot: Concentrate ONLY on elements highlighted with green boxes. Each box has an ID number in its top-right corner.
 
 Your task has two parts:
 A. Identify and describe all highlighted elements.
-B. Determine which element(s), if any, best match the following criteria:
+B. Determine which highlighted element(s), if any, best match the following search criteria:
 
 - Container Name: ${input.containerName}
-- Container Purpose: ${input.containerFunctionality}
+- Container Functionality: ${input.containerFunctionality}
 - Container Text: ${input.containerText}
 - Element Name: ${input.elementName}
-- Element Purpose: ${input.elementFunctionality}
+- Element Functionality: ${input.elementFunctionality}
 - Inner Text: ${input.innerText}
 
-IMPORTANT: For ALL descriptions, names, and purposes, avoid generic descriptors. Instead, use specific, distinguishing features, exact text content, or unique identifiers that relate directly to the specific items visible on the web page. This applies to both containers and individual elements.
+IMPORTANT: Only elements highlighted with green boxes and numbered should be considered as potential matches. Do not include or describe adjacent non-highlighted elements, even if they seem relevant to the search criteria.
 
-Use the identifyElements function to provide information about the container and all highlighted elements and indicate which ones match the criteria. The function expects an objects with these properties:
+Use the identifyElements function to provide information about the container and all highlighted elements and indicate if one match the criteria. The function expects an object with these properties:
 
+- containerName: Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel".
 - containerFunctionality: Describe the container's specific purpose and its functionality as it relates to this specific item on the web page. 
-- containerName: Concise, specific label for the container based on its content visible on the page.
 - matchesCriteria: Indicate whether this container matches the specified search criteria regarding the target container (enum: "full-match", "partial-match", "no-match").
-- positionRefresh: Likelihood of the container's position changing when the page is refreshed. Use "dynamic" if the container is likely to change position, or "static" if it's likely to remain in the same place.
+- positionRefresh: Assess the likelihood of the container's position changing when the page is refreshed or revisited on another day.s. Use "dynamic" if the container's position is likely to change, or "static" if it's likely to remain in the same place. Consider these factors:
+  - "static": Use for elements that are part of the page's permanent structure, such as headers, footers, main navigation menus, or fixed product information panels. 
+    Examples: "Header Navigation Menu", "Site-wide Footer", "Fixed Sidebar", "Main Product Description Container", "Website Logo", "Primary Call-to-Action Button".
+  - "dynamic": Use for elements whose position or presence may change based on user actions, server-side updates, or page refreshes. 
+    Examples: "Search Results Grid", "Personalized Product Recommendations", "Live Chat Widget", "Social Media Feed", "Breaking News Ticker", "Recently Viewed Items Carousel".
+- positionRefreshConfidence: Indicate your confidence in the positionRefresh assessment on a scale of 1-5, where 1 is least confident and 5 is most confident.
 - identifiedElements: An array of objects describing each highlighted element within the container, each with these properties:
   - elementNumber: The highlighted element's ID number (top-right corner of the green box)
+  - elementName: A distinguishing name or label for the element based on its visible content or functionality. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones XH-2000" or "Username input field for Premium Account login".
   - elementFunctionality: Describe the element's specific purpose and functionality in relation to its component and the entire page. 
-  - elementName: Concise, specific label for the element based on its visible details and functionality on this page.
   - matchesCriteria: Indicate whether this element matches the specified criteria (enum: "full-match", "partial-match", "no-match")
+
+CRITICAL: For ALL containerName and elementName values, use highly specific, distinguishing labels that uniquely identify the container or element. Avoid generic terms like "product container", "search results", or "delete button". Instead, use names that precisely describe the element's unique role or content on this specific page, such as "iPhone 14 Pro configuration panel" or "Prime Video categories dropdown".
 
 Chain of Thought Process:
 1. Analyze the full page screenshot:
@@ -55,7 +62,13 @@ Chain of Thought Process:
    - Which element(s), if any, best match the criteria?
    - Are there multiple matches, partial matches, or no matches at all?
 
-5. Formulate your response:
+5. Determine positionRefresh for each container:
+   - Apply the decision tree to assess whether the container is likely static or dynamic
+   - Consider the examples provided and how they relate to the container in question
+   - Explain your reasoning briefly
+   - Assign a confidence level to your assessment
+
+6. Formulate your response:
    - Create an object for each container and its highlighted elements
    - Set matchesCriteria appropriately for containers and elements based on how well they match the specified criteria
    - Ensure all descriptions and names use specific, unique identifiers from the actual page content
@@ -69,6 +82,7 @@ identifyElements([
     containerFunctionality: "Presents the 'iPhone 14 Pro' product page, showcasing its features, color options, storage capacities, and allowing users to customize and add the product to their cart.",
     matchesCriteria: "partial-match",
     positionRefresh: "static",
+    positionRefreshConfidence: 4,
     identifiedElements: [
       {
         elementNumber: 1,
@@ -87,6 +101,8 @@ identifyElements([
   },
   // Include other containers if present, each with specific, unique descriptions based on the page
 ])
+
+Confirmation: I have verified that all described elements are highlighted with green boxes and have corresponding ID numbers. No non-highlighted elements have been included in this analysis. All containerName and elementName descriptions are highly specific and distinguishing.
 </answer>
 
 Guidelines:
@@ -118,9 +134,8 @@ const schema = [
           },
           containerName: {
             type: "string",
-            description: `A specific, unique name or label for the component based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field`,
+            description: `Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel. For ALL containerName values, use highly specific, distinguishing labels that uniquely identify container. Avoid generic terms like "product container", "search results". Instead, use names that precisely describe the element's unique role or content on this specific page, such as "iPhone 14 Pro configuration panel" or "Prime Video categories dropdown".`,
           },
-
           matchesCriteria: {
             type: "string",
             description:
@@ -129,6 +144,11 @@ const schema = [
           positionRefresh: {
             type: "string",
             description: `Likelihood of the container's position changing when the page is revisited on a later date. Use "dynamic" if the container is likely to change position, or "static" if it's likely to remain in the same place. For example, a Navigation bar would be static while a search result would be dynamic.`,
+          },
+          positionRefreshConfidence: {
+            type: "number",
+            description:
+              "Indicate your confidence in the positionRefresh assessment on a scale of 1-5, where 1 is least confident and 5 is most confident.",
           },
           identifiedElements: {
             type: "array",
@@ -148,7 +168,7 @@ const schema = [
                 },
                 elementName: {
                   type: "string",
-                  description: `A specific, unique name or label for the element based on its visible content or attributes. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones" or "Username input field"`,
+                  description: `Provide a specific, distinguishing name or label for the element based on its visible details or functionality. Use distinguishing functionality or exact text content."`,
                 },
                 matchesCriteria: {
                   type: "string",
@@ -156,9 +176,23 @@ const schema = [
                     "Indicating whether this element matches the specified criteria (enum: full-match, partial-match, no-match).",
                 },
               },
+              required: [
+                "elementNumber",
+                "elementFunctionality",
+                "elementName",
+                "matchCriteria",
+              ],
             },
           },
         },
+        required: [
+          "containerName",
+          "containerFunctionality",
+          "matchCriteria",
+          "positionRefresh",
+          "positionRefreshConfidence",
+          "identifiedElements",
+        ],
       },
     },
   },

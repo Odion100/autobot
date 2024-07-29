@@ -8,10 +8,10 @@ function prompt({ input }) {
   The component you are looking for is based on the following search criteria. 
 
   - Container Name: ${input.containerName}
-  - Container Purpose: ${input.containerFunctionality}
+  - Container Functionality: ${input.containerFunctionality}
   - Container Text: ${input.containerText}
   - Element Name: ${input.elementName}
-  - Element Purpose: ${input.elementFunctionality}
+  - Element Functionality: ${input.elementFunctionality}
   - Inner Text: ${input.innerText}
 
   

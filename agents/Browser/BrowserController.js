@@ -109,7 +109,10 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents, stat
     const dist = distances[i];
     if (dist < 0.34) {
       const element = await driver.selectElement(identifier);
-      if (element) return element;
+      if (element) {
+        args.identifier = identifier;
+        return element;
+      }
     }
 
     if (dist < 0.4 && dist) {
@@ -125,6 +128,7 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents, stat
         });
         console.log("elementMatched", elementMatched);
         if (elementMatched) {
+          args.identifier = identifier;
           return element;
         }
       }
@@ -229,9 +233,9 @@ async function selectContainers(mwData, next) {
 }
 async function checkMemory(mwData, next) {
   const { args } = mwData;
-  if (args.memoryId) {
-    const identifiers = await driver.getSelectors({ id: args.memoryId });
-    console.log("memory id", args.memoryId, identifiers);
+  if (args.domainMemoryId) {
+    const identifiers = await driver.getSelectors({ id: args.domainMemoryId });
+    console.log("memory id", args.domainMemoryId, identifiers);
     if (identifiers.length) {
       const selectedElement = await evaluateSelection(identifiers, [0.2], mwData);
       if (selectedElement) {
@@ -367,7 +371,7 @@ The following elements are apart of the above container:
 - **Element ${e}:**          
 elementName = ${elementName},
 elementFunctionality =  ${elementFunctionality},
-memoryId = ${id}
+domainMemoryId = ${id}
 `;
         }
       }
@@ -377,7 +381,7 @@ memoryId = ${id}
 Following is a list of parameters for containers and elements you've previously identified on this page. 
 ${domainMemory}
 Use these saved identifiers to help select elements from memory when applicable to you current task.  
-IMPORTANT: Remember to use the memoryId when calling type and click functions using domain memory.
+IMPORTANT: Remember to use the domainMemoryId when calling type and click functions using domain memory.
     `;
   }
   console.log("state.domainMemory", state.domainMemory);
@@ -434,30 +438,46 @@ IMPORTANT REMINDER:
     return `${results}. ${executionReminder} ${await domainMemory(state)}`;
   };
   this.type = async function (
-    { selectedElement, elementName, inputText, searchHelpMessage = "" },
+    { selectedElement, elementName, inputText, searchHelpMessage = "", identifier },
     { state }
   ) {
     if (selectedElement) {
       await selectedElement.type(inputText, { delay: 100 });
+      if (identifier.positionRefresh === "static") {
+        if (typeof identifier.usage === "number") {
+          identifier.usage++;
+        } else {
+          identifier.usage = 1;
+        }
+        driver.saveSelectors(identifier);
+      }
       state.screenshot = await driver.getScreenShot();
       state.screenshot_message = `The input was found and typed into. ${executionReminder} ${await domainMemory(
         state
       )}`;
-      return `The input was found and typed into.  ${executionReminder} ${await domainMemory(
+      return `The input was found and typed into. ${executionReminder} ${await domainMemory(
         state
       )}`;
     }
 
-    return `The ${elementName} not selected successfully. Consider the following: ${searchHelpMessage}`;
+    return `The ${elementName} was not successfully selected. ${searchHelpMessage}`;
   };
 
   this.click = async function (
-    { selectedElement, elementName, searchHelpMessage = "" },
+    { selectedElement, elementName, searchHelpMessage = "", identifier },
     { state }
   ) {
     if (selectedElement) {
       try {
         await selectedElement.click();
+        if (identifier.positionRefresh === "static") {
+          if (typeof identifier.usage === "number") {
+            identifier.usage++;
+          } else {
+            identifier.usage = 1;
+          }
+          driver.saveSelectors(identifier);
+        }
         await wait(1000);
         state.screenshot = await driver.getScreenShot();
         state.screenshot_message = `The element was found and clicked.  ${executionReminder} ${await domainMemory(
@@ -471,7 +491,7 @@ IMPORTANT REMINDER:
         return `There was an error when attempting to click the ${elementName}`;
       }
     }
-    return `The ${elementName} not selected successfully. Consider the following: ${searchHelpMessage}`;
+    return `The ${elementName} was not successfully selected. ${searchHelpMessage}`;
   };
 
   this.saveContent = async function ({ content }) {
@@ -530,15 +550,11 @@ IMPORTANT REMINDER:
         const currentSection = await driver.getCurrentSection();
         console.log("invoking ElementLocation", fullPage, currentSection);
         const { sectionNumber, reasoning } = await ElementLocator.invoke({
-          message: `We are currently in section ${currentSection} of the web page. Please locate the section of the element we are looking for based on the follow search criteria: 
+          message: `We are currently in section ${currentSection} of the web page. Please locate the section of the element that matches the follow search criteria: 
             - Element Name: ${args.elementName}.
-            - Element Purpose: ${args.elementFunctionality}
-            - Element Description: ${args.elementDescriptions}
-            - Element InnerText: ${args.innerText}
-            - Container Text: ${args.containerText}
-            - Container Name: ${args.containerName}
-            - Container Purpose: ${args.containerFunctionality}`,
+            - Element Functionality: ${args.elementFunctionality}`,
           image: fullPage,
+          ...args,
         });
         await driver.showContainers();
         console.log("sectionNumber, reasoning", sectionNumber, reasoning);
@@ -550,7 +566,7 @@ IMPORTANT REMINDER:
         } else {
           args.searchHelpMessage = `We have scrolled to section ${sectionNumber}. The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
           await driver.goToSection(sectionNumber);
-          // return searchPage(mwData, next);
+          return searchPage(mwData, next);
         }
       }
     }
