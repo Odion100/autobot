@@ -36,10 +36,12 @@ Use the identifyElements function to provide information about the container and
     Examples: "Search Results Grid", "Personalized Product Recommendations", "Live Chat Widget", "Social Media Feed", "Breaking News Ticker", "Recently Viewed Items Carousel".
 - positionRefreshConfidence: Indicate your confidence in the positionRefresh assessment on a scale of 1-5, where 1 is least confident and 5 is most confident.
 - identifiedElements: An array of objects describing each highlighted element within the container, each with these properties:
-  - elementNumber: The highlighted element's ID number (top-right corner of the green box)
-  - elementName: A distinguishing name or label for the element based on its visible content or functionality. Avoid generic descriptors like "first option" or "second listing". Instead, use distinguishing features or exact text content, e.g., "Buy Now button for Wireless Headphones XH-2000" or "Username input field for Premium Account login".
-  - elementFunctionality: Describe the element's specific purpose and functionality in relation to its component and the entire page. 
-  - matchesCriteria: Indicate whether this element matches the specified criteria (enum: "full-match", "partial-match", "no-match")
+  - elementNumber: The highlighted element's ID number (top-right corner of the green box). Use 0 if the highlighted area doesn't contain an actual element within its borders.
+  - elementName: A distinguishing name or label for the element based on its visible content or functionality. Use "n/a" if the highlighted area doesn't contain an actual element.
+  - elementFunctionality: Describe the element's specific purpose and functionality in relation to its component and the entire page. Use "n/a" if the highlighted area doesn't contain an actual element.
+  - matchesCriteria: Indicate whether this element matches the specified criteria (enum: "full-match", "partial-match", "no-match"). Use "no-match" if the highlighted area doesn't contain an actual element.
+
+If the focus screenshot does not contain any highlighted elements, use the noHighlightedElements function instead.
 
 CRITICAL: For ALL containerName and elementName values, use highly specific, distinguishing labels that uniquely identify the container or element. Avoid generic terms like "product container", "search results", or "delete button". Instead, use names that precisely describe the element's unique role or content on this specific page, such as "iPhone 14 Pro configuration panel" or "Prime Video categories dropdown".
 
@@ -49,14 +51,18 @@ Chain of Thought Process:
    - What are the main sections or components visible, described using unique identifiers from the page?
 
 2. Examine the focus screenshot:
-   - How many highlighted elements are there?
+   - Are there any highlighted elements?
+   - If yes, how many highlighted elements are there?
    - What are their specific characteristics, avoiding generic terms and focusing on what's actually visible?
 
-3. For each highlighted element:
-   a. Describe its visual appearance and apparent functionality using specific, unique details from the page
-   b. Determine if it matches any of the provided criteria:
-      - How closely does it match each criterion?
-      - Is it a full match, partial match, or no match?
+3. For each highlighted element (or area):
+   a. If it contains an actual element:
+      - Describe its visual appearance and apparent functionality using specific, unique details from the page
+      - Determine if it matches any of the provided criteria:
+        - How closely does it match each criterion?
+        - Is it a full match, partial match, or no match?
+   b. If it doesn't contain an actual element:
+      - Use 0 for elementNumber and "n/a" for elementName, elementFunctionality, and set matchesCriteria to "no-match"
 
 4. After examining all elements:
    - Which element(s), if any, best match the criteria?
@@ -69,7 +75,8 @@ Chain of Thought Process:
    - Assign a confidence level to your assessment
 
 6. Formulate your response:
-   - Create an object for each container and its highlighted elements
+   - If there are highlighted elements, create an object for each container and its highlighted elements using the identifyElements function
+   - If there are no highlighted elements, use the noHighlightedElements function
    - Set matchesCriteria appropriately for containers and elements based on how well they match the specified criteria
    - Ensure all descriptions and names use specific, unique identifiers from the actual page content
 
@@ -95,6 +102,12 @@ identifyElements([
         elementFunctionality: "Allows users to select their preferred color for the iPhone 14 Pro, updating the product image and selected configuration accordingly",
         elementName: "iPhone 14 Pro Color Selection Swatch Row",
         matchesCriteria: "no-match"
+      },
+      {
+        elementNumber: 0,
+        elementFunctionality: "n/a",
+        elementName: "n/a",
+        matchesCriteria: "no-match"
       }
       // Include all other highlighted elements here, maintaining specificity to the page content
     ]
@@ -103,6 +116,17 @@ identifyElements([
 ])
 
 Confirmation: I have verified that all described elements are highlighted with green boxes and have corresponding ID numbers. No non-highlighted elements have been included in this analysis. All containerName and elementName descriptions are highly specific and distinguishing.
+</answer>
+
+OR, if there are no highlighted elements:
+
+<answer>
+noHighlightedElements({
+  reason: "The focus screenshot does not contain any elements highlighted with green boxes.",
+  pageDescription: "Provide a brief description of the visible content in the full page screenshot."
+})
+
+Confirmation: I have verified that there are no elements highlighted with green boxes in the focus screenshot.
 </answer>
 
 Guidelines:
@@ -116,7 +140,8 @@ Guidelines:
 8. Articulate your reasoning process as you analyze the screenshots and identify all elements and containers, using specific examples and unique identifiers from the page content.
 9. Explain any ambiguities, partial matches, or difficulties in determining matches, referring to specific features or text content visible on the page.
 10. Ensure that your response is comprehensive, covering all aspects of the task while maintaining clarity, conciseness, and specificity to the page content.
-11. Double-check that you haven't used any generic descriptors and that all descriptions relate directly to what's visible on the page before submitting your response.`;
+11. Double-check that you haven't used any generic descriptors and that all descriptions relate directly to what's visible on the page before submitting your response.
+12. If there are no highlighted elements in the focus screenshot, use the noHighlightedElements function instead of identifyElements.`;
 
 const schema = [
   {
@@ -159,21 +184,21 @@ const schema = [
                 elementNumber: {
                   type: "number",
                   description:
-                    "The number in the right corner of the highlighted element you are describing.",
+                    "The number in the right corner of the highlighted element you are describing. Use 0 if the highlighted area doesn't contain an actual element.",
                 },
                 elementFunctionality: {
                   type: "string",
                   description:
-                    "Describe the element's purpose and it's functionality as it relates to the entire page.",
+                    "Describe the element's purpose and it's functionality as it relates to the entire page. Use 'n/a' if the highlighted area doesn't contain an actual element.",
                 },
                 elementName: {
                   type: "string",
-                  description: `Provide a specific, distinguishing name or label for the element based on its visible details or functionality. Use distinguishing functionality or exact text content."`,
+                  description: `Provide a specific, distinguishing name or label for the element based on its visible details or functionality. Use distinguishing functionality or exact text content. Use 'n/a' if the highlighted area doesn't contain an actual element.`,
                 },
                 matchesCriteria: {
                   type: "string",
                   description:
-                    "Indicating whether this element matches the specified criteria (enum: full-match, partial-match, no-match).",
+                    "Indicating whether this element matches the specified criteria (enum: full-match, partial-match, no-match). Use 'no-match' if the highlighted area doesn't contain an actual element.",
                 },
               },
               required: [
@@ -196,7 +221,31 @@ const schema = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "noHighlightedElements",
+      description:
+        "Report when there are no highlighted elements in the focus screenshot",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: {
+            type: "string",
+            description: "Explanation for why no elements were identified",
+          },
+          pageDescription: {
+            type: "string",
+            description:
+              "Brief description of the visible content in the full page screenshot",
+          },
+        },
+        required: ["reason", "pageDescription"],
+      },
+    },
+  },
 ];
+
 export default function ElementIdentifier() {
   this.use({
     provider: "openai",
@@ -204,16 +253,22 @@ export default function ElementIdentifier() {
     sdk: openai,
     schema,
     prompt,
-    exitConditions: { errors: 1, functionCall: "identifyElements" },
+    exitConditions: {
+      errors: 1,
+      functionCall: ["identifyElements", "noHighlightedElements"],
+    },
     temperature: 0,
   });
 
   this.identifyElements = async function (results, { state }) {
-    // state.identifiedElements.push(...identifiedElements);
     return results;
   };
+
+  this.noHighlightedElements = async function (results, { state }) {
+    return { matchesCriteria: "no-match", identifiedElements: [] };
+  };
+
   this.before("$invoke", function ({ state }, next) {
-    // state.identifiedElements = [];
     next();
   });
 }

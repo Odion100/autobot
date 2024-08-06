@@ -9,7 +9,12 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const vectorStore = new ChromaClient();
 
-export async function findElements(targetElements = [], queryTexts = [], nResults = 3) {
+export async function findElements(
+  targetElements = [],
+  queryTexts = [],
+  where,
+  nResults = 3
+) {
   // const targetElements = [];
   // for (const container of containers) {
   //   targetElements.push(...parseHtml(container, filter));
@@ -49,8 +54,9 @@ export async function findElements(targetElements = [], queryTexts = [], nResult
   //console.log("embeddingData", embeddingData);
 
   await collection.add(embeddingData);
-  const results = await collection.query({ queryTexts, nResults });
-  console.log("results12", results, results.metadatas[0], queryTexts);
+  const results = await collection.query({ queryTexts, nResults, where });
+  // console.log("results12", results, queryTexts, where);
+  // console.log("results12", results, results.metadatas[0], queryTexts);
   return {
     results: results.metadatas[0],
     distances: results.distances[0],
@@ -60,8 +66,8 @@ export async function findElements(targetElements = [], queryTexts = [], nResult
 export async function findContainers(
   containers = [],
   queryTexts = [],
-  nResults = 3,
-  filter
+  where,
+  nResults = 3
 ) {
   const targetElements = containers.reduce(
     (acc, { selector, html, containerNumber, innerText }) => {
@@ -70,7 +76,7 @@ export async function findContainers(
     },
     []
   );
-  console.log("findContainers", targetElements);
+  // console.log("findContainers", targetElements);
   if (!targetElements.length) return { results: [], distances: [] };
   const embeddingData = targetElements.reduce(
     (sum, { selector, innerText, containerNumber, html }, i) => {
@@ -101,8 +107,8 @@ export async function findContainers(
   //console.log("embeddingData", embeddingData);
 
   await collection.add(embeddingData);
-  const results = await collection.query({ queryTexts, nResults });
-  console.log("results1", results, results.metadatas[0], queryTexts);
+  const results = await collection.query({ queryTexts, nResults, where });
+  // console.log("results1", results, results.metadatas[0], queryTexts);
   return {
     results: results.metadatas[0],
     distances: results.distances[0],

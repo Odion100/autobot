@@ -69,17 +69,15 @@ function browserController() {
     return `You have navigated to ${page.url()}`;
   }
 
-  const clickable =
-    'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
-
-  const typeable = "input, textarea";
-  const both = clickable + ", " + typeable;
-  const elementType = { clickable, typeable, both };
-
-  async function findContainers(searchText) {
+  async function findContainers(searchText, where) {
     const viewportContainers = await page.evaluate(getViewport, browserState.containers);
-    console.log("viewportContainers <----", viewportContainers);
-    return await htmlVectorSearch.findContainers(viewportContainers, searchText, 5);
+    // console.log("viewportContainers <----", viewportContainers);
+    return await htmlVectorSearch.findContainers(
+      browserState.containers,
+      searchText,
+      where,
+      5
+    );
   }
   function addContainer(selector) {
     const existingContainer = browserState.containers.find(
@@ -87,7 +85,7 @@ function browserController() {
     );
     if (existingContainer) return existingContainer;
     const container = {
-      containerNumber: browserState.containers.length,
+      containerNumber: browserState.containers.length + 1,
       html: "",
       innerText: "",
       selector,
@@ -119,7 +117,13 @@ function browserController() {
       });
     }, identifiers);
   }
-  async function searchPage(searchText, targetContainers, cssFilter = both) {
+  const clickable =
+    'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
+
+  const typeable = "input, textarea";
+  const both = clickable + ", " + typeable;
+  const elementType = { clickable, typeable, both };
+  async function searchPage(searchText, targetContainers, where) {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
@@ -129,15 +133,15 @@ function browserController() {
       ? targetContainers
       : getContainers(targetContainers);
     console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
-    console.log("cssFilter:", cssFilter);
     const interActiveElements = await page.evaluate(
       getInteractiveElements,
       viewportContainers,
-      cssFilter
+      both
     );
     const { results } = await htmlVectorSearch.findElements(
       interActiveElements,
       searchText,
+      where,
       6
     );
     if (!results.length) return [];

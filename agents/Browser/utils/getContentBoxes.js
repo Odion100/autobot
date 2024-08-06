@@ -18,14 +18,14 @@ export default function getContentBoxes(chunkSize, elementLimit) {
     "svg",
   ];
   const isValidCSSSelector = (str) => /^[a-zA-Z0-9\-_#\.\[\]=\(\):\s>+~]*$/.test(str);
-  // const isValidCSSSelector = (str) =>
-  //   /^[a-zA-Z0-9 \>+~:.\[\]=\(\)#\-\*\^$\|]*$/.test(str);
+
   function isUnderScreenSize(element) {
     const elementRect = element.getBoundingClientRect();
     const screenWidth = window.innerWidth;
     const screenHeight = window.innerHeight;
     return elementRect.width <= screenWidth && elementRect.height <= screenHeight;
   }
+
   const cssPath = function (el) {
     var path = [];
     while (el.nodeType === Node.ELEMENT_NODE) {
@@ -47,6 +47,7 @@ export default function getContentBoxes(chunkSize, elementLimit) {
     }
     return path.join(" > ");
   };
+
   function getRelevantText(element) {
     let texts = "";
     const childrenWithAttributes = element.querySelectorAll(
@@ -61,6 +62,21 @@ export default function getContentBoxes(chunkSize, elementLimit) {
     });
     return texts;
   }
+  function isVisible(element) {
+    const { width: w, height: h } = element.getBoundingClientRect();
+    const width = parseFloat(w);
+    const height = parseFloat(h);
+    const style = window.getComputedStyle(element);
+    console.log("width, height ,style", width, height, style);
+    return !(
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      element.offsetParent === null ||
+      !width ||
+      !height
+    );
+  }
+
   let containerNumber = 0;
   async function extractContent(parent) {
     let innerText = parent.innerText.replace(/\s+/g, " ").trim();
@@ -69,7 +85,11 @@ export default function getContentBoxes(chunkSize, elementLimit) {
     );
     console.log("potential container", innerText.length, interActiveElements.length);
     console.log(parent);
+
+    const visible = isVisible(parent);
+
     if (
+      visible &&
       interActiveElements.length &&
       (innerText.length <= chunkSize || interActiveElements.length <= 250)
     ) {

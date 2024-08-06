@@ -34,7 +34,7 @@ function cacheSelectors(identifiers) {
     ({ positionRefresh }) => positionRefresh === "static"
   );
   if (staticIdentifiers.length) {
-    driver.cacheSelectors(identifiers);
+    driver.cacheSelectors(staticIdentifiers);
   }
 }
 async function searchDescription2(
@@ -54,13 +54,14 @@ async function searchDescription2(
       .map(({ elementNumber }) => elementNumber)
       .join(", ");
     const message = `Please identify the highlighted elements of the following number(s): ${elementNumbers}. If you do not see a highlighted element matching a given number, please skip it or provide elementNumber = 0 in your response.`;
-    const description = await ElementIdentifier.invoke({
+    const identifiedContainer = await ElementIdentifier.invoke({
       message,
       images: [fullScreenshot, containerImage],
       ...args,
     });
-    console.log("describeElement2", containerImage, description);
-    return description;
+    identifiedContainer.containerNumber = containerNumber;
+    console.log("describeElement2", containerImage, identifiedContainer);
+    return identifiedContainer;
     // elementDescriptions.push(...descriptions);
   }
   const identifiedContainers = await Promise.all(
@@ -72,24 +73,47 @@ async function searchDescription2(
   let fullMatch;
 
   const elementDescriptions = [];
+  const fullMatchContainers = [];
+  const partialMatchContainers = [];
+
   for (const identifiedContainer of identifiedContainers) {
+    if (identifiedContainer.matchesCriteria === "full-match")
+      fullMatchContainers.push({
+        ...driver.getContainer(identifiedContainer.containerNumber),
+        matchesCriteria: "full-match",
+      });
+    if (identifiedContainer.matchesCriteria === "partial-match")
+      partialMatchContainers.push({
+        ...driver.getContainer(identifiedContainer.containerNumber),
+        matchesCriteria: "partial-match",
+      });
+
     for (const identifier of identifiedContainer.identifiedElements) {
-      const { selector, container, type } =
+      const identifiedElement =
         targetElements.find(({ number }) => number === identifier.elementNumber) || {};
 
-      if (selector) {
-        identifier.selector = selector;
-        identifier.container = container;
-        identifier.type = type;
+      if (identifiedElement) {
+        identifier.selector = identifiedElement.selector;
+        identifier.container = identifiedElement.container;
+        identifier.type = identifiedElement.type;
         identifier.containerName = identifiedContainer.containerName;
         identifier.containerFunctionality = identifiedContainer.containerFunctionality;
         identifier.positionRefresh = identifiedContainer.positionRefresh;
         identifier.usage = 0;
         elementDescriptions.push(identifier);
-        if (identifier.matchesCriteria === "full-match") fullMatch = identifier;
+        if (identifier.matchesCriteria === "full-match" && identifier.type === type)
+          fullMatch = identifier;
       }
     }
   }
+  args.searchedContainers = args.targetContainers;
+  args.searchedElements = elementDescriptions.filter(
+    ({ matchesCriteria }) => matchesCriteria === "no-match"
+  );
+  args.targetContainers = fullMatchContainers.length
+    ? fullMatchContainers
+    : partialMatchContainers;
+
   cacheSelectors(elementDescriptions);
 
   if (fullMatch) return { results: [fullMatch], distances: [0.2] };
@@ -165,24 +189,38 @@ async function compareContainers(containers, { args, agents, state }) {
   driver.clearSelection();
   return filteredContainers;
 }
-async function searchPage(mwData, next) {
+async function searchPage(mwData, next, exit) {
   const { args, state, fn } = mwData;
   const { innerText, elementName } = args;
+  const type = fn === "type" ? "typeable" : "clickable";
   if (state.navigationStarted) return next();
   if (args.selectedElement) return next();
+  let filter;
+  if (args.searchedElements) {
+    filter = {
+      $and: [
+        {
+          selector: { $nin: args.searchedElements.map(({ selector }) => selector) },
+        },
+        { type },
+      ],
+    };
+  } else if (!innerText) {
+    if (!filter) filter = { type };
+  }
 
   const identifiedElements = await driver.searchPage(
     `${elementName}, ${innerText}`,
-    args.targetContainers
+    args.targetContainers,
+    filter
   );
   if (identifiedElements.length) {
     await driver.hideContainers();
     const fullScreenshot = await driver.getScreenShot();
-    const elementType = fn === "type" ? "typeable" : "clickable";
     const { results, distances } = await searchDescription2(
       identifiedElements,
       fullScreenshot,
-      elementType,
+      type,
       mwData
     );
     await driver.hideContainers();
@@ -196,21 +234,34 @@ async function searchPage(mwData, next) {
       }
     }
   }
+  console.log("args.targetContainers", args.targetContainers, exit);
+
+  if (!exit && args.targetContainers.length) return searchPage(mwData, next, true);
   next();
 }
-async function selectContainers(mwData, next) {
-  const { args } = mwData;
-  const { innerText, containerText, containerName } = args;
-  if (containerName) {
-    const identifiers = await driver.getSelectors({ containerName });
-    if (identifiers.length) {
-      args.targetContainers = [driver.addContainer(identifiers[0].container)];
-    }
-  }
 
+async function selectContainers(mwData, next) {
+  const { args, agents } = mwData;
+  if (args.selectedElement) return next();
+  const { innerText, containerText } = args;
+
+  if (!containerText) {
+    const { searchTerm, notFound } = agents.RefineSearch.invoke(
+      {
+        message:
+          "Please provide search terms for the target element based on the previous screenshot",
+      },
+      { messages: [...state.messages] }
+    );
+    if (searchTerm) Object.assign(args, searchTerm);
+  }
   if (!args.targetContainers && containerText) {
+    const filter = args.searchedContainers
+      ? { selector: { $nin: args.searchedContainers.map(({ selector }) => selector) } }
+      : undefined;
     const { results, distances } = await driver.findContainers(
-      `${containerText}, ${innerText}`
+      `${containerText}, ${innerText}`,
+      filter
     );
     if (distances[0] <= 0.3 && distances[1] > 0.3) {
       args.targetContainers = [results[0]];
@@ -218,11 +269,13 @@ async function selectContainers(mwData, next) {
       args.targetContainers = results.filter(
         (item, index) => distances[index] <= distances[0] + 0.05
       );
-      if (args.targetContainers.length > 1)
-        args.targetContainers = await compareContainers(args.targetContainers, mwData);
+      if (args.targetContainers.length > 1) {
+        const r = await compareContainers(args.targetContainers, mwData);
+        if (r.length) args.targetContainers = [driver.addContainer(r[0].container)];
+      }
 
       if (!args.targetContainers.length || args.targetContainers.length > 1) {
-        args.targetContainers = [results[0]];
+        args.targetContainers = [driver.addContainer(results[0].container)];
       }
       await driver.scrollIntoView(args.targetContainers[0].selector);
     } else {
@@ -240,7 +293,15 @@ async function checkMemory(mwData, next) {
       const selectedElement = await evaluateSelection(identifiers, [0.2], mwData);
       if (selectedElement) {
         args.selectedElement = selectedElement;
+        return next();
       }
+    }
+  }
+  const { containerName } = args;
+  if (containerName) {
+    const identifiers = await driver.getSelectors({ containerName });
+    if (identifiers.length) {
+      args.targetContainers = [driver.addContainer(identifiers[0].container)];
     }
   }
   next();
@@ -350,42 +411,62 @@ async function domainMemory(state) {
       },
       []
     );
-    let domainMemory = "";
-    let c = 0,
-      e = 0;
+    let xmlContent = '<?xml version="1.0" encoding="UTF-8"?>\n<domain-memory>\n';
+    xmlContent +=
+      "  <description>Following is a list of parameters for containers and elements you've previously identified on this page.</description>\n";
     console.log("containers domainMemory", containers);
-    for (const container of containers) {
-      c++;
+    for (const [index, container] of containers.entries()) {
       const { containerName, containerFunctionality } = container;
-      domainMemory += `## Container ${c}
-containerName = ${containerName}, 
-containerFunctionality = ${containerFunctionality}
-The following elements are apart of the above container:
-      `;
-      e = 0;
+      xmlContent += `  <container id="${index + 1}">\n`;
+      xmlContent += `    <containerName>${escapeXml(containerName)}</containerName>\n`;
+      xmlContent += `    <containerFunctionality>${escapeXml(
+        containerFunctionality
+      )}</containerFunctionality>\n`;
+      xmlContent += "    <elements>\n";
       for (const identifier of filteredIdentifiers) {
         if (identifier.containerName === containerName) {
-          e++;
           const { elementName, elementFunctionality, id } = identifier;
-          domainMemory += `
-- **Element ${e}:**          
-elementName = ${elementName},
-elementFunctionality =  ${elementFunctionality},
-domainMemoryId = ${id}
-`;
+          xmlContent += "      <element>\n";
+          xmlContent += `        <elementName>${escapeXml(elementName)}</elementName>\n`;
+          xmlContent += `        <elementFunctionality>${escapeXml(
+            elementFunctionality
+          )}</elementFunctionality>\n`;
+          xmlContent += `        <domainMemoryId>${escapeXml(id)}</domainMemoryId>\n`;
+          xmlContent += "      </element>\n";
         }
       }
+      xmlContent += "    </elements>\n";
+      xmlContent += "  </container>\n";
     }
-    return `
-#Domain Memory
-Following is a list of parameters for containers and elements you've previously identified on this page. 
-${domainMemory}
-Use these saved identifiers to help select elements from memory when applicable to you current task.  
-IMPORTANT: Remember to use the domainMemoryId when calling type and click functions using domain memory.
-    `;
+    xmlContent += "  <instructions>\n";
+    xmlContent +=
+      "    <instruction>Use these saved identifiers to help select elements from memory when applicable to your current task.</instruction>\n";
+    xmlContent +=
+      "    <instruction>IMPORTANT: Remember to use the domainMemoryId when calling type and click functions using domain memory.</instruction>\n";
+    xmlContent += "  </instructions>\n";
+    xmlContent += "</domain-memory>";
+    return xmlContent;
   }
   console.log("state.domainMemory", state.domainMemory);
   return "";
+}
+
+// Helper function to escape special characters for XML
+function escapeXml(unsafe) {
+  return unsafe.replace(/[<>&'"]/g, function (c) {
+    switch (c) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case "'":
+        return "&apos;";
+      case '"':
+        return "&quot;";
+    }
+  });
 }
 export default function BrowserController() {
   this.use({
@@ -400,31 +481,59 @@ export default function BrowserController() {
       // iterations: 2,
       state: (state) => state.abort,
     },
-    agents: ["ElementIdentifier", "VisualConfirmation", "ElementLocator"],
+    agents: ["ElementIdentifier", "VisualConfirmation", "ElementLocator", "RefineSearch"],
   });
   const executionReminder = `
-As you continue, follow these steps:
-
-1. **Confirm Action**
-  - Verify if the intended outcome or that correct element was interacted with.
-
-2. **Plan Next Task**
-  - Analyze the overall objective and determine the next logical step.
-
-3. **Locate Target Element**
-  - Carefully examine the current screenshot for the next element to interact with.
-  - Describe what you can see.
-  - If the target element is not visible, scroll up or down to find it.
-  - Use scroll functions to move to the desired area.
-
-4. **Element Selection**
-  - Collect specific, unique text and distinguishing information about the target element from the screenshot.
-  - Gather all container text to ensure the correct element and the correct container is selected.
-  - Use this detailed information to construct precise arguments for click and type functions.
-
-IMPORTANT REMINDER:
-- Use the promptUser function if you need more context or if you have finished all tasks.
-- SCROLL TO FIND THE ITEM YOU WANT TO click or type into if it's not in the current screenshot.
+  <?xml version="1.0" encoding="UTF-8"?>
+  <execution-reminder>
+    <introduction>As you continue, answer the following questions:</introduction>
+    
+    <question-set>
+      <category>
+        <name>Confirm Action</name>
+        <questions>
+          <question>Was the intended outcome achieved?</question>
+          <question>Did I interact with the correct element?</question>
+          <question>What visual or textual evidence confirms this?</question>
+        </questions>
+      </category>
+      
+      <category>
+        <name>Plan Next Task</name>
+        <questions>
+          <question>Given the current state, what is the next logical step?</question>
+        </questions>
+      </category>
+      
+      <category>
+        <name>Locate Target Element</name>
+        <questions>
+          <question>Is the target element visible in the current screenshot?</question>
+          <sub-questions>
+            <question>If not visible:</question>
+            <bullet-points>
+              <point>Should I scroll to find the element?</point>
+              <point>Is the element in the Domain memory?</point>
+            </bullet-points>
+          </sub-questions>
+        </questions>
+      </category>
+    </question-set>
+    
+    <element-selection-process>
+      <title>Element Selection Process</title>
+      <steps>
+        <step>Collect specific, unique text and distinguishing information about the target element from the screenshot.</step>
+        <step>Gather all container text to ensure the correct element and the correct container is selected.</step>
+        <step>Use this detailed information to construct precise arguments for click and type functions.</step>
+      </steps>
+    </element-selection-process>
+    
+    <important-reminders>
+      <reminder>Use the promptUser function if you need more context or if you have finished all tasks.</reminder>
+      <reminder>SCROLL TO FIND THE ITEM YOU WANT TO click or type into if it's not in the current screenshot.</reminder>
+    </important-reminders>
+  </execution-reminder>
   `;
   this.navigate = async function ({ url }, { state, agents }) {
     const results = await driver.navigate(url);
@@ -449,6 +558,7 @@ IMPORTANT REMINDER:
         } else {
           identifier.usage = 1;
         }
+        driver.clearSelection();
         driver.saveSelectors(identifier);
       }
       state.screenshot = await driver.getScreenShot();
@@ -476,6 +586,7 @@ IMPORTANT REMINDER:
           } else {
             identifier.usage = 1;
           }
+          driver.clearSelection();
           driver.saveSelectors(identifier);
         }
         await wait(1000);
@@ -535,7 +646,7 @@ IMPORTANT REMINDER:
   async function getElementLocations(mwData, next) {
     const {
       state,
-      agents: { ElementLocator },
+      agents: { ElementLocator, RefineSearch },
       args,
     } = mwData;
     console.log("getElementLocations-->", args.selectedElement);
@@ -560,13 +671,41 @@ IMPORTANT REMINDER:
         console.log("sectionNumber, reasoning", sectionNumber, reasoning);
         if (!sectionNumber) {
           args.searchHelpMessage = reasoning;
-        } else if (Math.abs(sectionNumber - currentSection) < 0.6) {
-          args.searchHelpMessage = `We have scrolled to section ${sectionNumber}. The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
-          await driver.goToSection(sectionNumber);
+        } else if (Math.round(sectionNumber) === Math.round(currentSection)) {
+          const { searchTerm, notFound } = await RefineSearch.invoke(
+            {
+              message:
+                "Please provide search terms for the target element based on the previous screenshot",
+            },
+            { messages: [...state.messages] }
+          );
+          if (searchTerm) {
+            Object.assign(args, searchTerm);
+            return searchPage(mwData, next);
+          } else {
+            args.searchHelpMessage = `The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
+            await driver.goToSection(sectionNumber);
+          }
         } else {
-          args.searchHelpMessage = `We have scrolled to section ${sectionNumber}. The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
           await driver.goToSection(sectionNumber);
-          return searchPage(mwData, next);
+          await driver.showContainers();
+          const image = await driver.getScreenShot();
+          const { searchTerm, notFound } = await RefineSearch.invoke(
+            {
+              image,
+              message:
+                "Please provide search terms for the target element based on the screenshot",
+              ...args,
+            },
+            { messages: [...state.messages] }
+          );
+          if (searchTerm) {
+            Object.assign(args, searchTerm);
+            return searchPage(mwData, next);
+          } else {
+            args.searchHelpMessage = `We have scrolled to section ${sectionNumber}. The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
+            await driver.goToSection(sectionNumber);
+          }
         }
       }
     }
@@ -600,16 +739,16 @@ IMPORTANT REMINDER:
     checkMemory,
     checkCache,
     selectContainers,
-    searchPage,
-    getElementLocations
+    searchPage
+    // getElementLocations
   );
   this.before(
     "click",
     checkMemory,
     checkCache,
     selectContainers,
-    searchPage,
-    getElementLocations
+    searchPage
+    // getElementLocations
   );
 
   //this.before("$invoke", insertScreenshot);
@@ -653,12 +792,20 @@ IMPORTANT REMINDER:
   });
 }
 
-// I need a function to properly insert and remove containers
-// - I discovered this when trying to select a container from memory
-// - filter out duplicates from memory
+//Recursive Page search
+//When a page search process fails we should attempt to recover and complete the search.
 
-//fix highlight bounding boxes
+//1. In getDescriptions: check for a full match container and add it to the args
+//- replace target containers with all full match containers (ideally there would only be one)
+//2. Also save the previous search results to the args state: searchedContainers, searchedElements
 
-//Refine ElementIdentifier
-//- When the search input was highlighted but the button was not, it decided that the bonding box belonged to the button
-//- so we need to make sure to reinforce the boundaries of the highlighted element somehow
+// In getElementLocation
+//3. If a full match container has been set then search it again while filtering out the previous search results
+// if a full match container hasn't been set:
+//1. Confirm that the target element is or is not in the screen shot
+//2. If not use ElementLocator to move to the elements location
+// - experiment between get element location and just give the ai instruction to scroll
+//3. Use a new agent to get as much container test from the the target container
+//4. redo a page search and container search which will now be filtering out previous searches
+
+//5. The filtering can happen in the searchPage and in getTargetContainers middleware

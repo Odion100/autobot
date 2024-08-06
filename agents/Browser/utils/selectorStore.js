@@ -15,7 +15,17 @@ function reformatData(identifiers) {
       identifier.id = id;
       sum.documents.push(doc ? doc : `${elementName}: ${elementFunctionality}`);
       sum.ids.push(identifier.id);
-      sum.metadatas.push(identifier);
+      sum.metadatas.push({
+        id,
+        elementName: identifier.elementName,
+        elementFunctionality: identifier.elementFunctionality,
+        containerName: identifier.containerName,
+        containerFunctionality: identifier.containerFunctionality,
+        container: identifier.container,
+        selector: identifier.selector,
+        type: identifier.type,
+        usage: identifier.usage,
+      });
       return sum;
     },
     {
@@ -61,7 +71,7 @@ export async function search(domain, description, nResults = 5, where) {
   console.log("search", domain, description, nResults, where);
   if (collection) {
     const results = await collection.query({ queryTexts: description, nResults, where });
-    console.log("search results", results);
+    // console.log("search results", results);
     return {
       results: results.metadatas[0],
       distances: results.distances[0],
@@ -103,7 +113,7 @@ export async function quickSearch(identifiers, queryTexts, where, nResults) {
     if (results.error) {
       console.log("results.error", results.error, results.error.body);
     }
-    console.log("quickSearch results", name, queryTexts, results, results.metadatas);
+    // console.log("quickSearch results", name, queryTexts, results, results.metadatas);
     clear(name);
     return {
       results: results.metadatas[0],
@@ -150,7 +160,7 @@ export async function directSearch(docs, queryTexts) {
     if (results.error) {
       console.log("results.error", results.error, results.error.body);
     }
-    console.log("quickSearch results", name, queryTexts, results, results.metadatas);
+    // console.log("quickSearch results", name, queryTexts, results, results.metadatas);
     clear(name);
 
     return {
