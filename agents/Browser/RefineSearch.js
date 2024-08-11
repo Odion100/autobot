@@ -43,7 +43,7 @@ Use this process:
     containerFunctionality: "More detailed container functionality",
     elementName: "More specific element name",
     elementFunctionality: "More detailed element functionality",
-    containerText: "ALL visible text from the container | separated by pipes | include everything",
+    containerText: "ALL visible text from the container. include everything within the red-bordered container of the target element",
     refinementConfidence: 5 // On a scale of 1-5, where 5 is most confident
   })
   
@@ -57,6 +57,7 @@ Use this process:
     - For ALL containerName and elementName values, use highly specific, distinguishing labels that uniquely identify the container or element based solely on what is visible within the red-bordered container in the screenshot. 
     - Do not use generic terms or make assumptions about the content. 
     - Use names that precisely describe the element's unique role or content on this specific page, such as "Apple iPhone 14 Pro Max 256GB Deep Purple configuration panel" or "Thriller by Michael Jackson - Vinyl Record Product Details".
+    - DO NOT USE GENERIC NAMES LIKE FIRST AND SECOND SECOND [ITEM]. USES NAMES SPECIFIC TO THE ITEM ON THE PAGE.
     - Remember that containers are visually distinct areas surrounded by red borders. Only consider content within these red borders when describing or referencing a container.
   
   Before submitting, verify that:

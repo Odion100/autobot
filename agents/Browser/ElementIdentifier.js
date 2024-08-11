@@ -15,12 +15,12 @@ Your task has two parts:
 A. Identify and describe all highlighted elements.
 B. Determine which highlighted element(s), if any, best match the following search criteria:
 
-- Container Name: ${input.containerName}
-- Container Functionality: ${input.containerFunctionality}
-- Container Text: ${input.containerText}
-- Element Name: ${input.elementName}
-- Element Functionality: ${input.elementFunctionality}
-- Inner Text: ${input.innerText}
+- Container Name: ${input.containerName || "n/a"}
+- Container Functionality: ${input.containerFunctionality || "n/a"}
+- Container Text: ${input.containerText || "n/a"}
+- Element Name: ${input.elementName || "n/a"}
+- Element Functionality: ${input.elementFunctionality || "n/a"}
+- Inner Text: ${input.innerText || "n/a"}
 
 IMPORTANT: Only elements highlighted with green boxes and numbered should be considered as potential matches. Do not include or describe adjacent non-highlighted elements, even if they seem relevant to the search criteria.
 
@@ -184,7 +184,7 @@ const schema = [
                 elementNumber: {
                   type: "number",
                   description:
-                    "The number in the right corner of the highlighted element you are describing. Use 0 if the highlighted area doesn't contain an actual element.",
+                    "The number in the upper right corner of the highlighted element you are describing. Use 0 if the highlighted area doesn't contain an actual element.",
                 },
                 elementFunctionality: {
                   type: "string",

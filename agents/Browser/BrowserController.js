@@ -6,29 +6,14 @@ import dotenv from "dotenv";
 import { insertScreenshot } from "./middleware.js";
 import selectorStore from "./utils/selectorStore.js";
 import uniqueId from "./utils/uniqueId.js";
+import getElementDescriptions from "./utils/getElementDescriptions.js";
+import getScreenshots from "./utils/getScreenshots.js";
 const wait = (timeout = 0) =>
   new Promise((resolve) => setTimeout(() => resolve(new Date()), timeout));
 
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function getScreenShots(identifiedElements, containerOnly) {
-  const uniqueContainers = [];
-  const screenshots = [];
-  for (const { containerNumber } of identifiedElements) {
-    if (!uniqueContainers.includes(containerNumber)) {
-      uniqueContainers.push(containerNumber);
-      await driver.hideContainers();
-      await driver.showContainers(containerNumber);
-      screenshots.push({
-        containerNumber,
-        screenshot: await driver.captureContainer(containerNumber, containerOnly),
-      });
-    }
-  }
-  //await driver.hideContainers();
-  return screenshots;
-}
 function cacheSelectors(identifiers) {
   const staticIdentifiers = identifiers.filter(
     ({ positionRefresh }) => positionRefresh === "static"
@@ -43,76 +28,13 @@ async function searchDescription2(
   type,
   { args, agents }
 ) {
-  const { ElementIdentifier } = agents;
-  console.log("fullScreenshot", fullScreenshot);
-  const screenshots = await getScreenShots(targetElements);
-
-  console.log("screenshots -->1111", screenshots);
-  async function describeElements(containerImage, containerNumber) {
-    const elementNumbers = targetElements
-      .filter((item) => item.containerNumber === containerNumber)
-      .map(({ elementNumber }) => elementNumber)
-      .join(", ");
-    const message = `Please identify the highlighted elements of the following number(s): ${elementNumbers}. If you do not see a highlighted element matching a given number, please skip it or provide elementNumber = 0 in your response.`;
-    const identifiedContainer = await ElementIdentifier.invoke({
-      message,
-      images: [fullScreenshot, containerImage],
-      ...args,
-    });
-    identifiedContainer.containerNumber = containerNumber;
-    console.log("describeElement2", containerImage, identifiedContainer);
-    return identifiedContainer;
-    // elementDescriptions.push(...descriptions);
-  }
-  const identifiedContainers = await Promise.all(
-    screenshots.map(({ screenshot, containerNumber }) =>
-      describeElements(screenshot, containerNumber)
-    )
-  );
-  console.log("identifiedContainers", identifiedContainers);
-  let fullMatch;
-
-  const elementDescriptions = [];
-  const fullMatchContainers = [];
-  const partialMatchContainers = [];
-
-  for (const identifiedContainer of identifiedContainers) {
-    if (identifiedContainer.matchesCriteria === "full-match")
-      fullMatchContainers.push({
-        ...driver.getContainer(identifiedContainer.containerNumber),
-        matchesCriteria: "full-match",
-      });
-    if (identifiedContainer.matchesCriteria === "partial-match")
-      partialMatchContainers.push({
-        ...driver.getContainer(identifiedContainer.containerNumber),
-        matchesCriteria: "partial-match",
-      });
-
-    for (const identifier of identifiedContainer.identifiedElements) {
-      const identifiedElement =
-        targetElements.find(({ number }) => number === identifier.elementNumber) || {};
-
-      if (identifiedElement) {
-        identifier.selector = identifiedElement.selector;
-        identifier.container = identifiedElement.container;
-        identifier.type = identifiedElement.type;
-        identifier.containerName = identifiedContainer.containerName;
-        identifier.containerFunctionality = identifiedContainer.containerFunctionality;
-        identifier.positionRefresh = identifiedContainer.positionRefresh;
-        identifier.usage = 0;
-        elementDescriptions.push(identifier);
-        if (identifier.matchesCriteria === "full-match" && identifier.type === type)
-          fullMatch = identifier;
-      }
-    }
-  }
+  const { elementDescriptions, fullMatchContainers, partialMatchContainers, fullMatch } =
+    await getElementDescriptions({ targetElements, fullScreenshot, args, type });
   args.searchedContainers = args.targetContainers;
   args.searchedElements = elementDescriptions.filter(
     ({ matchesCriteria }) => matchesCriteria === "no-match"
   );
-  args.targetContainers = fullMatchContainers.length
-    ? fullMatchContainers
-    : partialMatchContainers;
+  args.fullMatchContainers = fullMatchContainers.length ? fullMatchContainers : null;
 
   cacheSelectors(elementDescriptions);
 
@@ -144,7 +66,7 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents, stat
       if (element) {
         const image = identifier.container
           ? await driver.captureElement(identifier.container)
-          : await driver.getScreenShot();
+          : await driver.getScreenshot();
         const elementMatched = await VisualConfirmation.invoke({
           message: `Is the correct element selected (surrounded by a green box) in the screenshot?`,
           image,
@@ -165,29 +87,38 @@ async function evaluateSelection(newIdentifiers, distances, { args, agents, stat
 // Plan off of full page
 // scroll to any position
 async function compareContainers(containers, { args, agents, state }) {
-  const { VisualConfirmation } = agents;
-  const fullScreenshot = await driver.getScreenShot();
-  await Promise.all(containers.map((identifier) => driver.selectContainer(identifier)));
-  const screenshots = await getScreenShots(containers, true);
-  const filteredContainers = [];
-  console.log("screenshots -->2222", screenshots, fullScreenshot);
-  async function getConfirmation(containerImage, container) {
-    const isCorrectContainer = await VisualConfirmation.invoke({
-      message: `Is the selected container in this image the ${args.containerName}, ${args.containerFunctionality}. Please carefully analyze the container text and description to see if it matches.`,
-      images: [fullScreenshot, containerImage],
-      ...args,
-    });
-    console.log("getConfirmation", containerImage, isCorrectContainer);
-    if (isCorrectContainer) filteredContainers.push(container);
+  const { ContainerIdentifier } = agents;
+  await driver.hideContainers();
+  await driver.addLabels(containers);
+  const image = await driver.getScreenshot();
+  const containerNumbers = containers
+    .map(({ containerNumber }) => containerNumber)
+    .join(", ");
+
+  const message = `Please identify the highlighted containers of the following number(s): ${containerNumbers}.`;
+  const results = await ContainerIdentifier.invoke({ message, image, ...args });
+  const identifiedContainers = [];
+  for (const item of results) {
+    const identifiedContainer = containers.find(
+      ({ containerNumber }) => containerNumber === item.containerNumber
+    );
+    if (identifiedContainer)
+      identifiedContainers.push({
+        ...item,
+        ...identifiedContainer,
+      });
   }
-  await Promise.all(
-    screenshots.map(({ screenshot }, index) =>
-      getConfirmation(screenshot, containers[index])
-    )
+  driver.clearLabels();
+  const fullMatch = identifiedContainers.filter(
+    ({ matchesCriteria }) => matchesCriteria === "full-match"
   );
-  console.log("filteredContainers -->2222", filteredContainers);
-  driver.clearSelection();
-  return filteredContainers;
+  console.log("compare containers identifiedContainers", identifiedContainers);
+  console.log("compare containers fullMatch", fullMatch);
+  return fullMatch.length
+    ? fullMatch
+    : identifiedContainers.filter(
+        ({ matchesCriteria }) => matchesCriteria !== "no-match"
+      );
 }
 async function searchPage(mwData, next, exit) {
   const { args, state, fn } = mwData;
@@ -216,7 +147,7 @@ async function searchPage(mwData, next, exit) {
   );
   if (identifiedElements.length) {
     await driver.hideContainers();
-    const fullScreenshot = await driver.getScreenShot();
+    const fullScreenshot = await driver.getScreenshot();
     const { results, distances } = await searchDescription2(
       identifiedElements,
       fullScreenshot,
@@ -236,52 +167,48 @@ async function searchPage(mwData, next, exit) {
   }
   console.log("args.targetContainers", args.targetContainers, exit);
 
-  if (!exit && args.targetContainers.length) return searchPage(mwData, next, true);
+  if (!exit) {
+    args.targetContainers = args.fullMatchContainers;
+    return searchPage(mwData, next, true);
+  }
   next();
 }
-
 async function selectContainers(mwData, next) {
-  const { args, agents } = mwData;
+  const { args, agents, state } = mwData;
   if (args.selectedElement) return next();
-  const { innerText, containerText } = args;
 
-  if (!containerText) {
-    const { searchTerm, notFound } = agents.RefineSearch.invoke(
+  if (!args.containerText) {
+    const { searchTerm, notFound } = await agents.RefineSearch.invoke(
       {
         message:
-          "Please provide search terms for the target element based on the previous screenshot",
+          "Please provide more containerText search terms for the target element based on the previous screenshot",
       },
       { messages: [...state.messages] }
     );
     if (searchTerm) Object.assign(args, searchTerm);
   }
-  if (!args.targetContainers && containerText) {
+  if (!args.targetContainers && args.containerText) {
     const filter = args.searchedContainers
       ? { selector: { $nin: args.searchedContainers.map(({ selector }) => selector) } }
       : undefined;
     const { results, distances } = await driver.findContainers(
-      `${containerText}, ${innerText}`,
+      `${args.containerText}, ${args.innerText}`,
       filter
     );
-    if (distances[0] <= 0.3 && distances[1] > 0.3) {
-      args.targetContainers = [results[0]];
-    } else if (distances[0] <= 0.35) {
+    if (distances[0] <= 0.35) {
       args.targetContainers = results.filter(
         (item, index) => distances[index] <= distances[0] + 0.05
       );
       if (args.targetContainers.length > 1) {
-        const r = await compareContainers(args.targetContainers, mwData);
-        if (r.length) args.targetContainers = [driver.addContainer(r[0].container)];
+        const containers = await compareContainers(args.targetContainers, mwData);
+        if (containers.length) args.targetContainers = containers;
       }
-
-      if (!args.targetContainers.length || args.targetContainers.length > 1) {
-        args.targetContainers = [driver.addContainer(results[0].container)];
-      }
-      await driver.scrollIntoView(args.targetContainers[0].selector);
-    } else {
-      args.targetContainers = results;
     }
+    if (!args.targetContainers) args.targetContainers = results;
   }
+  if (args.targetContainers && args.targetContainers.length === 1)
+    await driver.scrollIntoView(args.targetContainers[0].selector);
+
   next();
 }
 async function checkMemory(mwData, next) {
@@ -481,7 +408,13 @@ export default function BrowserController() {
       // iterations: 2,
       state: (state) => state.abort,
     },
-    agents: ["ElementIdentifier", "VisualConfirmation", "ElementLocator", "RefineSearch"],
+    agents: [
+      "ElementIdentifier",
+      "ContainerIdentifier",
+      "VisualConfirmation",
+      "ElementLocator",
+      "RefineSearch",
+    ],
   });
   const executionReminder = `
   <?xml version="1.0" encoding="UTF-8"?>
@@ -535,11 +468,26 @@ export default function BrowserController() {
     </important-reminders>
   </execution-reminder>
   `;
+  const searchHelpMessage = `Please revise your search terms for selecting the container and element you want to interact with by following these steps:
+
+  1. Examine the screenshot to identify the target element.
+  2. Double check to make sure that the target element is actually in the screenshot.
+  - If the target element is not in the screen shot scroll to find it.
+  3. CRITICAL: DO NOT MAKE ASSUMPTIONS ABOUT THE ELEMENTS, CONTAINERS, AND TEXT OUTSIDE OF THE CURRENT SCREENSHOT. IF THE ITEM YOU ARE LOOKING FOR IS NOT IN THE SCREENSHOT USE THE SCROLL FUNCTION TO FIND IT.
+  4. Provide a clear and concise elementName.
+  6. Specify the elementFunctionality to clarify the purpose or action of the element (e.g., 'Filters search results to show only items in new condition.').
+  7. Include the exact innerText of the element if applicable (e.g., 'New') as seen in the screenshot.
+  8. Revise the containerName for the container that actually holds the element based on the current screenshot.
+  9. Describe the containerFunctionality to provide context for the element's location and purpose.
+  10. Gather more exact containerText to help locate the correct red-bordered container, focusing on key identifiable text within the container.
+  
+  Remember to be as specific and accurate as possible in your descriptions to ensure the correct element and container are identified.`;
   this.navigate = async function ({ url }, { state, agents }) {
     const results = await driver.navigate(url);
+    driver.clearCache();
     await Promise.all([getDomainMemory({ state }), driver.setContainers()]);
 
-    state.screenshot = await driver.getScreenShot();
+    state.screenshot = await driver.getScreenshot();
     state.screenshot_message = `This is an image of the page you have just navigated to. ${executionReminder} ${await domainMemory(
       state
     )}`;
@@ -547,7 +495,7 @@ export default function BrowserController() {
     return `${results}. ${executionReminder} ${await domainMemory(state)}`;
   };
   this.type = async function (
-    { selectedElement, elementName, inputText, searchHelpMessage = "", identifier },
+    { selectedElement, elementName, inputText, identifier },
     { state }
   ) {
     if (selectedElement) {
@@ -561,7 +509,7 @@ export default function BrowserController() {
         driver.clearSelection();
         driver.saveSelectors(identifier);
       }
-      state.screenshot = await driver.getScreenShot();
+      state.screenshot = await driver.getScreenshot();
       state.screenshot_message = `The input was found and typed into. ${executionReminder} ${await domainMemory(
         state
       )}`;
@@ -573,10 +521,7 @@ export default function BrowserController() {
     return `The ${elementName} was not successfully selected. ${searchHelpMessage}`;
   };
 
-  this.click = async function (
-    { selectedElement, elementName, searchHelpMessage = "", identifier },
-    { state }
-  ) {
+  this.click = async function ({ selectedElement, elementName, identifier }, { state }) {
     if (selectedElement) {
       try {
         await selectedElement.click();
@@ -590,7 +535,7 @@ export default function BrowserController() {
           driver.saveSelectors(identifier);
         }
         await wait(1000);
-        state.screenshot = await driver.getScreenShot();
+        state.screenshot = await driver.getScreenshot();
         state.screenshot_message = `The element was found and clicked.  ${executionReminder} ${await domainMemory(
           state
         )}`;
@@ -613,7 +558,7 @@ export default function BrowserController() {
   this.scrollUp = async function (data, { state }) {
     const scrollPosition = await driver.scrollUp();
     const message = `You have scrolled up to section ${scrollPosition}`;
-    state.screenshot = await driver.getScreenShot();
+    state.screenshot = await driver.getScreenshot();
     state.screenshot_message = message;
 
     return message;
@@ -623,7 +568,7 @@ export default function BrowserController() {
     const scrollPosition = await driver.scrollDown();
     const message = `You have scrolled down to section ${scrollPosition}`;
 
-    state.screenshot = await driver.getScreenShot();
+    state.screenshot = await driver.getScreenshot();
     state.screenshot_message = message;
 
     return message;
@@ -656,7 +601,7 @@ export default function BrowserController() {
       const { totalSections } = await driver.setupSections();
       console.log("totalSections2-->", totalSections);
       if (totalSections > 1) {
-        const fullPage = await driver.getScreenShot(true);
+        const fullPage = await driver.getScreenshot(true);
         await driver.clearSections();
         const currentSection = await driver.getCurrentSection();
         console.log("invoking ElementLocation", fullPage, currentSection);
@@ -689,7 +634,7 @@ export default function BrowserController() {
         } else {
           await driver.goToSection(sectionNumber);
           await driver.showContainers();
-          const image = await driver.getScreenShot();
+          const image = await driver.getScreenshot();
           const { searchTerm, notFound } = await RefineSearch.invoke(
             {
               image,
@@ -726,7 +671,7 @@ export default function BrowserController() {
       }
       console.log("page load is now complete");
       await Promise.all([getDomainMemory({ state }), driver.setContainers()]);
-      state.screenshot = await driver.getScreenShot();
+      state.screenshot = await driver.getScreenshot();
       state.screenshot_message = `This is an image of the page you have just navigated to. ${executionReminder} ${await domainMemory(
         state
       )}`;
@@ -792,20 +737,18 @@ export default function BrowserController() {
   });
 }
 
-//Recursive Page search
-//When a page search process fails we should attempt to recover and complete the search.
+// Improve memory selection:
+// save dynamic selectors but filter them out of domain memory or add more conditions for using them
+// Add a list of elements seen within the container to the identifier function
+// add positionStatic when selecting the element to help with matching for cache
 
-//1. In getDescriptions: check for a full match container and add it to the args
-//- replace target containers with all full match containers (ideally there would only be one)
-//2. Also save the previous search results to the args state: searchedContainers, searchedElements
+// Improve saved selectors
+// add an anchor selector to the containers
+// - The anchor is a selector using any other attributes that will consistently identify the same item
+// first save anchor then confirm it's validity later
+// add an subSelector to the element that selects from the anchor to the element
 
-// In getElementLocation
-//3. If a full match container has been set then search it again while filtering out the previous search results
-// if a full match container hasn't been set:
-//1. Confirm that the target element is or is not in the screen shot
-//2. If not use ElementLocator to move to the elements location
-// - experiment between get element location and just give the ai instruction to scroll
-//3. Use a new agent to get as much container test from the the target container
-//4. redo a page search and container search which will now be filtering out previous searches
-
-//5. The filtering can happen in the searchPage and in getTargetContainers middleware
+// Improve interfacing abilities
+// add the ability to edit memory items and add notes and inject the notes into domain memory
+// add the ability for the ai to ask for help selecting an element when calling prompt user
+// add the stellar interface

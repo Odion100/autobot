@@ -57,6 +57,15 @@ async function startLineReader() {
 }
 deleteScreenshots();
 startLineReader();
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at --->:", promise, "reason:", reason);
+  // Handle the error or exit gracefully
+});
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception --->:", error);
+  // Perform cleanup, close browser, etc.
+  // process.exit(1);
+});
 // import driver from "./agents/Browser/utils/driver.js";
 
 // async function test() {

@@ -29,7 +29,7 @@ export default function addLabels(identifiers) {
     document.body.appendChild(boxContainer);
     boxContainer.id = "cambrian-ai-labels";
   }
-  identifiers.forEach(({ selector, label: lb, number }, i) => {
+  identifiers.forEach(({ selector, number, containerNumber }, i) => {
     console.log("selector", selector);
     const element = document.querySelector(selector);
     if (!element) return null; // Return null if element is not found
@@ -58,7 +58,7 @@ export default function addLabels(identifiers) {
       top = "-2px";
     }
     label.className = "box-label";
-    label.textContent = lb || number;
+    label.textContent = number || containerNumber;
     label.style.position = "absolute";
     label.style.top = top;
     label.style.right = right;

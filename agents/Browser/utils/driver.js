@@ -9,6 +9,7 @@ import getViewport from "./getViewport.js";
 import selectorStore from "./selectorStore.js";
 import setLabels from "./setLabels.js";
 import insertContainerLabels from "./insertContainerLabels.js";
+import getElementDescriptions from "./getElementDescriptions.js";
 
 function browserController() {
   let browser;
@@ -24,6 +25,7 @@ function browserController() {
     containers: [],
     labeledElements: [],
     showSelection: true,
+    interactions: [],
   };
   const state = () => browserState;
   const getContainer = (n) => browserState.containers[n - 1];
@@ -37,6 +39,31 @@ function browserController() {
     if (!browser) {
       browser = await puppeteer.launch({ headless: false, args: ["--start-maximized"] });
       page = (await browser.pages())[0];
+      // Set up communication channel between browser and Node.js
+      await page.exposeFunction("saveInteraction", (interaction) => {
+        if (Array.isArray(interaction)) {
+          browserState.interactions = interaction;
+          clearInsertedLabels().then(() => insertLabels(interaction));
+        } else {
+          browserState.interactions.push(interaction);
+          insertLabels([interaction]);
+        }
+
+        console.log("Interaction recorded:", interaction);
+      });
+
+      await page.exposeFunction("recordingComplete", async (interaction) => {
+        if (browserState.interactions.length) {
+          const { elementDescriptions } = await getElementDescriptions({
+            targetElements: browserState.interactions,
+          });
+          clearContainers();
+          await saveSelectors(elementDescriptions);
+          browserState.interactions = [];
+        }
+
+        console.log("Interaction recorded:", interaction);
+      });
       page.on("load", async function () {
         console.log("page load event --->");
         browserState.lastPage = browserState.currentPage;
@@ -73,7 +100,7 @@ function browserController() {
     const viewportContainers = await page.evaluate(getViewport, browserState.containers);
     // console.log("viewportContainers <----", viewportContainers);
     return await htmlVectorSearch.findContainers(
-      browserState.containers,
+      viewportContainers,
       searchText,
       where,
       5
@@ -127,11 +154,11 @@ function browserController() {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
-    const viewportContainers = !targetContainers
-      ? await viewFilter(browserState.containers)
-      : Array.isArray(targetContainers)
+    if (!targetContainers) targetContainers = [];
+    const viewportContainers = targetContainers.length
       ? targetContainers
-      : getContainers(targetContainers);
+      : await viewFilter(browserState.containers);
+
     console.log("viewportContainers-->", viewportContainers.length, viewportContainers);
     const interActiveElements = await page.evaluate(
       getInteractiveElements,
@@ -308,8 +335,8 @@ function browserController() {
       return elementHandler;
     }
   }
-  async function selectContainer(identifier) {
-    return await selectElement(identifier, true);
+  async function selectContainers(identifiers) {
+    return await page.evaluate(setLabels, identifiers);
   }
 
   async function clearSelection() {
@@ -364,7 +391,7 @@ function browserController() {
     }, multiple);
     return await getCurrentSection();
   }
-  async function getScreenShot(fullPage = false) {
+  async function getScreenshot(fullPage = false) {
     const path = `${process.cwd()}/screenshots/${Date.now()}.png`;
     await page.screenshot({ path, fullPage, captureBeyondView: false });
     browserState.actions.push("getting screen shot");
@@ -404,6 +431,7 @@ function browserController() {
   }
 
   async function captureContainer(number, containerOnly) {
+    console.log("number", number, browserState.containers.length);
     const { selector } = getContainer(number);
     return await captureElement(selector, containerOnly);
   }
@@ -452,6 +480,10 @@ function browserController() {
     const domain = `${parseDomain(page.url())}-cache`;
     return await selectorStore.search(domain, description, 20, where);
   }
+  async function clearCache() {
+    const domain = `${parseDomain(page.url())}-cache`;
+    return await selectorStore.clear(domain);
+  }
   async function cacheSelectors(identifiers) {
     const domain = `${parseDomain(page.url())}-cache`;
     const newIdentifiers = Array.isArray(identifiers) ? identifiers : [identifiers];
@@ -470,16 +502,103 @@ function browserController() {
     }, selector);
   }
 
-  async function startRecording(targetSelectors) {
-    await page.evaluate((selectors) => {
-      window.startRecording(selectors);
-    }, targetSelectors);
-  }
+  async function startRecorder() {
+    await setContainers();
 
-  async function endRecording() {
-    await page.evaluate(() => {
-      window.stopRecording();
-    });
+    const interactiveElements = await page.evaluate(
+      getInteractiveElements,
+      browserState.containers
+    );
+    await page.evaluate((watchList) => {
+      window.watchList = watchList;
+      window.interactions = [];
+      // Create and insert the recording control button
+      const button = document.createElement("button");
+      button.id = "recordingControl";
+      //button.innerHTML = "&#9679;"; // Unicode for a large dot
+      button.style.cssText = `
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 10000;
+        width: 30px;
+        height: 30px;
+        background-color: #4CAF50;
+        border: none;
+        border-radius: 50%;
+        font-size: 24px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        opacity: .9;
+        transition: background-color 0.3s ease;
+      `;
+      document.querySelector(`#cambrian-ai-containers`).appendChild(button);
+
+      // Initialize recording state
+      window.isRecording = false;
+
+      // Function to handle clicks on interactive elements
+      function clickHandler(event) {
+        if (!window.isRecording) return;
+
+        const element = event.target;
+        const identifier = window.watchList.find(({ selector }) =>
+          element.matches(selector)
+        );
+
+        if (identifier) {
+          const alreadyClicked = window.interactions.find(
+            ({ selector }) => identifier.selector === selector
+          );
+          if (alreadyClicked) {
+            window.interactions = window.interactions
+              .filter(({ selector }) => selector !== alreadyClicked.selector)
+              .map((item, i) => ({ ...item, number: i + 1 }));
+            window.saveInteraction(window.interactions);
+          } else {
+            console.log(element, "element");
+            console.log(identifier, "identifier");
+            window.interactions.push(identifier);
+            window.saveInteraction({
+              ...identifier,
+              innerText: element.textContent,
+              timestamp: new Date().toISOString(),
+              number: window.interactions.length,
+            });
+          }
+          event.stopImmediatePropagation();
+          event.preventDefault();
+        }
+      }
+
+      // Function to start recording
+      function startRecording() {
+        window.isRecording = true;
+        document.addEventListener("click", clickHandler, true);
+        button.style.backgroundColor = "#f44336"; // Red color for recording
+        console.log("Recording started");
+      }
+
+      // Function to stop recording
+      function stopRecording() {
+        window.isRecording = false;
+        document.removeEventListener("click", clickHandler, true);
+        button.style.backgroundColor = "#4CAF50"; // Green color for not recording
+        console.log("Recording stopped and event listeners removed");
+        window.recordingComplete();
+      }
+
+      // Toggle recording state when button is clicked
+      button.addEventListener("click", () => {
+        if (window.isRecording) {
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      });
+    }, interactiveElements);
   }
   return {
     navigate,
@@ -487,13 +606,12 @@ function browserController() {
     type,
     scrollUp,
     scrollDown,
-    getScreenShot,
+    getScreenshot,
     setContainers,
     getLabeledElement,
     clearContainers,
     clearSelection,
     selectElement,
-    selectContainer,
     getInnerText,
     getHtml,
     state,
@@ -508,17 +626,18 @@ function browserController() {
     searchSelectors,
     getSelectors,
     checkCache,
+    clearCache,
     saveSelectors,
     cacheSelectors,
     showContainers,
     toggleContainers,
-    clearLabels: clearInsertedLabels,
+    clearLabels,
+    clearInsertedLabels,
     addLabels,
     insertLabels,
     onPageLoad,
     scrollIntoView,
-    startRecording,
-    endRecording,
+    startRecorder,
     setupSections,
     getCurrentSection,
     goToSection,
