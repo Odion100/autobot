@@ -1,4 +1,4 @@
-export default function getContentBoxes(chunkSize, elementLimit) {
+export default function getContentContainers(chunkSize, elementLimit) {
   // Load HTML content using Cheerio
   const pageLength = document.body.innerText.length;
   if (!chunkSize) chunkSize = pageLength * 0.27;

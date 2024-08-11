@@ -1,5 +1,5 @@
 import puppeteer from "puppeteer";
-import getContentBoxes from "./getContentBoxes.js";
+import getContentContainers from "./getContentContainers.js";
 import getInteractiveElements from "./getInteractiveElements.js";
 import setContentContainers from "./setContentContainers.js";
 import setSelection from "./setSelection.js";
@@ -223,7 +223,7 @@ function browserController() {
   }
   //1. insert label into the container so that they are hidden with them
   // - create a function called insertLabels
-  // - container number must be added in the getContentBoxes function
+  // - container number must be added in the getContentContainers function
   // - containerNumber must then be added to the htmlVectorSearch
   // - it will take a list of identifiers and use the containerNumber to insert it
   // - show and hide only the target container when getting descriptions
@@ -304,7 +304,7 @@ function browserController() {
 
     const html = await page.content();
     browserState.containers = await page.evaluate(
-      getContentBoxes,
+      getContentContainers,
       chunkSize,
       elementLimit
     );
