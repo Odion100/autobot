@@ -7,27 +7,13 @@ import { insertScreenshot } from "./middleware.js";
 import selectorStore from "./utils/selectorStore.js";
 import uniqueId from "./utils/uniqueId.js";
 import getElementDescriptions from "./utils/getElementDescriptions.js";
-import getScreenshots from "./utils/getScreenshots.js";
 const wait = (timeout = 0) =>
   new Promise((resolve) => setTimeout(() => resolve(new Date()), timeout));
 
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function cacheSelectors(identifiers) {
-  const staticIdentifiers = identifiers.filter(
-    ({ positionRefresh }) => positionRefresh === "static"
-  );
-  if (staticIdentifiers.length) {
-    driver.cacheSelectors(staticIdentifiers);
-  }
-}
-async function searchDescription2(
-  targetElements,
-  fullScreenshot,
-  type,
-  { args, agents }
-) {
+async function compareElements(targetElements, fullScreenshot, type, { args, agents }) {
   const { elementDescriptions, fullMatchContainers, partialMatchContainers, fullMatch } =
     await getElementDescriptions({ targetElements, fullScreenshot, args, type });
   args.searchedContainers = args.targetContainers;
@@ -36,7 +22,7 @@ async function searchDescription2(
   );
   args.fullMatchContainers = fullMatchContainers.length ? fullMatchContainers : null;
 
-  cacheSelectors(elementDescriptions);
+  driver.cacheSelectors(elementDescriptions);
 
   if (fullMatch) return { results: [fullMatch], distances: [0.2] };
   if (!elementDescriptions.length) return { results: [], distances: [] };
@@ -48,34 +34,69 @@ async function searchDescription2(
 
   return await multiParameterSearch(filteredElements, args, { type });
 }
-async function evaluateSelection(newIdentifiers, distances, { args, agents, state }) {
-  const { VisualConfirmation } = agents;
-  for (const i in newIdentifiers) {
-    const identifier = newIdentifiers[i];
-    const dist = distances[i];
-    if (dist < 0.34) {
-      const element = await driver.selectElement(identifier);
-      if (element) {
-        args.identifier = identifier;
-        return element;
-      }
-    }
 
-    if (dist < 0.4 && dist) {
-      const element = await driver.selectElement(identifier);
-      if (element) {
-        const image = identifier.container
-          ? await driver.captureElement(identifier.container)
-          : await driver.getScreenshot();
-        const elementMatched = await VisualConfirmation.invoke({
-          message: `Is the correct element selected (surrounded by a green box) in the screenshot?`,
-          image,
-          ...args,
-        });
-        console.log("elementMatched", elementMatched);
-        if (elementMatched) {
-          args.identifier = identifier;
-          return element;
+async function getAnchoredSelector(identifier, mwData) {
+  const potentialAnchors = await driver.filterPotentialAnchors(identifier);
+  const potentialIdentifiers = [];
+  for (const anchor of potentialAnchors) {
+    const { containerNumber } = driver.addContainer(anchor);
+    potentialIdentifiers.push({
+      ...identifier,
+      container: anchor,
+      selector: `${anchor} > ${identifier.subSelector}`,
+      containerNumber,
+    });
+  }
+  console.log("potentialIdentifiers:", potentialIdentifiers);
+  if (potentialIdentifiers.length === 1) return potentialIdentifiers[0];
+  if (potentialIdentifiers.length > 1) {
+    const fullScreenshot = await driver.getScreenshot();
+    const { fn, args } = mwData;
+    const { fullMatch } = await getElementDescriptions({
+      targetElements: potentialIdentifiers,
+      fullScreenshot,
+      args,
+      type: mwData.fn === "type" ? "typeable" : "clickable",
+    });
+    return fullMatch;
+  }
+}
+async function evaluateSelection(elementIdentifiers, distances, mwData) {
+  console.log("elementIdentifiers/:", elementIdentifiers);
+  const { args, agents } = mwData;
+  const { VisualConfirmation } = agents;
+  for (const i in elementIdentifiers) {
+    const dist = distances[i];
+    if (dist < 0.4) {
+      const identifier = elementIdentifiers[i].anchors
+        ? await getAnchoredSelector(elementIdentifiers[i], mwData)
+        : elementIdentifiers[i];
+      if (identifier) {
+        if (dist < 0.34) {
+          const element = await driver.selectElement(identifier);
+          if (element) {
+            args.identifier = identifier;
+            console.log("args.identifier", args.identifier);
+            return element;
+          }
+        } else {
+          const element = await driver.selectElement(identifier);
+          if (element) {
+            const image = identifier.container
+              ? await driver.captureElement(identifier.container)
+              : await driver.getScreenshot();
+            const isMatch = await VisualConfirmation.invoke({
+              message: `Is the correct element selected (surrounded by a green box) in the screenshot?`,
+              image,
+              ...args,
+            });
+            console.log("isMatch", isMatch);
+            if (isMatch) {
+              args.identifier = identifier;
+              console.log("args.identifier", args.identifier);
+              return element;
+            }
+          }
         }
       }
     }
@@ -131,7 +152,11 @@ async function searchPage(mwData, next, exit) {
     filter = {
       $and: [
         {
-          selector: { $nin: args.searchedElements.map(({ selector }) => selector) },
+          selector: {
+            $nin: args.searchedElements
+              // .filter(({ selector }) => typeof selector === "string")
+              .map(({ selector }) => selector.toString()),
+          },
         },
         { type },
       ],
@@ -148,7 +173,7 @@ async function searchPage(mwData, next, exit) {
   if (identifiedElements.length) {
     await driver.hideContainers();
     const fullScreenshot = await driver.getScreenshot();
-    const { results, distances } = await searchDescription2(
+    const { results, distances } = await compareElements(
       identifiedElements,
       fullScreenshot,
       type,
@@ -176,18 +201,25 @@ async function searchPage(mwData, next, exit) {
 async function selectContainers(mwData, next) {
   const { args, agents, state } = mwData;
   if (args.selectedElement) return next();
-
-  if (!args.containerText) {
-    const { searchTerm, notFound } = await agents.RefineSearch.invoke(
-      {
-        message:
-          "Please provide more containerText search terms for the target element based on the previous screenshot",
-      },
-      { messages: [...state.messages] }
-    );
-    if (searchTerm) Object.assign(args, searchTerm);
+  const { containerName } = args;
+  if (containerName) {
+    const identifiers = await driver.getSelectors({ containerName });
+    if (identifiers.length) {
+      args.targetContainers = [driver.addContainer(identifiers[0].container)];
+    }
   }
-  if (!args.targetContainers && args.containerText) {
+
+  if (!args.targetContainers) {
+    if (!args.containerText) {
+      const { searchTerm } = await agents.RefineSearch.invoke(
+        {
+          message:
+            "Please provide more containerText search terms for the target element based on the previous screenshot",
+        },
+        { messages: [...state.messages] }
+      );
+      if (searchTerm) Object.assign(args, searchTerm);
+    }
     const filter = args.searchedContainers
       ? { selector: { $nin: args.searchedContainers.map(({ selector }) => selector) } }
       : undefined;
@@ -211,8 +243,36 @@ async function selectContainers(mwData, next) {
 
   next();
 }
+async function searchMemory(searchParams, filter, memoryDomain = "long-term") {
+  const cache = memoryDomain === "cache";
+  let searchResults;
+  if (cache) {
+    searchResults = await driver.searchCache(
+      `${searchParams.elementName}: ${searchParams.elementFunctionality}`,
+      filter
+    );
+  } else {
+    searchResults = await driver.searchSelectors(
+      `${searchParams.elementName}: ${searchParams.elementFunctionality}`,
+      filter
+    );
+  }
+  const { results, distances } = searchResults;
+
+  const savedIdentifiers = results.filter((data, i) => distances[i] <= 0.45);
+  const dist = distances.filter((value) => value <= 0.45);
+  console.log(`savedIdentifiers, distances ${memoryDomain}`, savedIdentifiers, dist);
+  if (savedIdentifiers.length) {
+    const filteredIdentifiers = await driver.pageFilter(savedIdentifiers);
+    if (filteredIdentifiers.length) {
+      return await multiParameterSearch(filteredIdentifiers, searchParams);
+    }
+  }
+
+  return { results: [], distances: [] };
+}
 async function checkMemory(mwData, next) {
-  const { args } = mwData;
+  const { args, fn } = mwData;
   if (args.domainMemoryId) {
     const identifiers = await driver.getSelectors({ id: args.domainMemoryId });
     console.log("memory id", args.domainMemoryId, identifiers);
@@ -224,13 +284,31 @@ async function checkMemory(mwData, next) {
       }
     }
   }
-  const { containerName } = args;
-  if (containerName) {
-    const identifiers = await driver.getSelectors({ containerName });
-    if (identifiers.length) {
-      args.targetContainers = [driver.addContainer(identifiers[0].container)];
+  const type = fn === "type" ? "typeable" : "clickable";
+
+  if (!args.selectedElement) {
+    const filter = { $and: [{ type }, { positionRefresh: "dynamic" }] };
+    const { results, distances } = await searchMemory(args, filter, "long-term");
+    if (results.length) {
+      const selectedElement = await evaluateSelection(results, distances, mwData);
+      if (selectedElement) {
+        args.selectedElement = selectedElement;
+        return next();
+      }
     }
   }
+  if (!args.selectedElement) {
+    const filter = { type };
+    const { results, distances } = await searchMemory(args, filter, "cache");
+    if (results.length) {
+      const selectedElement = await evaluateSelection(results, distances, mwData);
+      if (selectedElement) {
+        args.selectedElement = selectedElement;
+        return next();
+      }
+    }
+  }
+
   next();
 }
 
@@ -259,7 +337,7 @@ async function multiParameterSearch(identifiers, args, filter) {
       }
       return acc;
     }, []);
-    console.log("searchDocs, param", searchDocs, param);
+    // console.log("searchDocs, param", searchDocs, param);
     const searchTerm = args[param];
     const { results, distances } = await selectorStore.quickSearch(
       searchDocs,
@@ -280,37 +358,22 @@ async function multiParameterSearch(identifiers, args, filter) {
     ),
   };
 }
-async function checkCache(mwData, next) {
-  const { fn, args } = mwData;
-  if (args.selectedElement) return next();
-  const filter = {
-    type: fn === "type" ? "typeable" : "clickable",
-  };
-
-  const { results, distances } = await driver.checkCache(
-    `${args.elementName}: ${args.elementFunctionality}`,
-    filter
-  );
-  const cachedIdentifiers = results.filter((data, i) => distances[i] <= 0.45);
-  const dist = distances.filter((value) => value <= 0.45);
-  console.log("cachedIdentifiers, distances", cachedIdentifiers, dist);
-  if (cachedIdentifiers.length) {
-    const filteredIdentifiers = await driver.pageFilter(cachedIdentifiers);
-    if (filteredIdentifiers.length) {
-      const { results, distances } = await multiParameterSearch(
-        filteredIdentifiers,
-        args
-      );
-      console.log("results, distances: multiParameterSearch", results, distances);
-
-      const selectedElement = await evaluateSelection(results, distances, mwData);
-      if (selectedElement) {
-        args.selectedElement = selectedElement;
-      }
-    }
+async function extraSearch(identifiers, args, filter) {
+  for (const identifier of identifiers) {
+    if (!identifier.id) identifier.id = uniqueId();
+    identifier.totalDistance = 0;
+    identifier.totalSearches = 0;
+    const { elementName, elementFunctionality, containerName, containerFunctionality } =
+      identifier;
+    identifier.doc = `${containerName}, ${containerFunctionality}: ${elementName} ${elementFunctionality}`;
   }
-
-  next();
+  console.log("extra search identifiers", identifiers);
+  const { elementName, elementFunctionality, containerName, containerFunctionality } =
+    args;
+  const searchTerm = `${containerName}, ${containerFunctionality}: ${elementName} ${elementFunctionality}`;
+  const results = await selectorStore.quickSearch(identifiers, searchTerm, filter);
+  console.log("results of extra search", results, searchTerm, args);
+  return results;
 }
 function removeDuplicates(arr, prop) {
   const uniqueValues = new Set();
@@ -500,15 +563,7 @@ export default function BrowserController() {
   ) {
     if (selectedElement) {
       await selectedElement.type(inputText, { delay: 100 });
-      if (identifier.positionRefresh === "static") {
-        if (typeof identifier.usage === "number") {
-          identifier.usage++;
-        } else {
-          identifier.usage = 1;
-        }
-        driver.clearSelection();
-        driver.saveSelectors(identifier);
-      }
+      driver.saveIdentifier(identifier, selectedElement);
       state.screenshot = await driver.getScreenshot();
       state.screenshot_message = `The input was found and typed into. ${executionReminder} ${await domainMemory(
         state
@@ -525,15 +580,7 @@ export default function BrowserController() {
     if (selectedElement) {
       try {
         await selectedElement.click();
-        if (identifier.positionRefresh === "static") {
-          if (typeof identifier.usage === "number") {
-            identifier.usage++;
-          } else {
-            identifier.usage = 1;
-          }
-          driver.clearSelection();
-          driver.saveSelectors(identifier);
-        }
+        driver.saveIdentifier(identifier, selectedElement);
         await wait(1000);
         state.screenshot = await driver.getScreenshot();
         state.screenshot_message = `The element was found and clicked.  ${executionReminder} ${await domainMemory(
@@ -583,9 +630,10 @@ export default function BrowserController() {
   };
 
   const resetContainers = async function ({}, next) {
+    console.log("resetting containers --->");
+    await driver.clearSelection();
     await driver.clearContainers();
     await driver.setContainers();
-    await driver.clearSelection();
     next();
   };
   async function getElementLocations(mwData, next) {
@@ -657,8 +705,7 @@ export default function BrowserController() {
     next();
   }
   async function getDomainMemory({ state }) {
-    state.domainMemory = await driver.getSelectors();
-
+    state.domainMemory = await driver.getSelectors({ positionRefresh: "static" });
     console.log("state.domainMemory", state.domainMemory);
   }
 
@@ -682,7 +729,6 @@ export default function BrowserController() {
   this.before(
     "type",
     checkMemory,
-    checkCache,
     selectContainers,
     searchPage
     // getElementLocations
@@ -690,7 +736,6 @@ export default function BrowserController() {
   this.before(
     "click",
     checkMemory,
-    checkCache,
     selectContainers,
     searchPage
     // getElementLocations
@@ -736,19 +781,25 @@ export default function BrowserController() {
     next();
   });
 }
+//Whats left
+//1. reorder the anchors so that id is prioritized
+//2. check memory for dynamic items in the same way the cache is checked
+//3. remove invalid anchors and consider keep the rest
 
 // Improve memory selection:
 // save dynamic selectors but filter them out of domain memory or add more conditions for using them
 // Add a list of elements seen within the container to the identifier function
-// add positionStatic when selecting the element to help with matching for cache
+// add positionRefresh when selecting the element to help with matching for cache
 
-// Improve saved selectors
+// Improve saved selectors:
 // add an anchor selector to the containers
 // - The anchor is a selector using any other attributes that will consistently identify the same item
 // first save anchor then confirm it's validity later
 // add an subSelector to the element that selects from the anchor to the element
 
-// Improve interfacing abilities
+// Improve interfacing abilities:
 // add the ability to edit memory items and add notes and inject the notes into domain memory
 // add the ability for the ai to ask for help selecting an element when calling prompt user
 // add the stellar interface
+
+//Delete cache

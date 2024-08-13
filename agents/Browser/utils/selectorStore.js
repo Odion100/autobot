@@ -22,9 +22,12 @@ function reformatData(identifiers) {
         containerName: identifier.containerName,
         containerFunctionality: identifier.containerFunctionality,
         container: identifier.container,
+        positionRefresh: identifier.positionRefresh,
         selector: identifier.selector,
+        anchors: identifier.anchors,
+        subSelector: identifier.subSelector,
         type: identifier.type,
-        usage: identifier.usage,
+        usage: identifier.usage || 0,
       });
       return sum;
     },
@@ -61,9 +64,13 @@ export async function get(domain, where = {}) {
     embeddingFunction: embeddingFunction(),
     metadata: { "hnsw:space": "cosine" },
   });
-  console.log("saving selectors", domain);
-  const { metadatas, ids } = await collection.get({ where, include: ["metadatas"] });
-  return metadatas.map((data, i) => ({ ...data, id: ids[i] }));
+  console.log("getting selectors", domain);
+  try {
+    const { metadatas, ids } = await collection.get({ where, include: ["metadatas"] });
+    return metadatas.map((data, i) => ({ ...data, id: ids[i] }));
+  } catch (error) {
+    console.log("error getting selectors", where);
+  }
 }
 
 export async function search(domain, description, nResults = 5, where) {

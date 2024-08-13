@@ -11,6 +11,7 @@ export default async function getElementDescriptions({
   type,
 }) {
   if (!fullScreenshot) fullScreenshot = await driver.getScreenshot();
+  console.log("targetElements", targetElements);
   console.log("fullScreenshot", fullScreenshot);
   const screenshots = await getScreenshots(targetElements);
 
@@ -61,16 +62,15 @@ export default async function getElementDescriptions({
         targetElements.find(({ number }) => number === identifier.elementNumber) || {};
 
       if (identifiedElement) {
-        identifier.selector = identifiedElement.selector;
-        identifier.container = identifiedElement.container;
-        identifier.type = identifiedElement.type;
+        Object.assign(identifier, identifiedElement);
         identifier.containerName = identifiedContainer.containerName;
         identifier.containerFunctionality = identifiedContainer.containerFunctionality;
         identifier.positionRefresh = identifiedContainer.positionRefresh;
-        identifier.usage = 0;
         elementDescriptions.push(identifier);
-        if (identifier.matchesCriteria === "full-match" && identifier.type === type)
+        if (identifier.matchesCriteria === "full-match" && identifier.type === type) {
           fullMatch = identifier;
+          console.log("fullMatch", fullMatch);
+        }
       }
     }
   }

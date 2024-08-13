@@ -24,12 +24,28 @@ export async function findElements(
   const embeddingData = targetElements.reduce(
     (
       sum,
-      { selector, innerText, attributes, container, containerNumber, number, type },
+      {
+        selector,
+        innerText,
+        attributes,
+        container,
+        containerNumber,
+        number,
+        type,
+        subSelector,
+      },
       i
     ) => {
       sum.documents.push(`${innerText}, ${attributes}`);
       sum.ids.push(`id${i}`);
-      sum.metadatas.push({ selector, container, containerNumber, number, type });
+      sum.metadatas.push({
+        selector,
+        container,
+        containerNumber,
+        number,
+        type,
+        subSelector,
+      });
       return sum;
     },
     {

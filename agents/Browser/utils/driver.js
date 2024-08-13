@@ -1,6 +1,8 @@
 import puppeteer from "puppeteer";
 import getContentContainers from "./getContentContainers.js";
 import getInteractiveElements from "./getInteractiveElements.js";
+import getAnchors from "./getAnchors.js";
+import filterAnchors from "./filterAnchors.js";
 import setContentContainers from "./setContentContainers.js";
 import setSelection from "./setSelection.js";
 import setupPageSections from "./setupPageSections.js";
@@ -335,9 +337,6 @@ function browserController() {
       return elementHandler;
     }
   }
-  async function selectContainers(identifiers) {
-    return await page.evaluate(setLabels, identifiers);
-  }
 
   async function clearSelection() {
     await page.evaluate(() => {
@@ -476,7 +475,26 @@ function browserController() {
     const domain = parseDomain(page.url());
     await selectorStore.save(domain, newIdentifiers);
   }
-  async function checkCache(description = "", where) {
+  async function saveIdentifier(identifier, element) {
+    console.log("saveIdentifier", identifier);
+    if (identifier.usage) {
+      identifier.usage++;
+    } else {
+      identifier.usage = 1;
+      identifier.anchors = await getPotentialAnchors(identifier, element);
+    }
+    if (identifier.anchors)
+      if (identifier.usage > 3) {
+        identifier.anchors = "";
+        identifier.subSelector = "";
+        identifier.positionRefresh = "static";
+      } else if (identifier.usage > 1) {
+        identifier.anchors = await removeInvalidAnchors(identifier, element);
+      }
+    const domain = parseDomain(page.url());
+    await selectorStore.save(domain, [identifier]);
+  }
+  async function searchCache(description = "", where) {
     const domain = `${parseDomain(page.url())}-cache`;
     return await selectorStore.search(domain, description, 20, where);
   }
@@ -600,7 +618,26 @@ function browserController() {
       });
     }, interactiveElements);
   }
+  async function filterPotentialAnchors(identifier) {
+    return await page.evaluate(filterAnchors, identifier);
+  }
+
+  async function getPotentialAnchors(identifier, elementHandler) {
+    return await page.evaluate(getAnchors, identifier, elementHandler);
+  }
+  async function removeInvalidAnchors(identifier, elementHandler) {
+    return await page.evaluate(
+      ({ anchors, subSelector }, element) =>
+        anchors
+          .split(",")
+          .filter((selector) => element.matches(`${selector} ${subSelector}`))
+          .join(","),
+      identifier,
+      elementHandler
+    );
+  }
   return {
+    page: () => page,
     navigate,
     click,
     type,
@@ -625,9 +662,10 @@ function browserController() {
     hideContainers,
     searchSelectors,
     getSelectors,
-    checkCache,
+    searchCache,
     clearCache,
     saveSelectors,
+    saveIdentifier,
     cacheSelectors,
     showContainers,
     toggleContainers,
@@ -644,7 +682,9 @@ function browserController() {
     clearSections,
     viewFilter,
     pageFilter,
-    page: () => page,
+    filterPotentialAnchors,
+    getPotentialAnchors,
+    removeInvalidAnchors,
   };
 }
 function parseDomain(url) {

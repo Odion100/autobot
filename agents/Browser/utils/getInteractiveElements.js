@@ -1,9 +1,9 @@
 export default async function getInteractiveElements(containers, filter = "*") {
-  const cssPath = function (el) {
+  const cssPath = function (el, container) {
     var path = [];
-    while (el.nodeType === Node.ELEMENT_NODE) {
+    while (el.nodeType === Node.ELEMENT_NODE && el !== container) {
       var selector = el.nodeName.toLowerCase();
-      if (el.id && /^[a-zA-Z_-][\w-]*$/.test(el.id)) {
+      if (!container && el.id && /^[a-zA-Z_-][\w-]*$/.test(el.id)) {
         selector += "#" + el.id;
         path.unshift(selector);
         break;
@@ -57,7 +57,8 @@ export default async function getInteractiveElements(containers, filter = "*") {
       height < 1
     );
   }
-  function parseContainer({ selector, containerNumber }) {
+
+  function parseContainer({ selector, containerNumber, anchors }) {
     const container = document.querySelector(selector);
     if (!container) return [];
     return Array.from(container.querySelectorAll(filter)).reduce((acc, element, i) => {
@@ -70,12 +71,14 @@ export default async function getInteractiveElements(containers, filter = "*") {
         acc.push({
           tagName: element.tagName.toLowerCase(),
           selector: cssPath(element),
+          subSelector: cssPath(element, container),
           attributes,
           innerText: element.innerText.replace(/\s+/g, " ").trim(),
           type: getElementType(element),
           container: selector,
           number: i + 1,
           containerNumber,
+          anchors,
         });
       }
       return acc;
