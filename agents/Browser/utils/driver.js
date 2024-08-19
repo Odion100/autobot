@@ -1,4 +1,7 @@
 import puppeteer from "puppeteer";
+import injectMemoryDisplay from "./injectMemoryDisplay.js";
+import insertChatbot from "./insertChatbot.js";
+import insertSidePanel from "./insertSidePanel.js";
 import getContentContainers from "./getContentContainers.js";
 import getInteractiveElements from "./getInteractiveElements.js";
 import getAnchors from "./getAnchors.js";
@@ -65,6 +68,10 @@ function browserController() {
         }
 
         console.log("Interaction recorded:", interaction);
+      });
+      await page.exposeFunction("updateIdentifier", async (identifier) => {
+        if (identifier) await saveSelectors(identifier);
+        console.log("Updating Identifier:", identifier);
       });
       page.on("load", async function () {
         console.log("page load event --->");
@@ -435,6 +442,7 @@ function browserController() {
     return await captureElement(selector, containerOnly);
   }
   async function toggleContainers(input, show = true, excludeNumber) {
+    console.log("input", input);
     const numbers = !input
       ? browserState.containers
           .filter(({ containerNumber }) => excludeNumber !== containerNumber)
@@ -442,6 +450,7 @@ function browserController() {
       : Array.isArray(input)
       ? input
       : [input];
+    console.log("numbers", numbers);
     const display = show ? "initial" : "none";
     const hidden = await page.evaluate(
       (numbers, display) => {
@@ -553,7 +562,7 @@ function browserController() {
         transition: background-color 0.3s ease;
       `;
       document.querySelector(`#cambrian-ai-containers`).appendChild(button);
-
+      // document.appendChild(ge);
       // Initialize recording state
       window.isRecording = false;
 
@@ -617,6 +626,86 @@ function browserController() {
         }
       });
     }, interactiveElements);
+  }
+  async function showMemory() {
+    const memory = await getSelectors();
+    const filteredMemory = await pageFilter(memory);
+    await setContainers();
+    await hideContainers();
+    const identifiedContainers = [];
+    const uniqueContainers = [];
+    const identifiers = filteredMemory.map((item, i) => {
+      const container = addContainer(item.container);
+
+      const { containerNumber } = container;
+      if (!uniqueContainers.includes(containerNumber)) {
+        identifiedContainers.push(container);
+        uniqueContainers.push(containerNumber);
+      }
+      return { ...item, number: i + 1, containerNumber };
+    });
+    await showContainers(
+      identifiedContainers.map(({ containerNumber }) => containerNumber)
+    );
+    console.log("identifiers", identifiers);
+    await insertLabels(identifiers);
+    await page.evaluate(insertSidePanel, identifiers);
+    await page.evaluate(injectMemoryDisplay, identifiers);
+  }
+  const exampleMessages = [
+    {
+      sender: "bot",
+      text: "Hello! Welcome to the Cambrian AI assistant. How can I help you today?",
+    },
+    {
+      sender: "user",
+      text: "Hi there! I'm interested in learning more about machine learning. Where should I start?",
+    },
+    {
+      sender: "bot",
+      text: "That's great! Machine learning is a fascinating field. To get started, I'd recommend the following steps:\n\n1. Brush up on your math skills, especially linear algebra and calculus.\n2. Learn a programming language like Python, which is widely used in ML.\n3. Start with some basic ML concepts like supervised and unsupervised learning.\n4. Try out some beginner-friendly ML libraries like scikit-learn.\n\nWould you like me to suggest some specific resources?",
+    },
+    {
+      sender: "user",
+      text: "Yes, please! That would be very helpful.",
+    },
+    {
+      sender: "bot",
+      text: "Great! Here are some excellent resources to get you started:\n\n1. Coursera's 'Machine Learning' course by Andrew Ng\n2. 'Python for Data Science and Machine Learning Bootcamp' on Udemy\n3. 'Introduction to Statistical Learning' book by James, Witten, Hastie, and Tibshirani\n4. Fast.ai's 'Practical Deep Learning for Coders' course\n\nThese should give you a solid foundation. Let me know if you need any clarification on these resources!",
+    },
+    {
+      sender: "user",
+      text: "Thanks! One more question - how long does it typically take to become proficient in machine learning?",
+    },
+    {
+      sender: "bot",
+      text: "The time it takes to become proficient in machine learning can vary greatly depending on your background, dedication, and learning pace. However, here's a rough timeline:\n\n- 3-6 months: Grasp the basics and start working on simple projects\n- 6-12 months: Comfortable with common ML algorithms and able to work on medium-complexity projects\n- 1-2 years: Proficient in various ML techniques and able to tackle complex problems\n\nRemember, continuous learning and practical application are key in this rapidly evolving field. Is there a specific area of ML you're most interested in?",
+    },
+    {
+      sender: "user",
+      text: "I'm particularly interested in natural language processing. Is that a good specialization within ML?",
+    },
+    {
+      sender: "bot",
+      text: "Absolutely! Natural Language Processing (NLP) is an exciting and rapidly growing subfield of machine learning. It's an excellent specialization for several reasons:\n\n1. High demand: Many companies need NLP experts for chatbots, sentiment analysis, and text classification.\n2. Diverse applications: From voice assistants to language translation, NLP has a wide range of real-world applications.\n3. Cutting-edge research: With models like GPT and BERT, NLP is at the forefront of AI innovation.\n4. Interdisciplinary nature: NLP combines linguistics, computer science, and ML, making it intellectually stimulating.\n\nIf you're interested in NLP, I'd recommend starting with the basics of text processing and then moving on to more advanced topics like word embeddings and deep learning for NLP. Would you like some NLP-specific resources?",
+    },
+    {
+      sender: "user",
+      text: "Yes, that would be great! Could you recommend some NLP-specific resources?",
+    },
+    {
+      sender: "bot",
+      text: "Certainly! Here are some excellent NLP-specific resources to get you started:\n\n1. Book: 'Natural Language Processing with Python' by Bird, Klein, and Loper\n2. Course: Stanford's CS224N: Natural Language Processing with Deep Learning\n3. Library: NLTK (Natural Language Toolkit) for Python\n4. Tutorial series: Sentiment Analysis with Python on Real Python\n5. Book: 'Speech and Language Processing' by Jurafsky and Martin\n6. Course: Fast.ai's 'Natural Language Processing' course\n\nThese resources cover a range of difficulty levels, so you can progress from beginner to more advanced topics. Don't hesitate to ask if you need any clarification or have more questions!",
+    },
+  ];
+  async function showChat() {
+    await page.evaluate(insertSidePanel);
+    await page.evaluate(insertChatbot, [
+      {
+        sender: "bot",
+        text: "Hello! Welcome to the Cambrian AI assistant. How can I help you today?",
+      },
+    ]);
   }
   async function filterPotentialAnchors(identifier) {
     return await page.evaluate(filterAnchors, identifier);
@@ -685,6 +774,8 @@ function browserController() {
     filterPotentialAnchors,
     getPotentialAnchors,
     removeInvalidAnchors,
+    showMemory,
+    showChat,
   };
 }
 function parseDomain(url) {
@@ -697,7 +788,13 @@ function parseDomain(url) {
   // Extracting the domain from the matched groups
   var domain = matches && matches.length > 1 ? matches[1] : null;
 
-  return domain.replace(".", "_");
+  // Replace all occurrences of "." with "_"
+  return domain ? domain.replace(/\./g, "_") : null;
 }
 const driver = browserController();
 export default driver;
+
+// fix the style
+//- add a color button in the header to match with the recorder
+//- adjust the style and placement
+//-

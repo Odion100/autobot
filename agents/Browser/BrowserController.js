@@ -104,10 +104,10 @@ async function evaluateSelection(elementIdentifiers, distances, mwData) {
 }
 
 //evaluate containers
-// add abort state to exit loop from command line
+// add abort state to secondSearch loop from command line
 // Plan off of full page
 // scroll to any position
-async function compareContainers(containers, { args, agents, state }) {
+async function compareContainers(containers, { args, agents }) {
   const { ContainerIdentifier } = agents;
   await driver.hideContainers();
   await driver.addLabels(containers);
@@ -141,7 +141,7 @@ async function compareContainers(containers, { args, agents, state }) {
         ({ matchesCriteria }) => matchesCriteria !== "no-match"
       );
 }
-async function searchPage(mwData, next, exit) {
+async function searchPage(mwData, next, secondSearch) {
   const { args, state, fn } = mwData;
   const { innerText, elementName } = args;
   const type = fn === "type" ? "typeable" : "clickable";
@@ -161,7 +161,7 @@ async function searchPage(mwData, next, exit) {
         { type },
       ],
     };
-  } else if (!innerText) {
+  } else if (secondSearch) {
     if (!filter) filter = { type };
   }
 
@@ -190,9 +190,9 @@ async function searchPage(mwData, next, exit) {
       }
     }
   }
-  console.log("args.targetContainers", args.targetContainers, exit);
+  console.log("args.targetContainers", args.targetContainers, secondSearch);
 
-  if (!exit) {
+  if (!secondSearch) {
     args.targetContainers = args.fullMatchContainers;
     return searchPage(mwData, next, true);
   }
@@ -465,7 +465,7 @@ export default function BrowserController() {
     sdk: openai,
     schema,
     prompt,
-    exitConditions: {
+    secondSearchConditions: {
       functionCall: "promptUser",
       shortCircuit: 3,
       // iterations: 2,
@@ -546,16 +546,22 @@ export default function BrowserController() {
   
   Remember to be as specific and accurate as possible in your descriptions to ensure the correct element and container are identified.`;
   this.navigate = async function ({ url }, { state, agents }) {
-    const results = await driver.navigate(url);
-    driver.clearCache();
-    await Promise.all([getDomainMemory({ state }), driver.setContainers()]);
+    let results;
+    try {
+      results = await driver.navigate(url);
+      driver.clearCache();
+      await Promise.all([getDomainMemory({ state }), driver.setContainers()]);
 
-    state.screenshot = await driver.getScreenshot();
-    state.screenshot_message = `This is an image of the page you have just navigated to. ${executionReminder} ${await domainMemory(
-      state
-    )}`;
+      state.screenshot = await driver.getScreenshot();
+      state.screenshot_message = `This is an image of the page you have just navigated to. ${executionReminder} ${await domainMemory(
+        state
+      )}`;
 
-    return `${results}. ${executionReminder} ${await domainMemory(state)}`;
+      return `${results}. ${executionReminder} ${await domainMemory(state)}`;
+    } catch (error) {
+      console.log("navigation error", error);
+      throw error;
+    }
   };
   this.type = async function (
     { selectedElement, elementName, inputText, identifier },
