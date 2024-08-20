@@ -24,11 +24,11 @@ export default function insertLabels(identifiers) {
   let zIndex = 200000;
   identifiers.forEach(
     ({ selector, label: lb, number, containerNumber, container }, i) => {
-      console.log("selector", selector);
+      console.log("selector", selector, containerNumber);
       const element = document.querySelector(selector);
       const elementContainer = document.querySelector(container);
       const labelContainer = document.querySelector(
-        `#cambrian-ai-containers > div:nth-child(${containerNumber})`
+        `#cambrian-ai-containers > div#container_${containerNumber}`
       );
       if (!element) return null; // Return null if element is not found
       if (!labelContainer) return null; // Return null if element is not found

@@ -58,20 +58,34 @@ function browserController() {
       });
 
       await page.exposeFunction("recordingComplete", async (interaction) => {
+        console.log("browserState.interactions", browserState.interactions);
         if (browserState.interactions.length) {
           const { elementDescriptions } = await getElementDescriptions({
             targetElements: browserState.interactions,
           });
           clearContainers();
           await saveSelectors(elementDescriptions);
-          browserState.interactions = [];
+          showMemory();
+        } else {
+          clearContainers();
+          showMemory();
         }
+        browserState.interactions = [];
 
         console.log("Interaction recorded:", interaction);
       });
       await page.exposeFunction("updateIdentifier", async (identifier) => {
         if (identifier) await saveSelectors(identifier);
         console.log("Updating Identifier:", identifier);
+      });
+      await page.exposeFunction("showChat", async () => {
+        await showChat();
+      });
+      await page.exposeFunction("showMemory", async () => {
+        await showMemory();
+      });
+      await page.exposeFunction("showRecorder", async () => {
+        await showRecorder();
       });
       page.on("load", async function () {
         console.log("page load event --->");
@@ -82,7 +96,9 @@ function browserController() {
         browserState.selectedContainers = [];
         browserState.containers = [];
         browserState.labeledElements = [];
+        browserState.interactions = [];
         browserState.scrollHeight = 0;
+        showSidePanel();
       });
       const dimensions = await page.evaluate(() => {
         return {
@@ -529,7 +545,9 @@ function browserController() {
     }, selector);
   }
 
-  async function startRecorder() {
+  async function showRecorder() {
+    clearSidePanel();
+    await clearContainers();
     await setContainers();
 
     const interactiveElements = await page.evaluate(
@@ -539,37 +557,64 @@ function browserController() {
     await page.evaluate((watchList) => {
       window.watchList = watchList;
       window.interactions = [];
-      // Create and insert the recording control button
-      const button = document.createElement("button");
-      button.id = "recordingControl";
-      //button.innerHTML = "&#9679;"; // Unicode for a large dot
-      button.style.cssText = `
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        z-index: 10000;
-        width: 30px;
-        height: 30px;
-        background-color: #4CAF50;
-        border: none;
-        border-radius: 50%;
-        font-size: 24px;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        cursor: pointer;
-        opacity: .9;
-        transition: background-color 0.3s ease;
+      const style = `
+      <style id="cambrian-ai-recorder-display">
+        #cambrian-ai-containers .cambrian-ai-side-button-holder {
+          position: fixed;
+          top: 10px;
+          right: 10px;
+          z-index: 10000;
+          background: white;
+          padding: 3px;
+          border-radius: 54px;
+          display: inline-block;
+          border: 1px solid red;
+          margin: 0 0px 0px 4px;
+          opacity: .9;
+        }
+        #cambrian-ai-containers .cambrian-ai-side-button-holder:hover {
+          opacity: 1;
+        }
+        #cambrian-ai-containers .cambrian-ai-recorder-button {
+          width: 27px;
+          height: 27px;
+          background-color: #4CAF50;
+          border: none;
+          border-radius: 26px;
+          font-size: 13px;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          cursor: pointer;
+          opacity: 0.9;
+          transition: all 0.3s ease;
+          padding: 5px 5px;
+          font-weight: bold;
+        }
+        #cambrian-ai-containers .cambrian-ai-recorder-button:hover {
+          opacity: 1;
+        }
+      </style>
+    `;
+      // Define the button HTML as a string
+      const buttonHTML = `
+      <div class="cambrian-ai-side-button-holder">
+        <button class="cambrian-ai-recorder-button" id="stopRecorderButton">
+          <span style="width: 12px;height: 12px;background: #b12b40;"></span>
+        </button>
+      </div>
       `;
-      document.querySelector(`#cambrian-ai-containers`).appendChild(button);
-      // document.appendChild(ge);
-      // Initialize recording state
-      window.isRecording = false;
+
+      // Insert the button HTML into the page
+      const container = document.querySelector("#cambrian-ai-containers");
+      container.insertAdjacentHTML("beforeend", buttonHTML);
+      if (!container.querySelector("style#cambrian-ai-recorder-display")) {
+        container.insertAdjacentHTML("afterbegin", style);
+      }
 
       // Function to handle clicks on interactive elements
       function clickHandler(event) {
-        if (!window.isRecording) return;
-
+        console.log("clickHandler");
         const element = event.target;
         const identifier = window.watchList.find(({ selector }) =>
           element.matches(selector)
@@ -600,36 +645,25 @@ function browserController() {
         }
       }
 
-      // Function to start recording
-      function startRecording() {
-        window.isRecording = true;
-        document.addEventListener("click", clickHandler, true);
-        button.style.backgroundColor = "#f44336"; // Red color for recording
-        console.log("Recording started");
-      }
+      document.addEventListener("click", clickHandler, true);
 
-      // Function to stop recording
       function stopRecording() {
-        window.isRecording = false;
+        console.log("stopping the recorder");
         document.removeEventListener("click", clickHandler, true);
-        button.style.backgroundColor = "#4CAF50"; // Green color for not recording
-        console.log("Recording stopped and event listeners removed");
         window.recordingComplete();
       }
-
+      // Get a reference to the inserted button
+      const button = document.getElementById("stopRecorderButton");
       // Toggle recording state when button is clicked
       button.addEventListener("click", () => {
-        if (window.isRecording) {
-          stopRecording();
-        } else {
-          startRecording();
-        }
+        stopRecording();
       });
     }, interactiveElements);
   }
   async function showMemory() {
     const memory = await getSelectors();
     const filteredMemory = await pageFilter(memory);
+    await clearContainers();
     await setContainers();
     await hideContainers();
     const identifiedContainers = [];
@@ -661,42 +695,6 @@ function browserController() {
       sender: "user",
       text: "Hi there! I'm interested in learning more about machine learning. Where should I start?",
     },
-    {
-      sender: "bot",
-      text: "That's great! Machine learning is a fascinating field. To get started, I'd recommend the following steps:\n\n1. Brush up on your math skills, especially linear algebra and calculus.\n2. Learn a programming language like Python, which is widely used in ML.\n3. Start with some basic ML concepts like supervised and unsupervised learning.\n4. Try out some beginner-friendly ML libraries like scikit-learn.\n\nWould you like me to suggest some specific resources?",
-    },
-    {
-      sender: "user",
-      text: "Yes, please! That would be very helpful.",
-    },
-    {
-      sender: "bot",
-      text: "Great! Here are some excellent resources to get you started:\n\n1. Coursera's 'Machine Learning' course by Andrew Ng\n2. 'Python for Data Science and Machine Learning Bootcamp' on Udemy\n3. 'Introduction to Statistical Learning' book by James, Witten, Hastie, and Tibshirani\n4. Fast.ai's 'Practical Deep Learning for Coders' course\n\nThese should give you a solid foundation. Let me know if you need any clarification on these resources!",
-    },
-    {
-      sender: "user",
-      text: "Thanks! One more question - how long does it typically take to become proficient in machine learning?",
-    },
-    {
-      sender: "bot",
-      text: "The time it takes to become proficient in machine learning can vary greatly depending on your background, dedication, and learning pace. However, here's a rough timeline:\n\n- 3-6 months: Grasp the basics and start working on simple projects\n- 6-12 months: Comfortable with common ML algorithms and able to work on medium-complexity projects\n- 1-2 years: Proficient in various ML techniques and able to tackle complex problems\n\nRemember, continuous learning and practical application are key in this rapidly evolving field. Is there a specific area of ML you're most interested in?",
-    },
-    {
-      sender: "user",
-      text: "I'm particularly interested in natural language processing. Is that a good specialization within ML?",
-    },
-    {
-      sender: "bot",
-      text: "Absolutely! Natural Language Processing (NLP) is an exciting and rapidly growing subfield of machine learning. It's an excellent specialization for several reasons:\n\n1. High demand: Many companies need NLP experts for chatbots, sentiment analysis, and text classification.\n2. Diverse applications: From voice assistants to language translation, NLP has a wide range of real-world applications.\n3. Cutting-edge research: With models like GPT and BERT, NLP is at the forefront of AI innovation.\n4. Interdisciplinary nature: NLP combines linguistics, computer science, and ML, making it intellectually stimulating.\n\nIf you're interested in NLP, I'd recommend starting with the basics of text processing and then moving on to more advanced topics like word embeddings and deep learning for NLP. Would you like some NLP-specific resources?",
-    },
-    {
-      sender: "user",
-      text: "Yes, that would be great! Could you recommend some NLP-specific resources?",
-    },
-    {
-      sender: "bot",
-      text: "Certainly! Here are some excellent NLP-specific resources to get you started:\n\n1. Book: 'Natural Language Processing with Python' by Bird, Klein, and Loper\n2. Course: Stanford's CS224N: Natural Language Processing with Deep Learning\n3. Library: NLTK (Natural Language Toolkit) for Python\n4. Tutorial series: Sentiment Analysis with Python on Real Python\n5. Book: 'Speech and Language Processing' by Jurafsky and Martin\n6. Course: Fast.ai's 'Natural Language Processing' course\n\nThese resources cover a range of difficulty levels, so you can progress from beginner to more advanced topics. Don't hesitate to ask if you need any clarification or have more questions!",
-    },
   ];
   async function showChat() {
     await page.evaluate(insertSidePanel);
@@ -706,6 +704,15 @@ function browserController() {
         text: "Hello! Welcome to the Cambrian AI assistant. How can I help you today?",
       },
     ]);
+  }
+  async function showSidePanel() {
+    await page.evaluate(insertSidePanel);
+  }
+  async function clearSidePanel() {
+    await page.evaluate(() => {
+      const elementToRemove = document.getElementById("cambrianAiSidePanelWrapper"); // Replace '.className' with the class name of the elements you want to remove
+      if (elementToRemove) elementToRemove.remove();
+    });
   }
   async function filterPotentialAnchors(identifier) {
     return await page.evaluate(filterAnchors, identifier);
@@ -764,7 +771,7 @@ function browserController() {
     insertLabels,
     onPageLoad,
     scrollIntoView,
-    startRecorder,
+    showRecorder,
     setupSections,
     getCurrentSection,
     goToSection,
@@ -776,6 +783,7 @@ function browserController() {
     removeInvalidAnchors,
     showMemory,
     showChat,
+    showSidePanel,
   };
 }
 function parseDomain(url) {

@@ -57,7 +57,7 @@ export default function insertMemoryDisplay(initialData) {
   window.cambrianAiSidePanelChanges = new Set();
 
   // Create the memory display content
-  const memoryDisplayContent = window.cambrianAiSidePanelData
+  const memoryDisplayHTML = window.cambrianAiSidePanelData
     .map(
       (item, index) => `
     <div class="cambrian-ai-item" id="cambrian-ai-item-${index}">
@@ -118,12 +118,130 @@ export default function insertMemoryDisplay(initialData) {
   `
     )
     .join("");
-
+  const style = `
+    <style id="cambrian-ai-memory-display">
+      #cambrianAiSidePanelWrapper .cambrian-ai-item {
+        margin-bottom: 8px;
+        background-color: #333741;
+        border-radius: 5px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        display: flex;
+        flex-direction: column;
+        border: 1px solid black;
+        position: relative;
+        border: 1px dashed #0fff0e;
+        padding: 12px 12px;
+        opacity: 0.9;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-item:hover {
+        opacity: 1;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-item h3 {
+        margin-top: 0;
+        margin-bottom: 15px;
+        color: #333;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-field-container {
+        display: flex;
+        flex-direction: column;
+        margin-bottom: 10px;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-field-container label {
+        font-size: 14px;
+        color: #f0f2f2;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-field-container input, #cambrianAiSidePanelWrapper .cambrian-ai-field-container textarea {
+        border: none;
+        border-radius: 3px;
+        font-size: 14px;
+        width: 100%;
+        box-sizing: border-box;
+        box-shadow: none;
+        height: initial;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-field-container input:focus, #cambrianAiSidePanelWrapper .cambrian-ai-field-container textarea:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-field-container textarea {
+        resize: vertical;
+        min-height: 60px;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-read-only {
+        background-color: #f8f9fa;
+        color: #6c757d;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-save-button, #cambrianAiSidePanelWrapper .cambrian-ai-toggle-info-button {
+        background-color: #28a745;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-save-button:hover, #cambrianAiSidePanelWrapper .cambrian-ai-toggle-info-button:hover {
+        background-color: #218838;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-save-button {
+        visibility: hidden;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-toggle-info-button {
+        background-color: #17a2b8;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-toggle-info-button:hover {
+        background-color: #138496;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-additional-info {
+        margin-top: 15px;
+        border-top: 1px solid #dee2e6;
+        padding-top: 15px;
+        display: none;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-additional-info h4 {
+        margin-top: 0;
+        margin-bottom: 10px;
+        color: #495057;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-toggle-info-span {
+        color: #007bff;
+        cursor: pointer;
+        font-size: 14px;
+        display: inline-block;
+        top: -11px;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-toggle-info-span:hover {
+        text-decoration: underline;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-button-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-element-number {
+        position: absolute;
+        top: 5px;
+        right: 10px;
+        font-size: 14px;
+        color: black;
+        background: #0fff0e;
+        width: 20px;
+        height: 20px;
+        text-align: center;
+        border-radius: 52px;
+        cursor: pointer;
+      }
+    </style>
+  `;
+  const sidePanel = document.querySelector("#cambrianAiSidePanelWrapper");
+  if (!sidePanel.querySelector("style#cambrian-ai-memory-display")) {
+    sidePanel.insertAdjacentHTML("afterbegin", style);
+  }
   // Insert the memory display content
   const itemsContainer = document.querySelector(
     "#cambrianAiSidePanelWrapper .cambrian-ai-items-container"
   );
-  itemsContainer.innerHTML = memoryDisplayContent;
+  itemsContainer.innerHTML = memoryDisplayHTML;
 
   // Expose necessary functions to window object
   window.scrollToElement = scrollToElement;

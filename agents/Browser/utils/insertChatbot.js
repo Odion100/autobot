@@ -24,8 +24,8 @@ export default function insertChatbot(messages) {
     </div>
   `;
 
-  const chatbotStyle = `
-    <style>
+  const style = `
+    <style id="cambrian-ai-chat-display">
       #cambrianAiSidePanelWrapper .chat-bot {
         height: 100%;
         display: flex;
@@ -113,19 +113,27 @@ export default function insertChatbot(messages) {
       }
     </style>
   `;
-
-  // Insert the chatbot HTML and CSS into the side panel
+  const sidePanel = document.querySelector("#cambrianAiSidePanelWrapper");
+  if (!sidePanel.querySelector("style#cambrian-ai-chat-display")) {
+    sidePanel.insertAdjacentHTML("afterbegin", style);
+  }
+  // Insert the memory display content
   const itemsContainer = document.querySelector(
     "#cambrianAiSidePanelWrapper .cambrian-ai-items-container"
   );
-  const chatbotContainer = document.createElement("div");
-  chatbotContainer.innerHTML = chatbotStyle + chatbotHTML;
-  itemsContainer.appendChild(chatbotContainer);
+  itemsContainer.innerHTML = ` <div>${chatbotHTML}</div>`;
+  // Insert the chatbot HTML and CSS into the side panel
+  // const itemsContainer = document.querySelector(
+  //   "#cambrianAiSidePanelWrapper .cambrian-ai-items-container"
+  // );
+  // const chatbotContainer = document.createElement("div");
+  // chatbotContainer.innerHTML = chatbotHTML;
+  // itemsContainer.appendChild(chatbotContainer);
 
   // Get references to important elements
-  const sendButton = chatbotContainer.querySelector(".send-button");
-  const textareaField = chatbotContainer.querySelector(".chat-input textarea");
-  const messagesContainer = chatbotContainer.querySelector(".chat-messages");
+  const sendButton = itemsContainer.querySelector(".send-button");
+  const textareaField = itemsContainer.querySelector(".chat-input textarea");
+  const messagesContainer = itemsContainer.querySelector(".chat-messages");
 
   // Function to add a new message
   function addMessage(sender, text) {
