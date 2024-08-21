@@ -1,6 +1,6 @@
 export default function insertChatbot(messages) {
   const chatbotHTML = `
-    <div class="chat-bot">
+    <div id="chat-bot">
       <div class="chat-messages">
         ${messages
           .map(
@@ -26,8 +26,8 @@ export default function insertChatbot(messages) {
 
   const style = `
     <style id="cambrian-ai-chat-display">
-      #cambrianAiSidePanelWrapper .chat-bot {
-        height: 100%;
+      #cambrianAiSidePanelWrapper #chat-bot {
+        width: 350px;
         display: flex;
         flex-direction: column;
         background: #282c34;
@@ -35,11 +35,11 @@ export default function insertChatbot(messages) {
         border: 1px solid #c023a6;
         border: 1px dashed #0fff0e;
         border-radius: 5px;
-        max-height: 93vh;
+        max-height: 85vh;
         min-height: 33vh;
         opacity: .9;
       }
-      #cambrianAiSidePanelWrapper .chat-bot:hover {
+      #cambrianAiSidePanelWrapper #chat-bot:hover {
         opacity: 1;
       }
       #cambrianAiSidePanelWrapper .chat-messages {
@@ -119,16 +119,9 @@ export default function insertChatbot(messages) {
   }
   // Insert the memory display content
   const itemsContainer = document.querySelector(
-    "#cambrianAiSidePanelWrapper .cambrian-ai-items-container"
+    "#cambrianAiSidePanelWrapper .cambrian-ai-chat-container"
   );
-  itemsContainer.innerHTML = ` <div>${chatbotHTML}</div>`;
-  // Insert the chatbot HTML and CSS into the side panel
-  // const itemsContainer = document.querySelector(
-  //   "#cambrianAiSidePanelWrapper .cambrian-ai-items-container"
-  // );
-  // const chatbotContainer = document.createElement("div");
-  // chatbotContainer.innerHTML = chatbotHTML;
-  // itemsContainer.appendChild(chatbotContainer);
+  itemsContainer.innerHTML = chatbotHTML;
 
   // Get references to important elements
   const sendButton = itemsContainer.querySelector(".send-button");

@@ -9,7 +9,20 @@ export default async function getElementDescriptions({
   fullScreenshot,
   args = {},
   type,
+  progressCallback,
 }) {
+  let tasks;
+  if (progressCallback) {
+    console.log("setting up task list");
+    tasks = targetElements.map(({ number }) => ({
+      task: `Identifying element ${number}...`,
+      complete: false,
+      number,
+    }));
+    console.log("setting up task list", tasks);
+    progressCallback(tasks);
+  }
+
   if (!fullScreenshot) fullScreenshot = await driver.getScreenshot();
   console.log("targetElements", targetElements);
   console.log("fullScreenshot", fullScreenshot);
@@ -29,6 +42,15 @@ export default async function getElementDescriptions({
       images: [fullScreenshot, containerImage],
       ...args,
     });
+    if (tasks) {
+      console.log("updating progress");
+      tasks.forEach((task) => {
+        if (elementNumbers.includes(task.number)) task.complete = true;
+      });
+      console.log("updating progress", tasks);
+
+      await progressCallback(tasks);
+    }
     identifiedContainer.containerNumber = containerNumber;
     console.log("describeElement2", containerImage, identifiedContainer);
     return identifiedContainer;

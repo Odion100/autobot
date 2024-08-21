@@ -58,6 +58,16 @@ export async function save(domain, identifiers) {
   await collection.upsert(embeddingData);
   return identifiers;
 }
+export async function deleteItem(domain, identifiers) {
+  const collection = await vectorStore.getOrCreateCollection({
+    name: domain,
+    embeddingFunction: embeddingFunction(),
+    metadata: { "hnsw:space": "cosine" },
+  });
+  console.log("saving selectors", domain, identifiers);
+  const ids = identifiers.map(({ id }) => id);
+  await collection.delete({ ids });
+}
 export async function get(domain, where = {}) {
   const collection = await vectorStore.getOrCreateCollection({
     name: domain,
@@ -194,7 +204,7 @@ function embeddingFunction() {
     },
   };
 }
-const selectorStore = { save, search, quickSearch, clear, get };
+const selectorStore = { save, search, quickSearch, clear, get, delete: deleteItem };
 export default selectorStore;
 
 // get("ebay_com").then(console.log).catch(console.error);

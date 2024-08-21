@@ -1,5 +1,6 @@
 import puppeteer from "puppeteer";
 import injectMemoryDisplay from "./injectMemoryDisplay.js";
+import insertLoadingComponent from "./insertLoadingComponent.js";
 import insertChatbot from "./insertChatbot.js";
 import insertSidePanel from "./insertSidePanel.js";
 import getContentContainers from "./getContentContainers.js";
@@ -62,9 +63,11 @@ function browserController() {
         if (browserState.interactions.length) {
           const { elementDescriptions } = await getElementDescriptions({
             targetElements: browserState.interactions,
+            progressCallback: showLoading,
           });
           clearContainers();
           await saveSelectors(elementDescriptions);
+          await clearLoading();
           showMemory();
         } else {
           clearContainers();
@@ -78,6 +81,11 @@ function browserController() {
         if (identifier) await saveSelectors(identifier);
         console.log("Updating Identifier:", identifier);
       });
+      await page.exposeFunction("deleteIdentifier", async (identifier) => {
+        await deleteIdentifiers([identifier]);
+        await showMemory();
+        console.log("Deleting Identifier:", identifier);
+      });
       await page.exposeFunction("showChat", async () => {
         await showChat();
       });
@@ -87,6 +95,7 @@ function browserController() {
       await page.exposeFunction("showRecorder", async () => {
         await showRecorder();
       });
+      await page.exposeFunction("clearContainers", clearContainers);
       page.on("load", async function () {
         console.log("page load event --->");
         browserState.lastPage = browserState.currentPage;
@@ -98,7 +107,7 @@ function browserController() {
         browserState.labeledElements = [];
         browserState.interactions = [];
         browserState.scrollHeight = 0;
-        showSidePanel();
+        showChat();
       });
       const dimensions = await page.evaluate(() => {
         return {
@@ -500,6 +509,10 @@ function browserController() {
     const domain = parseDomain(page.url());
     await selectorStore.save(domain, newIdentifiers);
   }
+  async function deleteIdentifiers(identifiers) {
+    const domain = parseDomain(page.url());
+    await selectorStore.delete(domain, identifiers);
+  }
   async function saveIdentifier(identifier, element) {
     console.log("saveIdentifier", identifier);
     if (identifier.usage) {
@@ -546,7 +559,7 @@ function browserController() {
   }
 
   async function showRecorder() {
-    clearSidePanel();
+    hideSidePanel();
     await clearContainers();
     await setContainers();
 
@@ -614,7 +627,7 @@ function browserController() {
 
       // Function to handle clicks on interactive elements
       function clickHandler(event) {
-        console.log("clickHandler");
+        console.log("clickHandler", watchList, event.target);
         const element = event.target;
         const identifier = window.watchList.find(({ selector }) =>
           element.matches(selector)
@@ -651,6 +664,9 @@ function browserController() {
         console.log("stopping the recorder");
         document.removeEventListener("click", clickHandler, true);
         window.recordingComplete();
+        document
+          .querySelector("#cambrian-ai-containers .cambrian-ai-side-button-holder")
+          .remove();
       }
       // Get a reference to the inserted button
       const button = document.getElementById("stopRecorderButton");
@@ -708,10 +724,20 @@ function browserController() {
   async function showSidePanel() {
     await page.evaluate(insertSidePanel);
   }
-  async function clearSidePanel() {
+  async function showLoading(tasklist) {
+    await page.evaluate(insertLoadingComponent, tasklist);
+  }
+
+  async function clearLoading(containerId = "cambrian-ai-loading-component-container") {
+    await page.evaluate((containerId) => {
+      const loadingComponent = document.getElementById(containerId); // Replace '.className' with the class name of the elements you want to remove
+      if (loadingComponent) loadingComponent.remove();
+    }, containerId);
+  }
+  async function hideSidePanel() {
     await page.evaluate(() => {
-      const elementToRemove = document.getElementById("cambrianAiSidePanelWrapper"); // Replace '.className' with the class name of the elements you want to remove
-      if (elementToRemove) elementToRemove.remove();
+      const sidePanel = document.getElementById("cambrianAiSidePanelWrapper"); // Replace '.className' with the class name of the elements you want to remove
+      if (sidePanel) sidePanel.style.display = "none";
     });
   }
   async function filterPotentialAnchors(identifier) {
@@ -784,6 +810,9 @@ function browserController() {
     showMemory,
     showChat,
     showSidePanel,
+    showLoading,
+    clearLoading,
+    deleteIdentifiers,
   };
 }
 function parseDomain(url) {
