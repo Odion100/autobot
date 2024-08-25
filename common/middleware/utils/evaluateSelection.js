@@ -4,7 +4,7 @@ async function evaluateAnchoredSelector(identifier, mwData) {
   const potentialAnchors = await driver.filterPotentialAnchors(identifier);
   const potentialIdentifiers = [];
   for (const anchor of potentialAnchors) {
-    const { containerNumber } = driver.addContainer(anchor);
+    const { containerNumber } = await driver.addContainer(anchor);
     potentialIdentifiers.push({
       ...identifier,
       container: anchor,
@@ -16,8 +16,13 @@ async function evaluateAnchoredSelector(identifier, mwData) {
   if (potentialIdentifiers.length === 1) return potentialIdentifiers[0];
   if (potentialIdentifiers.length > 1) {
     const fullScreenshot = await driver.getScreenshot();
-    const { fn, args } = mwData;
+    const {
+      fn,
+      args,
+      agents: { ElementIdentifier },
+    } = mwData;
     const { fullMatch } = await driver.getElementDescriptions({
+      ElementIdentifier,
       targetElements: potentialIdentifiers,
       fullScreenshot,
       args,

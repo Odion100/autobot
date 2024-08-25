@@ -5,17 +5,23 @@ export async function compareElements(
   targetElements,
   fullScreenshot,
   type,
-  { args, agents }
+  { args, agents: { ElementIdentifier } }
 ) {
   const { elementDescriptions, fullMatchContainers, partialMatchContainers, fullMatch } =
-    await driver.getElementDescriptions({ targetElements, fullScreenshot, args, type });
+    await driver.getElementDescriptions({
+      ElementIdentifier,
+      targetElements,
+      fullScreenshot,
+      args,
+      type,
+    });
   args.searchedContainers = args.targetContainers;
   args.searchedElements = elementDescriptions.filter(
     ({ matchesCriteria }) => matchesCriteria === "no-match"
   );
   args.fullMatchContainers = fullMatchContainers.length ? fullMatchContainers : null;
 
-  driver.cacheSelectors(elementDescriptions);
+  if (elementDescriptions.length) driver.cacheSelectors(elementDescriptions);
 
   if (fullMatch) return { results: [fullMatch], distances: [0.2] };
   if (!elementDescriptions.length) return { results: [], distances: [] };

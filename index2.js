@@ -2,12 +2,14 @@ import readline from "readline";
 import driver from "./common/driver/index.js";
 import BrowserAgent from "./agencies/WebTaskExecutor/index.js";
 import { deleteScreenshots } from "./common/utils/index.js";
+import ElementIdentifier from "./agents/ElementIdentifier.js";
 const state = { messages: [] };
 async function startLineReader() {
   const lineReader = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
+  driver.init({ agents: { ElementIdentifier } });
   await driver.navigate("https://egate.smithdrug.com");
   // await driver.setContainers();
   // await driver.getScreenShot();

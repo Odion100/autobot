@@ -40,7 +40,7 @@ export default function getContentContainers(chunkSize, elementLimit) {
         while ((sib = sib.previousElementSibling)) {
           if (sib.nodeName.toLowerCase() == selector) nth++;
         }
-        if (nth != 1) selector += ":nth-of-type(" + nth + ")";
+        selector += ":nth-of-type(" + nth + ")";
       }
       path.unshift(selector);
       el = el.parentNode;

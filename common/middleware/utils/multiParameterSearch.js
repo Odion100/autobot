@@ -20,15 +20,19 @@ export async function multiParameterSearch(identifiers, args, filter) {
     identifier.totalSearches = 0;
   }
   async function paramSearch(param) {
-    const searchDocs = identifiers.reduce((acc, identifier) => {
+    const filteredIdentifiers = identifiers.reduce((acc, identifier) => {
       if (identifier[param] && args[param]) {
         acc.push({ ...identifier, doc: identifier[param] });
       }
       return acc;
     }, []);
-    // console.log("searchDocs, param", searchDocs, param);
+    // console.log("filteredIdentifiers, param", filteredIdentifiers, param);
     const searchTerm = args[param];
-    const { results, distances } = await driver.f(searchDocs, searchTerm, filter);
+    const { results, distances } = await driver.compareIdentifiers(
+      filteredIdentifiers,
+      searchTerm,
+      filter
+    );
     results.forEach(({ id }, i) => {
       const identifier = identifiers.find((item) => item.id === id);
       identifier.totalDistance += distances[i];

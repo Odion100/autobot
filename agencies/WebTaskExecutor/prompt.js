@@ -3,9 +3,9 @@ export default function prompt({ input, state } = {}) {
 
   1. navigate({ url }): Navigates to the given URL.
   
-  2. click({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality }): Clicks on the first element matching a natural language search for the item you want to click.
+  2. click({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, domainMemoryId }): Clicks on the first element matching a natural language search for the item you want to click.
   
-  3. type({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, inputText }): Types the given text into the first element matching a natural language search for the input to type into.
+  3. type({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, inputText, domainMemoryId }): Types the given text into the first element matching a natural language search for the input to type into.
   
   4. saveContent({ content }): Use this function to collect any data you can see on the screen. The content argument should be a list of the data collected in CSV format.
   

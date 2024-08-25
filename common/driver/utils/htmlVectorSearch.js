@@ -71,7 +71,7 @@ export async function findElements(
 
   await collection.add(embeddingData);
   const results = await collection.query({ queryTexts, nResults, where });
-  // console.log("results12", results, queryTexts, where);
+  console.log("results12", results, queryTexts, where);
   // console.log("results12", results, results.metadatas[0], queryTexts);
   return {
     results: results.metadatas[0],

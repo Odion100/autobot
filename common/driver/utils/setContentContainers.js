@@ -28,13 +28,18 @@ export default function setContentContainers(contentContainers) {
   const windowWidth = window.innerWidth;
   const windowHeight = window.innerHeight;
   const existingContainer = document.querySelector(`#cambrian-ai-containers`);
-  if (existingContainer) existingContainer.remove();
+  // if (existingContainer) existingContainer.remove();
   let zIndex = 200000;
-  const boxContainer = document.createElement("div");
-  document.body.appendChild(boxContainer);
-  boxContainer.id = `cambrian-ai-containers`;
+  const boxContainer = existingContainer
+    ? existingContainer
+    : document.createElement("div");
 
-  contentContainers.forEach(({ selector, label: lb }, i) => {
+  if (!existingContainer) {
+    document.body.appendChild(boxContainer);
+    boxContainer.id = `cambrian-ai-containers`;
+  }
+
+  contentContainers.forEach(({ selector, containerNumber }) => {
     const element = document.querySelector(selector);
     if (!element) return; // Skip if element is not found
 
@@ -65,7 +70,7 @@ export default function setContentContainers(contentContainers) {
     box.style.border = "2px solid red";
     box.style.pointerEvents = "none";
     box.style.zIndex = `${zIndex}`;
-    box.id = `container_${i + 1}`;
+    box.id = `container_${containerNumber}`;
     box.setAttribute("data-selector", selector);
     // Add a box with number in the top right corner
     // const label = document.createElement("div");

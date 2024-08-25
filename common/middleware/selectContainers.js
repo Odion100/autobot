@@ -8,7 +8,7 @@ export async function selectContainers(mwData, next) {
   if (containerName) {
     const identifiers = await driver.getSelectors({ containerName });
     if (identifiers.length) {
-      args.targetContainers = [driver.addContainer(identifiers[0].container)];
+      args.targetContainers = [await driver.addContainer(identifiers[0].container)];
     }
   }
 

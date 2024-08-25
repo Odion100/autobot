@@ -61,8 +61,9 @@ function browserController() {
       });
 
       await page.exposeFunction("recordingComplete", async (interaction) => {
-        console.log("internalState.interactions", internalState.interactions);
         if (internalState.interactions.length) {
+          console.log("internalState.agents:", internalState.agents);
+
           const { elementDescriptions } = await getElementDescriptions({
             targetElements: internalState.interactions,
             progressCallback: showLoading,
@@ -79,7 +80,7 @@ function browserController() {
         }
         internalState.interactions = [];
 
-        console.log("Interaction recorded:", interaction);
+        console.log("Interaction recorded2:", interaction);
       });
       await page.exposeFunction("updateIdentifier", async (identifier) => {
         if (identifier) await saveSelectors(identifier);
@@ -110,7 +111,7 @@ function browserController() {
         internalState.labeledElements = [];
         internalState.interactions = [];
         internalState.scrollHeight = 0;
-        showChat();
+        // showChat();
       });
       const dimensions = await page.evaluate(() => {
         return {
@@ -143,20 +144,44 @@ function browserController() {
       5
     );
   }
-  function addContainer(selector) {
-    const existingContainer = internalState.containers.find(
-      (container) => selector === container.selector
+  async function addContainer(selector) {
+    console.log("addContainer length", internalState.containers.length);
+    const { updatedContainers, newContainer } = await page.evaluate(
+      function (containers, selector) {
+        console.log("containers, selector", containers, selector);
+        const newContainerElement = document.querySelector(selector);
+        if (!newContainerElement) return;
+        const existingContainer = containers.find((container) =>
+          newContainerElement.matches(container.selector)
+        );
+        let newContainer;
+        if (existingContainer) {
+          existingContainer.selector = selector;
+          newContainer = existingContainer;
+        } else {
+          newContainer = {
+            containerNumber: containers.length + 1,
+            html: "",
+            innerText: "",
+            selector,
+          };
+          containers.push(newContainer);
+        }
+        return { updatedContainers: containers, newContainer };
+      },
+      internalState.containers,
+      selector
     );
-    if (existingContainer) return existingContainer;
-    const container = {
-      containerNumber: internalState.containers.length + 1,
-      html: "",
-      innerText: "",
-      selector,
-    };
-
-    internalState.containers.push(container);
-    return container;
+    console.log(
+      "updatedContainers.length , internalState.containers",
+      updatedContainers.length,
+      internalState.containers.length
+    );
+    if (updatedContainers.length > internalState.containers.length)
+      await insertContainer(newContainer);
+    console.log("updatedContainers, newContainer", updatedContainers, newContainer);
+    internalState.containers = updatedContainers;
+    return newContainer;
   }
   async function viewFilter(identifiers) {
     return await page.evaluate(getViewport, identifiers);
@@ -258,16 +283,7 @@ function browserController() {
 
     return filteredIdentifiers;
   }
-  //1. insert label into the container so that they are hidden with them
-  // - create a function called insertLabels
-  // - container number must be added in the getContentContainers function
-  // - containerNumber must then be added to the htmlVectorSearch
-  // - it will take a list of identifiers and use the containerNumber to insert it
-  // - show and hide only the target container when getting descriptions
-  // - hideContainers and show... need to loop through all containers
-  // - hideContainers needs a excludeNumber for the second parameter
-  //--next
-  // add getScreen shot method to the BrowserController
+
   async function insertLabels(identifiers) {
     await page.evaluate(insertContainerLabels, identifiers);
   }
@@ -332,17 +348,21 @@ function browserController() {
   }
 
   async function setContainers(chunkSize, elementLimit) {
+    console.log("internalState.containers.length", internalState.containers.length);
     if (internalState.containers.length) return await showContainers();
 
-    const html = await page.content();
     internalState.containers = await page.evaluate(
       getContentContainers,
       chunkSize,
       elementLimit
     );
+    console.log("internalState.containers", internalState.containers);
 
     await page.evaluate(setContentContainers, internalState.containers);
     return "setting search containers";
+  }
+  async function insertContainer(container) {
+    await page.evaluate(setContentContainers, [container]);
   }
   async function clearContainers() {
     await page.evaluate(() => {
@@ -475,8 +495,8 @@ function browserController() {
     const hidden = await page.evaluate(
       (numbers, display) => {
         for (number of numbers) {
-          const selector = `#cambrian-ai-containers > div:nth-child(${number})`;
-          const element = document.querySelector(selector);
+          const selector = `#container_${number}`;
+          const element = document.getElementById(selector);
           if (element) element.style.display = display;
         }
       },
@@ -679,16 +699,20 @@ function browserController() {
     await hideContainers();
     const identifiedContainers = [];
     const uniqueContainers = [];
-    const identifiers = filteredMemory.map((item, i) => {
-      const container = addContainer(item.container);
-
+    const identifiers = [];
+    let number = 1;
+    for (const item of filteredMemory) {
+      const container = await addContainer(item.container);
       const { containerNumber } = container;
+
       if (!uniqueContainers.includes(containerNumber)) {
         identifiedContainers.push(container);
         uniqueContainers.push(containerNumber);
       }
-      return { ...item, number: i + 1, containerNumber };
-    });
+
+      identifiers.push({ ...item, number, containerNumber });
+      number++;
+    }
     await showContainers(
       identifiedContainers.map(({ containerNumber }) => containerNumber)
     );
@@ -810,7 +834,10 @@ function browserController() {
     clearLoading,
     deleteIdentifiers,
     compareIdentifiers: selectorStore.quickSearch,
-    getElementDescriptions,
+    getElementDescriptions: function (params) {
+      params.driver = driver;
+      return getElementDescriptions(params);
+    },
   };
 }
 function parseDomain(url) {
