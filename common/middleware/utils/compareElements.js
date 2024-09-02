@@ -17,7 +17,7 @@ export async function compareElements(
     });
   args.searchedContainers = args.targetContainers;
   args.searchedElements = elementDescriptions.filter(
-    ({ matchesCriteria }) => matchesCriteria === "no-match"
+    ({ matchQuality }) => matchQuality === "no-match"
   );
   args.fullMatchContainers = fullMatchContainers.length ? fullMatchContainers : null;
 
@@ -26,10 +26,10 @@ export async function compareElements(
   if (fullMatch) return { results: [fullMatch], distances: [0.2] };
   if (!elementDescriptions.length) return { results: [], distances: [] };
   const filteredElements = elementDescriptions.filter(
-    ({ matchesCriteria }) => matchesCriteria !== "no-match"
+    ({ matchQuality }) => matchQuality !== "no-match"
   );
   console.log("filteredElements xx-->>", filteredElements);
   if (!filteredElements.length) return { results: [], distances: [] };
 
-  return await multiParameterSearch(filteredElements, args, { type });
+  return await driver.compareIdentifiers(filteredElements, args, { type });
 }

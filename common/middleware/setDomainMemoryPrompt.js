@@ -1,11 +1,10 @@
-import driver from "../../driver/index.js";
-import { removeDuplicates } from "../../utils/index.js";
+import driver from "../driver/index.js";
+import { removeDuplicates } from "../utils/index.js";
 
-export async function domainMemory(state) {
+export async function setDomainMemoryPrompt({ state }, next) {
   if (!state.domainMemory) return "";
   const savedIdentifiers = await driver.pageFilter(state.domainMemory);
   const filteredIdentifiers = removeDuplicates(savedIdentifiers, "selector");
-  console.log("domainMemory filteredIdentifiers.length", filteredIdentifiers);
   if (filteredIdentifiers.length) {
     const containers = filteredIdentifiers.reduce(
       (acc, { containerName, containerFunctionality }) => {
@@ -19,7 +18,6 @@ export async function domainMemory(state) {
     let xmlContent = '<?xml version="1.0" encoding="UTF-8"?>\n<domain-memory>\n';
     xmlContent +=
       "  <description>Following is a list of parameters for containers and elements you've previously identified on this page.</description>\n";
-    console.log("containers domainMemory", containers);
     for (const [index, container] of containers.entries()) {
       const { containerName, containerFunctionality } = container;
       xmlContent += `  <container id="${index + 1}">\n`;
@@ -50,10 +48,12 @@ export async function domainMemory(state) {
       "    <instruction>IMPORTANT: Remember to use the domainMemoryId when calling type and click functions using domain memory.</instruction>\n";
     xmlContent += "  </instructions>\n";
     xmlContent += "</domain-memory>";
-    return xmlContent;
+    state.domainMemoryPrompt = xmlContent;
+
+    return next();
   }
-  console.log("state.domainMemory", state.domainMemory);
-  return "";
+  state.domainMemoryPrompt = "<domain-memory>No items on this page</domain-memory>";
+  next();
 }
 function escapeXml(unsafe) {
   return unsafe.replace(/[<>&'"]/g, function (c) {

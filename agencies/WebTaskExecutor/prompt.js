@@ -61,5 +61,8 @@ export default function prompt({ input, state } = {}) {
   - THE ARGUMENTS OF THE TYPE AND CLICK FUNCTIONS MUST COME FROM INFORMATION GATHERED FROM THE SCREENSHOTS YOU WILL RECEIVE OR FROM THE DOMAIN MEMORY DOCUMENT YOU WILL RECEIVE.
   - DO NOT MAKE ASSUMPTIONS ABOUT TEXT OUTSIDE OF THE CURRENT SCREENSHOT. Before submitting, verify that you have not made assumptions about content outside the visible area.
   Good luck!
+
+  ## Domain Memory
+  ${state.domainMemoryPrompt}
   `;
 }

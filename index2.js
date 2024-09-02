@@ -3,13 +3,16 @@ import driver from "./common/driver/index.js";
 import BrowserAgent from "./agencies/WebTaskExecutor/index.js";
 import { deleteScreenshots } from "./common/utils/index.js";
 import ElementIdentifier from "./agents/ElementIdentifier.js";
+import Agentci from "agentci";
+import fs from "fs";
 const state = { messages: [] };
 async function startLineReader() {
   const lineReader = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
-  driver.init({ agents: { ElementIdentifier } });
+
+  driver.init({ agents: { ElementIdentifier: Agentci().rootAgent(ElementIdentifier) } });
   await driver.navigate("https://egate.smithdrug.com");
   // await driver.setContainers();
   // await driver.getScreenShot();
@@ -43,7 +46,23 @@ async function startLineReader() {
       state.abort = false;
       try {
         const response = await BrowserAgent.invoke(input, state);
-
+        const messages = state.messages.map((message) => {
+          if (Array.isArray(message.content)) {
+            return {
+              ...message,
+              content: message.content.map((content) => ({
+                ...content,
+                image_url: "",
+              })),
+            };
+          } else {
+            return message;
+          }
+        });
+        fs.writeFileSync(
+          "/Users/odionedwards/autobot/state.json",
+          JSON.stringify(messages, null, 2)
+        );
         console.log("response", response);
       } catch (error) {
         console.log("error output:", error);

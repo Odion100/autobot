@@ -24,13 +24,11 @@ export async function compareContainers(containers, { args, agents }) {
   }
   driver.clearLabels();
   const fullMatch = identifiedContainers.filter(
-    ({ matchesCriteria }) => matchesCriteria === "full-match"
+    ({ matchQuality }) => matchQuality === "full-match"
   );
   console.log("compare containers identifiedContainers", identifiedContainers);
   console.log("compare containers fullMatch", fullMatch);
   return fullMatch.length
     ? fullMatch
-    : identifiedContainers.filter(
-        ({ matchesCriteria }) => matchesCriteria !== "no-match"
-      );
+    : identifiedContainers.filter(({ matchQuality }) => matchQuality !== "no-match");
 }

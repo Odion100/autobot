@@ -1,4 +1,4 @@
-export const executionReminder = `
+export const EXECUTION_REMINDER = `
 <?xml version="1.0" encoding="UTF-8"?>
 <execution-reminder>
   <introduction>As you continue, answer the following questions:</introduction>
@@ -50,7 +50,7 @@ export const executionReminder = `
   </important-reminders>
 </execution-reminder>
 `;
-export const searchHelpMessage = `Please revise your search terms for selecting the container and element you want to interact with by following these steps:
+export const SEARCH_HELP_MESSAGE = `Please revise your search terms for selecting the container and element you want to interact with by following these steps:
 
 1. Examine the screenshot to identify the target element.
 2. Double check to make sure that the target element is actually in the screenshot.

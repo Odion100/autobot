@@ -28,7 +28,7 @@ Use the identifyElements function to provide information about the container and
 
 - containerName: Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel".
 - containerFunctionality: Describe the container's specific purpose and its functionality as it relates to this specific item on the web page. 
-- matchesCriteria: Indicate whether this container matches the specified search criteria regarding the target container (enum: "full-match", "partial-match", "no-match").
+- matchQuality: Indicate whether this container matches the specified search criteria regarding the target container (enum: "full-match", "partial-match", "no-match").
 - positionRefresh: Assess the likelihood of the container's position changing when the page is refreshed or revisited on another day.s. Use "dynamic" if the container's position is likely to change, or "static" if it's likely to remain in the same place. Consider these factors:
   - "static": Use for elements that are part of the page's permanent structure, such as headers, footers, main navigation menus, or fixed product information panels. 
     Examples: "Header Navigation Menu", "Site-wide Footer", "Fixed Sidebar", "Main Product Description Container", "Website Logo", "Primary Call-to-Action Button".
@@ -39,7 +39,7 @@ Use the identifyElements function to provide information about the container and
   - elementNumber: The highlighted element's ID number (top-right corner of the green box). Use 0 if the highlighted area doesn't contain an actual element within its borders.
   - elementName: A distinguishing name or label for the element based on its visible content or functionality. Use "n/a" if the highlighted area doesn't contain an actual element.
   - elementFunctionality: Describe the element's specific purpose and functionality in relation to its component and the entire page. Use "n/a" if the highlighted area doesn't contain an actual element.
-  - matchesCriteria: Indicate whether this element matches the specified criteria (enum: "full-match", "partial-match", "no-match"). Use "no-match" if the highlighted area doesn't contain an actual element.
+  - matchQuality: Indicate whether this element matches the specified criteria (enum: "full-match", "partial-match", "no-match"). Use "no-match" if the highlighted area doesn't contain an actual element.
 
 If the focus screenshot does not contain any highlighted elements, use the noHighlightedElements function instead.
 
@@ -62,7 +62,7 @@ Chain of Thought Process:
         - How closely does it match each criterion?
         - Is it a full match, partial match, or no match?
    b. If it doesn't contain an actual element:
-      - Use 0 for elementNumber and "n/a" for elementName, elementFunctionality, and set matchesCriteria to "no-match"
+      - Use 0 for elementNumber and "n/a" for elementName, elementFunctionality, and set matchQuality to "no-match"
 
 4. After examining all elements:
    - Which element(s), if any, best match the criteria?
@@ -77,7 +77,7 @@ Chain of Thought Process:
 6. Formulate your response:
    - If there are highlighted elements, create an object for each container and its highlighted elements using the identifyElements function
    - If there are no highlighted elements, use the noHighlightedElements function
-   - Set matchesCriteria appropriately for containers and elements based on how well they match the specified criteria
+   - Set matchQuality appropriately for containers and elements based on how well they match the specified criteria
    - Ensure all descriptions and names use specific, unique identifiers from the actual page content
 
 Provide your answer in this format:
@@ -87,7 +87,7 @@ identifyElements([
   {
     containerName: "iPhone 14 Pro Product Configuration and Purchase Container",
     containerFunctionality: "Presents the 'iPhone 14 Pro' product page, showcasing its features, color options, storage capacities, and allowing users to customize and add the product to their cart.",
-    matchesCriteria: "partial-match",
+    matchQuality: "partial-match",
     positionRefresh: "static",
     positionRefreshConfidence: 4,
     identifiedElements: [
@@ -95,19 +95,19 @@ identifyElements([
         elementNumber: 1,
         elementFunctionality: "Adds the customized iPhone 14 Pro to the user's shopping cart with the selected color (Deep Purple), storage capacity (256GB), and other chosen options",
         elementName: "iPhone 14 Pro 'Add to Bag' Purchase Initiation Button",
-        matchesCriteria: "full-match"
+        matchQuality: "full-match"
       },
       {
         elementNumber: 2,
         elementFunctionality: "Allows users to select their preferred color for the iPhone 14 Pro, updating the product image and selected configuration accordingly",
         elementName: "iPhone 14 Pro Color Selection Swatch Row",
-        matchesCriteria: "no-match"
+        matchQuality: "no-match"
       },
       {
         elementNumber: 0,
         elementFunctionality: "n/a",
         elementName: "n/a",
-        matchesCriteria: "no-match"
+        matchQuality: "no-match"
       }
       // Include all other highlighted elements here, maintaining specificity to the page content
     ]
@@ -133,9 +133,9 @@ Guidelines:
 1. Describe all highlighted elements and their containers, regardless of whether they match the criteria.
 2. Provide clear, concise, and SPECIFIC descriptions and names for each element and container based specific details of the item and its container.
 3. The element's ID number is in the top-right corner of the highlighted green box.
-4. Set matchesCriteria appropriately for both containers and elements based on how well they match the specified criteria.
+4. Set matchQuality appropriately for both containers and elements based on how well they match the specified criteria.
 5. If no elements or containers fully match the criteria, consider partial matches and explain your reasoning using specific details from the page.
-6. If absolutely no elements or containers match or partially match the criteria, set matchesCriteria to "no-match" for all.
+6. If absolutely no elements or containers match or partially match the criteria, set matchQuality to "no-match" for all.
 7. Remember to include all highlighted elements and their containers when calling identifyElements.
 8. Articulate your reasoning process as you analyze the screenshots and identify all elements and containers, using specific examples and unique identifiers from the page content.
 9. Explain any ambiguities, partial matches, or difficulties in determining matches, referring to specific features or text content visible on the page.
@@ -161,7 +161,7 @@ const schema = [
             type: "string",
             description: `Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel. For ALL containerName values, use highly specific, distinguishing labels that uniquely identify container. Avoid generic terms like "product container", "search results". Instead, use names that precisely describe the element's unique role or content on this specific page, such as "iPhone 14 Pro configuration panel" or "Prime Video categories dropdown".`,
           },
-          matchesCriteria: {
+          matchQuality: {
             type: "string",
             description:
               "Indicating whether this container matches the specified search criteria regarding the target container (enum: full-match, partial-match, no-match).",
@@ -195,7 +195,7 @@ const schema = [
                   type: "string",
                   description: `Provide a specific, distinguishing name or label for the element based on its visible details or functionality. Use distinguishing functionality or exact text content. Use 'n/a' if the highlighted area doesn't contain an actual element.`,
                 },
-                matchesCriteria: {
+                matchQuality: {
                   type: "string",
                   description:
                     "Indicating whether this element matches the specified criteria (enum: full-match, partial-match, no-match). Use 'no-match' if the highlighted area doesn't contain an actual element.",
@@ -265,7 +265,7 @@ export default function ElementIdentifier() {
   };
 
   this.noHighlightedElements = async function (results, { state }) {
-    return { matchesCriteria: "no-match", identifiedElements: [] };
+    return { matchQuality: "no-match", identifiedElements: [] };
   };
 
   this.before("$invoke", function ({ state }, next) {

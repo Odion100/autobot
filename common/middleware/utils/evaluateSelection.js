@@ -12,7 +12,6 @@ async function evaluateAnchoredSelector(identifier, mwData) {
       containerNumber,
     });
   }
-  console.log("potentialIdentifiers:", potentialIdentifiers);
   if (potentialIdentifiers.length === 1) return potentialIdentifiers[0];
   if (potentialIdentifiers.length > 1) {
     const fullScreenshot = await driver.getScreenshot();
@@ -32,7 +31,6 @@ async function evaluateAnchoredSelector(identifier, mwData) {
   }
 }
 export async function evaluateSelection(elementIdentifiers, distances, mwData) {
-  console.log("elementIdentifiers/:", elementIdentifiers);
   const { args, agents } = mwData;
   const { VisualConfirmation } = agents;
   for (const i in elementIdentifiers) {
@@ -46,7 +44,6 @@ export async function evaluateSelection(elementIdentifiers, distances, mwData) {
           const element = await driver.selectElement(identifier);
           if (element) {
             args.identifier = identifier;
-            console.log("args.identifier", args.identifier);
             return element;
           }
         } else {
@@ -60,10 +57,8 @@ export async function evaluateSelection(elementIdentifiers, distances, mwData) {
               image,
               ...args,
             });
-            console.log("isMatch", isMatch);
             if (isMatch) {
               args.identifier = identifier;
-              console.log("args.identifier", args.identifier);
               return element;
             }
           }

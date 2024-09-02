@@ -112,7 +112,7 @@ export async function findContainers(
       name: "test5",
     });
   } catch (error) {
-    console.log(error);
+    console.log("test5", error);
   }
 
   const collection = await vectorStore.createCollection({

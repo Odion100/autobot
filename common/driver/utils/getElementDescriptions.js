@@ -66,15 +66,15 @@ export default async function getElementDescriptions({
   const partialMatchContainers = [];
 
   for (const identifiedContainer of identifiedContainers) {
-    if (identifiedContainer.matchesCriteria === "full-match")
+    if (identifiedContainer.matchQuality === "full-match")
       fullMatchContainers.push({
         ...driver.getContainer(identifiedContainer.containerNumber),
-        matchesCriteria: "full-match",
+        matchQuality: "full-match",
       });
-    if (identifiedContainer.matchesCriteria === "partial-match")
+    if (identifiedContainer.matchQuality === "partial-match")
       partialMatchContainers.push({
         ...driver.getContainer(identifiedContainer.containerNumber),
-        matchesCriteria: "partial-match",
+        matchQuality: "partial-match",
       });
 
     for (const identifier of identifiedContainer.identifiedElements) {
@@ -87,7 +87,7 @@ export default async function getElementDescriptions({
         identifier.containerFunctionality = identifiedContainer.containerFunctionality;
         identifier.positionRefresh = identifiedContainer.positionRefresh;
         elementDescriptions.push(identifier);
-        if (identifier.matchesCriteria === "full-match" && identifier.type === type) {
+        if (identifier.matchQuality === "full-match" && identifier.type === type) {
           fullMatch = identifier;
           console.log("fullMatch", fullMatch);
         }

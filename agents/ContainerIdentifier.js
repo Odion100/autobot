@@ -22,7 +22,7 @@ Use the identifyContainers function to provide information about each highlighte
 - containerName: Provide a concise, specific label for the container based on its content visible on the page, e.g., "Wireless Headphones XH-2000 Product Details and Purchase Options Panel".
 - containerFunctionality: Describe the container's specific purpose and its functionality as it relates to this specific item on the web page. 
 - containerText: Provide the main text content visible within the container, if any.
-- matchesCriteria: Indicate whether this container matches the specified search criteria (enum: "full-match", "partial-match", "no-match").
+- matchQuality: Indicate whether this container matches the specified search criteria (enum: "full-match", "partial-match", "no-match").
 - positionRefresh: Assess the likelihood of the container's position changing when the page is refreshed or revisited on another day. Use "dynamic" if the container's position is likely to change, or "static" if it's likely to remain in the same place. Consider these factors:
   - "static": Use for elements that are part of the page's permanent structure, such as headers, footers, main navigation menus, or fixed product information panels. 
     Examples: "Header Navigation Menu", "Site-wide Footer", "Fixed Sidebar", "Main Product Description Container", "Website Logo", "Primary Call-to-Action Button".
@@ -57,7 +57,7 @@ Chain of Thought Process:
 
 5. Formulate your response:
    - Create an object for each highlighted container using the identifyContainers function
-   - Set matchesCriteria appropriately for containers based on how well they match the specified criteria
+   - Set matchQuality appropriately for containers based on how well they match the specified criteria
    - Ensure all descriptions and names use specific, unique identifiers from the actual page content
    - If no containers are highlighted, return an empty array
 
@@ -70,7 +70,7 @@ identifyContainers([
     containerName: "iPhone 14 Pro Product Configuration and Purchase Container",
     containerFunctionality: "Presents the 'iPhone 14 Pro' product page, showcasing its features, color options, storage capacities, and allowing users to customize and add the product to their cart.",
     containerText: "iPhone 14 Pro\nFrom $999 or $41.62/mo. for 24 mo.*\nBuy\nGet $40–$650 for your trade-in*",
-    matchesCriteria: "partial-match",
+    matchQuality: "partial-match",
     positionRefresh: "static",
     positionRefreshConfidence: 4,
     containerNumber: 1
@@ -84,9 +84,9 @@ Confirmation: I have verified that all described containers are highlighted with
 Guidelines:
 1. Describe all highlighted containers, regardless of whether they match the criteria.
 2. Provide clear, concise, and SPECIFIC descriptions and names for each container based on specific details of the item and its content.
-3. Set matchesCriteria appropriately for containers based on how well they match the specified criteria.
+3. Set matchQuality appropriately for containers based on how well they match the specified criteria.
 4. If no containers fully match the criteria, consider partial matches and explain your reasoning using specific details from the page.
-5. If absolutely no containers match or partially match the criteria, set matchesCriteria to "no-match" for all.
+5. If absolutely no containers match or partially match the criteria, set matchQuality to "no-match" for all.
 6. Remember to include all highlighted containers when calling identifyContainers.
 7. Articulate your reasoning process as you analyze the screenshots and identify all containers, using specific examples and unique identifiers from the page content.
 8. Explain any ambiguities, partial matches, or difficulties in determining matches, referring to specific features or text content visible on the page.
@@ -124,7 +124,7 @@ const schema = [
                     "Describe the container's purpose and its functionality as it relates to this specific component on the page.",
                 },
 
-                matchesCriteria: {
+                matchQuality: {
                   type: "string",
                   description:
                     "Indicate whether this container matches the specified search criteria (enum: full-match, partial-match, no-match).",
@@ -143,7 +143,7 @@ const schema = [
               required: [
                 "containerName",
                 "containerFunctionality",
-                "matchesCriteria",
+                "matchQuality",
                 "positionRefresh",
                 "positionRefreshConfidence",
               ],

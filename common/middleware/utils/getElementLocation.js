@@ -27,7 +27,7 @@ export async function getElementLocation(mwData, next) {
       await driver.showContainers();
       console.log("sectionNumber, reasoning", sectionNumber, reasoning);
       if (!sectionNumber) {
-        args.searchHelpMessage = reasoning;
+        args.SEARCH_HELP_MESSAGE = reasoning;
       } else if (Math.round(sectionNumber) === Math.round(currentSection)) {
         const { searchTerm, notFound } = await RefineSearch.invoke(
           {
@@ -40,7 +40,7 @@ export async function getElementLocation(mwData, next) {
           Object.assign(args, searchTerm);
           return searchPage(mwData, next);
         } else {
-          args.searchHelpMessage = `The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
+          args.SEARCH_HELP_MESSAGE = `The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
           await driver.goToSection(sectionNumber);
         }
       } else {
@@ -60,7 +60,7 @@ export async function getElementLocation(mwData, next) {
           Object.assign(args, searchTerm);
           return searchPage(mwData, next);
         } else {
-          args.searchHelpMessage = `We have scrolled to section ${sectionNumber}. The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
+          args.SEARCH_HELP_MESSAGE = `We have scrolled to section ${sectionNumber}. The ${args.elementName} should be seen in this current location of the web page. Please refine your search parameters to properly get a handle on the element.`;
           await driver.goToSection(sectionNumber);
         }
       }

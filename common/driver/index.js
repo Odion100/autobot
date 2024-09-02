@@ -150,7 +150,7 @@ function browserController() {
       function (containers, selector) {
         console.log("containers, selector", containers, selector);
         const newContainerElement = document.querySelector(selector);
-        if (!newContainerElement) return;
+        if (!newContainerElement) return {};
         const existingContainer = containers.find((container) =>
           newContainerElement.matches(container.selector)
         );
@@ -172,16 +172,21 @@ function browserController() {
       internalState.containers,
       selector
     );
-    console.log(
-      "updatedContainers.length , internalState.containers",
-      updatedContainers.length,
-      internalState.containers.length
-    );
-    if (updatedContainers.length > internalState.containers.length)
-      await insertContainer(newContainer);
-    console.log("updatedContainers, newContainer", updatedContainers, newContainer);
-    internalState.containers = updatedContainers;
-    return newContainer;
+    if (updatedContainers) {
+      console.log(
+        "updatedContainers.length , internalState.containers",
+        updatedContainers.length,
+        internalState.containers.length
+      );
+      if (updatedContainers.length > internalState.containers.length)
+        await insertContainer(newContainer);
+      internalState.containers = updatedContainers;
+      return newContainer;
+    } else {
+      throw Error(
+        `driver.addContainer(...) Error: target container  element ${selector} does not exit on this page. Remember to apply driver.pageFilter to a list of identifier  before attempt to add the container.`
+      );
+    }
   }
   async function viewFilter(identifiers) {
     return await page.evaluate(getViewport, identifiers);
@@ -356,7 +361,7 @@ function browserController() {
       chunkSize,
       elementLimit
     );
-    console.log("internalState.containers", internalState.containers);
+    //console.log("internalState.containers", internalState.containers);
 
     await page.evaluate(setContentContainers, internalState.containers);
     return "setting search containers";

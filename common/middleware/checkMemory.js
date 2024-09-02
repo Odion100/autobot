@@ -1,29 +1,42 @@
 import driver from "../driver/index.js";
 import { multiParameterSearch, evaluateSelection } from "./utils/index.js";
 
-async function searchMemory(searchParams, filter, memoryDomain = "long-term") {
+async function searchMemory(
+  { args, agents: { CompareDescriptions } },
+  type,
+  memoryDomain = "long-term"
+) {
   const cache = memoryDomain === "cache";
   let searchResults;
   if (cache) {
+    const filter = { type };
     searchResults = await driver.searchCache(
-      `${searchParams.elementName}: ${searchParams.elementFunctionality}`,
+      `${args.elementName}: ${args.elementFunctionality}`,
       filter
     );
   } else {
+    const filter = { $and: [{ type }, { positionRefresh: "dynamic" }] };
     searchResults = await driver.searchSelectors(
-      `${searchParams.elementName}: ${searchParams.elementFunctionality}`,
+      `${args.elementName}: ${args.elementFunctionality}`,
       filter
     );
   }
   const { results, distances } = searchResults;
-
-  const savedIdentifiers = results.filter((data, i) => distances[i] <= 0.45);
-  const dist = distances.filter((value) => value <= 0.45);
-  console.log(`savedIdentifiers, distances ${memoryDomain}`, savedIdentifiers, dist);
-  if (savedIdentifiers.length) {
+  if (distances[0] <= 0.35) {
+    const savedIdentifiers = results.filter(
+      (item, index) => distances[index] <= distances[0] + 0.05
+    );
     const filteredIdentifiers = await driver.pageFilter(savedIdentifiers);
     if (filteredIdentifiers.length) {
-      return await multiParameterSearch(filteredIdentifiers, searchParams);
+      const { matchQuality, ...rest } = await CompareDescriptions.invoke({
+        message:
+          "Please identify if any of the element descriptions match the target element",
+        targetElement: args,
+        elementDescriptions: filteredIdentifiers,
+      });
+      if (matchQuality === "full-match") {
+        return { results: [rest], distances: [0.2] };
+      }
     }
   }
 
@@ -45,8 +58,7 @@ export async function checkMemory(mwData, next) {
   const type = fn === "type" ? "typeable" : "clickable";
 
   if (!args.selectedElement) {
-    const filter = { $and: [{ type }, { positionRefresh: "dynamic" }] };
-    const { results, distances } = await searchMemory(args, filter, "long-term");
+    const { results, distances } = await searchMemory(mwData, type, "long-term");
     if (results.length) {
       const selectedElement = await evaluateSelection(results, distances, mwData);
       if (selectedElement) {
@@ -56,8 +68,7 @@ export async function checkMemory(mwData, next) {
     }
   }
   if (!args.selectedElement) {
-    const filter = { type };
-    const { results, distances } = await searchMemory(args, filter, "cache");
+    const { results, distances } = await searchMemory(mwData, type, "cache");
     if (results.length) {
       const selectedElement = await evaluateSelection(results, distances, mwData);
       if (selectedElement) {

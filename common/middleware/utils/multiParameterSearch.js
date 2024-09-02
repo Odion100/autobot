@@ -33,6 +33,7 @@ export async function multiParameterSearch(identifiers, args, filter) {
       searchTerm,
       filter
     );
+    console.log("paramSearch results, distances -->", results, distances);
     results.forEach(({ id }, i) => {
       const identifier = identifiers.find((item) => item.id === id);
       identifier.totalDistance += distances[i];

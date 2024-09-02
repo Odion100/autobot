@@ -20,6 +20,8 @@ import {
   searchPage,
   awaitNavigation,
   insertScreenshot,
+  getDomainMemory,
+  setDomainMemoryPrompt,
 } from "../../common/middleware/index.js";
 import { clearPageLoadEvent, resetContainers, setPageLoadEvent } from "./middleware.js";
 import ElementIdentifier from "../../agents/ElementIdentifier.js";
@@ -27,6 +29,7 @@ import ContainerIdentifier from "../../agents/ContainerIdentifier.js";
 import VisualConfirmation from "../../agents/VisualConfirmation.js";
 import ElementLocator from "../../agents/ElementLocator.js";
 import RefineSearch from "../../agents/RefineSearch.js";
+import CompareDescriptions from "../../agents/CompareDescriptions.js";
 
 function BrowserController() {
   this.use({
@@ -37,7 +40,7 @@ function BrowserController() {
     prompt,
     exitConditions: {
       functionCall: "promptUser",
-      shortCircuit: 3,
+      shortCircuit: 2,
       state: (state) => state.abort,
     },
   });
@@ -50,11 +53,12 @@ function BrowserController() {
   this.scrollDown = scrollDown;
   this.promptUser = promptUser;
 
+  this.after("navigate", getDomainMemory, resetContainers);
   this.before("type", checkMemory, selectContainers, searchPage);
   this.before("click", checkMemory, selectContainers, searchPage);
-  this.after("click", awaitNavigation, resetContainers);
-  this.after("type", resetContainers);
-  this.after("$all", awaitNavigation, insertScreenshot);
+  this.after("click", awaitNavigation, insertScreenshot, resetContainers);
+  this.after("type", insertScreenshot, resetContainers);
+  this.after("$all", awaitNavigation, insertScreenshot, setDomainMemoryPrompt);
   this.before("$invoke", setPageLoadEvent);
   this.after("$invoke", clearPageLoadEvent);
 }
@@ -66,6 +70,7 @@ export default Agentci()
   .agent("VisualConfirmation", VisualConfirmation)
   .agent("ElementLocator", ElementLocator)
   .agent("RefineSearch", RefineSearch)
+  .agent("CompareDescriptions", CompareDescriptions)
   .config(function () {
     this.use({ exitConditions: { errors: 1 } });
   });
