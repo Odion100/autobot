@@ -1,5 +1,4 @@
 import driver from "../../driver/index.js";
-import { multiParameterSearch } from "./multiParameterSearch.js";
 
 export async function compareElements(
   targetElements,
@@ -25,11 +24,16 @@ export async function compareElements(
 
   if (fullMatch) return { results: [fullMatch], distances: [0.2] };
   if (!elementDescriptions.length) return { results: [], distances: [] };
-  const filteredElements = elementDescriptions.filter(
+  const filteredIdentifiers = elementDescriptions.filter(
     ({ matchQuality }) => matchQuality !== "no-match"
   );
-  console.log("filteredElements xx-->>", filteredElements);
-  if (!filteredElements.length) return { results: [], distances: [] };
+  console.log("filteredIdentifiers xx-->>", filteredIdentifiers);
+  if (!filteredIdentifiers.length) return { results: [], distances: [] };
 
-  return await driver.compareIdentifiers(filteredElements, args, { type });
+  return { results: filteredIdentifiers, distances: filteredIdentifiers.map(() => 0.36) };
+  // return await driver.compareIdentifiers(
+  //   filteredIdentifiers,
+  //   `${args.elementName}: ${args.elementFunctionality}`,
+  //   { type }
+  // );
 }

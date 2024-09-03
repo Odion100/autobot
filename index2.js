@@ -1,8 +1,8 @@
 import readline from "readline";
 import driver from "./common/driver/index.js";
-import BrowserAgent from "./agencies/WebTaskExecutor/index.js";
+import BrowserAgent from "./agents/WebTaskExecutor/index.js";
 import { deleteScreenshots } from "./common/utils/index.js";
-import ElementIdentifier from "./agents/ElementIdentifier.js";
+import ElementIdentifier from "./modules/ElementIdentifier.js";
 import Agentci from "agentci";
 import fs from "fs";
 const state = { messages: [] };

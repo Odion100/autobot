@@ -172,15 +172,22 @@ export default function CompareDescriptions() {
     temperature: 0,
   });
 
-  this.identifyMatch = async function (result, { state }) {
-    return result;
+  this.identifyMatch = async function (result, { input }) {
+    console.log("identifyMatch results", result);
+    return input.elementDescriptions.find(
+      (desc) => desc.elementNumber === result.elementNumber
+    );
   };
 
   this.noMatch = async function (result, { state }) {
     return { matchQuality: "no-match", ...result };
   };
 
-  this.before("$invoke", function ({ state }, next) {
+  this.before("$invoke", function ({ input }, next) {
+    input.elementDescriptions = input.elementDescriptions.map((desc, i) => ({
+      ...desc,
+      elementNumber: i + 1,
+    }));
     next();
   });
 }

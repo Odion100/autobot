@@ -24,12 +24,12 @@ import {
   setDomainMemoryPrompt,
 } from "../../common/middleware/index.js";
 import { clearPageLoadEvent, resetContainers, setPageLoadEvent } from "./middleware.js";
-import ElementIdentifier from "../../agents/ElementIdentifier.js";
-import ContainerIdentifier from "../../agents/ContainerIdentifier.js";
-import VisualConfirmation from "../../agents/VisualConfirmation.js";
-import ElementLocator from "../../agents/ElementLocator.js";
-import RefineSearch from "../../agents/RefineSearch.js";
-import CompareDescriptions from "../../agents/CompareDescriptions.js";
+import ElementIdentifier from "../../modules/ElementIdentifier.js";
+import ContainerIdentifier from "../../modules/ContainerIdentifier.js";
+import VisualConfirmation from "../../modules/VisualConfirmation.js";
+import ElementLocator from "../../modules/ElementLocator.js";
+import RefineSearch from "../../modules/RefineSearch.js";
+import CompareDescriptions from "../../modules/CompareDescriptions.js";
 
 function BrowserController() {
   this.use({

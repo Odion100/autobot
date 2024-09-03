@@ -83,6 +83,7 @@ export default async function getElementDescriptions({
 
       if (identifiedElement) {
         Object.assign(identifier, identifiedElement);
+        console.log("identifier, identifiedElement-->", identifier, identifiedElement);
         identifier.containerName = identifiedContainer.containerName;
         identifier.containerFunctionality = identifiedContainer.containerFunctionality;
         identifier.positionRefresh = identifiedContainer.positionRefresh;
