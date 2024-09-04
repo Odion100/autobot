@@ -6,14 +6,12 @@ export default function prompt({ input, state } = {}) {
   2. click({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, domainMemoryId }): Clicks on the first element matching a natural language search for the item you want to click.
   
   3. type({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, inputText, domainMemoryId }): Types the given text into the first element matching a natural language search for the input to type into.
+    
+  4. scrollUp({ scrollLength }): Move up the webpage by a specified amount.
   
-  4. saveContent({ content }): Use this function to collect any data you can see on the screen. The content argument should be a list of the data collected in CSV format.
+  5. scrollDown({ scrollLength }): Move down the webpage by a specified amount.
   
-  5. scrollUp({ scrollLength }): Move up the webpage by a specified amount.
-  
-  6. scrollDown({ scrollLength }): Move down the webpage by a specified amount.
-  
-  7. promptUser({ text }): Call this function when you have completed your task or to ask the user for context or clarification.
+  6. promptUser({ text }): Call this function when you have completed your task or to ask the user for context or clarification.
 
   For click and type functions, the search for an element must be based on what is visible in the screenshot, within the context of its red-bordered container. Only provide arguments based on what you can see within these containers. Use the following properties to help find the element:
    - elementName: Provide a highly specific and distinguishing name or label for the element based solely on its visible content or functionality within its red-bordered container. Use exact text content or unique identifiers visible on the page, e.g., "Add to Cart button for Sony WH-1000XM4 Wireless Headphones" or "Email input field for Amazon Prime account login".

@@ -1,4 +1,52 @@
 export default function insertChatbot(messages) {
+  function convertMarkdown(markdownText) {
+    const markdown = markdownText.replace(/@internalInstructions:[\s\S]*$/, "");
+    if (!markdown) return "";
+    // Configure marked options
+    marked.setOptions({
+      gfm: true,
+      breaks: true,
+      highlight: function (code, lang) {
+        if (Prism.languages[lang]) {
+          return Prism.highlight(code, Prism.languages[lang], lang);
+        }
+        return code;
+      },
+      langPrefix: "language-",
+      pedantic: false,
+      smartLists: true,
+      smartypants: false,
+      xhtml: false,
+    });
+    console.log("markdown", markdown);
+    // Parse Markdown to HTML
+    let html = marked(markdown);
+
+    // Post-process the HTML
+    html = html.replace(
+      /<pre><code class="(language-\w+)">/g,
+      '<pre class="$1"><code class="$1">'
+    );
+
+    // Fix potentially broken tables
+    html = html.replace(/<code>([|].*?[|])<\/code>/g, "$1");
+
+    // Wrap tables with a div for potential scrolling
+    html = html.replace(/<table>/g, '<div class="table-wrapper"><table>');
+    html = html.replace(/<\/table>/g, "</table></div>");
+
+    // Wrap the entire output in a div with class "markdown"
+    return `<div class="markdown">${html}</div>`;
+  }
+
+  function escapeHtml(unsafe) {
+    return unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
   const chatbotHTML = `
     <div id="chat-bot">
       <div class="chat-messages">
@@ -7,11 +55,13 @@ export default function insertChatbot(messages) {
             (message) => `
           <div class="message-container">
             ${
-              message.sender === "bot"
+              message.role === "assistant"
                 ? '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtYm90Ij48cGF0aCBkPSJNMTIgOFY0SDgiLz48cmVjdCB3aWR0aD0iMTYiIGhlaWdodD0iMTIiIHg9IjQiIHk9IjgiIHJ4PSIyIi8+PHBhdGggZD0iTTIgMTRoMiIvPjxwYXRoIGQ9Ik0yMCAxNGgyIi8+PHBhdGggZD0iTTE1IDEzdjIiLz48cGF0aCBkPSJNOSAxM3YyIi8+PC9zdmc+" alt="bot" class="bot-image">'
                 : ""
             }
-            <div class="message ${message.sender}">${message.text}</div>
+            <div class="message ${
+              message.role === "user" ? "user" : "bot"
+            }">${convertMarkdown(message.message || "")}</div>
           </div>
         `
           )
@@ -27,7 +77,7 @@ export default function insertChatbot(messages) {
   const style = `
     <style id="cambrian-ai-chat-display">
       #cambrianAiSidePanelWrapper #chat-bot {
-        width: 350px;
+        width: 660px;
         display: flex;
         flex-direction: column;
         background: #282c34;
@@ -53,20 +103,15 @@ export default function insertChatbot(messages) {
         margin: 5px;
         padding: 8px;
         border-radius: 5px;
-        word-wrap: break-word;
-        font-weight: 400;
-        font-size: 14px;
-        text-align: left;
-        line-height: 19px;
-        overflow: hidden;
       }
 
       #cambrianAiSidePanelWrapper .user {
         margin-left: auto;
         background-color: #8e9c7a;
-        color: #090b0d;
       }
-
+      #cambrianAiSidePanelWrapper .user * {
+        color: #090b0d !important;
+      }
       #cambrianAiSidePanelWrapper .bot {
         background-color: #333741;
         color: #fff;
@@ -92,6 +137,7 @@ export default function insertChatbot(messages) {
         max-height: 100px;
         resize: none;
         font-size: 16px;
+        background-color: #fff !important;
       }
 
       #cambrianAiSidePanelWrapper .chat-input textarea:focus {
@@ -129,16 +175,16 @@ export default function insertChatbot(messages) {
   const messagesContainer = itemsContainer.querySelector(".chat-messages");
 
   // Function to add a new message
-  function addMessage(sender, text) {
+  function addMessage(role, message) {
     const messageElement = document.createElement("div");
     messageElement.className = "message-container";
     messageElement.innerHTML = `
         ${
-          sender === "bot"
+          role === "assistant"
             ? '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtYm90Ij48cGF0aCBkPSJNMTIgOFY0SDgiLz48cmVjdCB3aWR0aD0iMTYiIGhlaWdodD0iMTIiIHg9IjQiIHk9IjgiIHJ4PSIyIi8+PHBhdGggZD0iTTIgMTRoMiIvPjxwYXRoIGQ9Ik0yMCAxNGgyIi8+PHBhdGggZD0iTTE1IDEzdjIiLz48cGF0aCBkPSJNOSAxM3YyIi8+PC9zdmc+" alt="bot" class="bot-image">'
             : ""
         }
-        <div class="message ${sender}">${text}</div>
+        <div class="message ${role}">${message}</div>
       `;
     messagesContainer.appendChild(messageElement);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -149,18 +195,11 @@ export default function insertChatbot(messages) {
     const message = textareaField.value.trim();
     if (message) {
       addMessage("user", message);
-      messages.push({ text: message, sender: "user" });
+      messages.push({ message, role: "user" });
       textareaField.value = "";
       textareaField.style.height = "26px";
-
-      // Here you would typically send the message to your AI backend
-      // For now, we'll just simulate a response
-      setTimeout(() => {
-        const response =
-          "I'm a simulated AI response. In a real implementation, you would integrate with your AI backend here.";
-        addMessage("bot", response);
-        messages.push({ text: response, sender: "bot" });
-      }, 1000);
+      console.log("message", message);
+      window.insertChatMessage(message);
     }
   }
 

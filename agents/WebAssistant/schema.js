@@ -15,6 +15,7 @@ export default function ({ state }) {
       },
     },
   };
+
   const type = {
     type: "function",
     function: {
@@ -136,21 +137,21 @@ export default function ({ state }) {
       },
     },
   };
+
   const createTable = {
     type: "function",
     function: {
       name: "createTable",
-      description:
-        "Use this function to collect any data you can see on the screen. The content should be a list of the data collected in csv format.",
+      description: "Creates a table from the provided CSV formatted data.",
       parameters: {
         type: "object",
         properties: {
-          content: {
+          csvData: {
             type: "string",
-            description:
-              "A simple description of the element from you want extract data.",
+            description: "The CSV formatted data to create the table from.",
           },
         },
+        required: ["csvData"],
       },
     },
   };
@@ -191,24 +192,74 @@ export default function ({ state }) {
     },
   };
 
-  const promptUser = {
+  const executeJob = {
     type: "function",
     function: {
-      name: "promptUser",
-      description:
-        "Used this method to question or prompt the user for help or information.",
+      name: "executeJob",
+      description: "Executes a previously saved job with the given ID.",
       parameters: {
         type: "object",
         properties: {
-          text: {
+          jobId: {
             type: "string",
-            prompt:
-              "Call the function when you have completed your task or if to ask the user for context or clarification.",
+            description: "The unique identifier of the job to execute.",
           },
         },
+        required: ["jobId"],
       },
     },
   };
 
-  return [navigate, type, click, scrollUp, scrollDown, promptUser];
+  const saveJob = {
+    type: "function",
+    function: {
+      name: "saveJob",
+      description:
+        "Saves or updates a job with the given ID, instructions, and milestones.",
+      parameters: {
+        type: "object",
+        properties: {
+          jobId: {
+            type: "string",
+            description: "A unique identifier for the job.",
+          },
+          instructions: {
+            type: "string",
+            description: "Detailed instructions for executing the job.",
+          },
+          milestones: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+            description: "An array of milestones or checkpoints for the job.",
+          },
+        },
+        required: ["jobId", "instructions", "milestones"],
+      },
+    },
+  };
+  const getScreenshot = {
+    type: "function",
+    function: {
+      name: "getScreenshot",
+      description: "Captures and returns a screenshot of the current webpage state",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  };
+
+  return [
+    navigate,
+    getScreenshot,
+    click,
+    type,
+    createTable,
+    scrollUp,
+    scrollDown,
+    executeJob,
+    saveJob,
+  ];
 }

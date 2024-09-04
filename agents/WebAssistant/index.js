@@ -8,10 +8,10 @@ import schema from "./schema.js";
 import {
   click,
   navigate,
+  createTable,
   type,
   scrollUp,
   scrollDown,
-  promptUser,
 } from "../../common/methods.js";
 import {
   checkMemory,
@@ -22,15 +22,22 @@ import {
   getDomainMemory,
   setDomainMemoryPrompt,
 } from "../../common/middleware/index.js";
-import { clearPageLoadEvent, resetContainers, setPageLoadEvent } from "./middleware.js";
+import {
+  clearContainer,
+  clearPageLoadEvent,
+  resetContainers,
+  setPageLoadEvent,
+} from "./middleware.js";
 import ElementIdentifier from "../../modules/ElementIdentifier.js";
 import ContainerIdentifier from "../../modules/ContainerIdentifier.js";
 import VisualConfirmation from "../../modules/VisualConfirmation.js";
 import ElementLocator from "../../modules/ElementLocator.js";
 import RefineSearch from "../../modules/RefineSearch.js";
 import CompareDescriptions from "../../modules/CompareDescriptions.js";
+import { EXECUTION_REMINDER } from "../../common/constants.js";
+import driver from "../../common/driver/index.js";
 
-function WebTaskExecutor() {
+function WebAssistant() {
   this.use({
     provider: "openai",
     model: "gpt-4o",
@@ -38,8 +45,7 @@ function WebTaskExecutor() {
     schema,
     prompt,
     exitConditions: {
-      functionCall: "promptUser",
-      shortCircuit: 2,
+      shortCircuit: 1,
       state: (state) => state.abort,
     },
   });
@@ -47,22 +53,32 @@ function WebTaskExecutor() {
   this.navigate = navigate;
   this.type = type;
   this.click = click;
+  this.createTable = createTable;
   this.scrollUp = scrollUp;
   this.scrollDown = scrollDown;
-  this.promptUser = promptUser;
-
-  this.after("navigate", getDomainMemory, resetContainers);
-  this.before("type", checkMemory, selectContainers, searchPage);
-  this.before("click", checkMemory, selectContainers, searchPage);
-  this.after("click", awaitNavigation, insertScreenshot, resetContainers);
-  this.after("type", insertScreenshot, resetContainers);
-  this.after("$all", awaitNavigation, insertScreenshot, setDomainMemoryPrompt);
-  this.before("$invoke", setPageLoadEvent);
+  this.getScreenshot = ({}, { state }) => {
+    state.screenshot_message = `This is an image of the page and view port. ${EXECUTION_REMINDER}`;
+  };
+  async function hideSidePanel({}, next) {
+    await driver.hideSidePanel();
+    next();
+  }
+  this.after("navigate", getDomainMemory);
+  this.before("type", hideSidePanel, checkMemory, selectContainers, searchPage);
+  this.before("click", hideSidePanel, checkMemory, selectContainers, searchPage);
+  this.after("click", awaitNavigation, clearContainer);
+  this.after("type", clearContainer);
+  this.after("getScreenshot", resetContainers, insertScreenshot);
+  this.after("$all", awaitNavigation, setDomainMemoryPrompt);
+  this.before("$invoke", setPageLoadEvent, getDomainMemory, function ({}, next) {
+    state.skipContainerSetup = true;
+    next();
+  });
   this.after("$invoke", clearPageLoadEvent);
 }
 
 export default Agentci()
-  .rootAgent(WebTaskExecutor)
+  .rootAgent(WebAssistant)
   .agent("ElementIdentifier", ElementIdentifier)
   .agent("ContainerIdentifier", ContainerIdentifier)
   .agent("VisualConfirmation", VisualConfirmation)

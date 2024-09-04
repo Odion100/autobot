@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import injectMarkdownResources from "./utils/injectMarkdownResources.js";
 import injectMemoryDisplay from "./utils/injectMemoryDisplay.js";
 import insertLoadingComponent from "./utils/insertLoadingComponent.js";
 import insertChatbot from "./utils/insertChatbot.js";
@@ -16,6 +17,7 @@ import selectorStore from "./utils/selectorStore.js";
 import setLabels from "./utils/setLabels.js";
 import insertContainerLabels from "./utils/insertContainerLabels.js";
 import getElementDescriptions from "./utils/getElementDescriptions.js";
+const webAssistantState = { messages: [] };
 
 function browserController() {
   let browser;
@@ -32,8 +34,9 @@ function browserController() {
     interactions: [],
     agents: {},
   };
-  function init({ agents } = {}) {
-    Object.assign(internalState.agents, agents);
+  function init({ ElementIdentifier, WebAssistant } = {}) {
+    console.log(" ElementIdentifier, WebAssistant", ElementIdentifier, WebAssistant);
+    Object.assign(internalState.agents, { ElementIdentifier, WebAssistant });
   }
   const state = () => internalState;
   const getContainer = (n) => internalState.containers[n - 1];
@@ -94,6 +97,11 @@ function browserController() {
       await page.exposeFunction("showChat", async () => {
         await showChat();
       });
+      await page.exposeFunction("insertChatMessage", async (input) => {
+        console.log("insertChatMessage input", input);
+        await insertChatMessage(input);
+      });
+
       await page.exposeFunction("showMemory", async () => {
         await showMemory();
       });
@@ -111,7 +119,11 @@ function browserController() {
         internalState.labeledElements = [];
         internalState.interactions = [];
         internalState.scrollHeight = 0;
-        // showChat();
+        if (internalState.agents.WebAssistant) {
+          await injectMarkDown();
+          showChat();
+        }
+        console.log("internalState", internalState);
       });
       const dimensions = await page.evaluate(() => {
         return {
@@ -131,7 +143,7 @@ function browserController() {
     await page.goto(url);
 
     internalState.lastPage = internalState.currentPage;
-    return `You have navigated to ${page.url()}`;
+    return `The Browser has navigated to ${page.url()}`;
   }
 
   async function findContainers(searchText, where) {
@@ -211,6 +223,7 @@ function browserController() {
       });
     }, identifiers);
   }
+
   const clickable =
     'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
 
@@ -726,24 +739,34 @@ function browserController() {
     await page.evaluate(insertSidePanel, identifiers);
     await page.evaluate(injectMemoryDisplay, identifiers);
   }
-  const exampleMessages = [
-    {
-      sender: "bot",
-      text: "Hello! Welcome to the Cambrian AI assistant. How can I help you today?",
-    },
-    {
-      sender: "user",
-      text: "Hi there! I'm interested in learning more about machine learning. Where should I start?",
-    },
-  ];
+  async function insertChatMessage(input) {
+    const { WebAssistant } = internalState.agents;
+
+    console.log("WebAssistant, input", WebAssistant, input);
+    if (WebAssistant) {
+      try {
+        const res = await WebAssistant.invoke(input, webAssistantState);
+        console.log("res", res);
+        await showChat();
+      } catch (error) {
+        console.log("InsertChatMessage ERROR", error);
+      }
+    } else {
+      console.error("Error:WebAssistant Agent not setup");
+    }
+  }
+  // const messages = [
+  //   {
+  //     sender: "bot",
+  //     text: "Hello! Welcome to the Cambrian AI assistant. How can I help you today?",
+  //   },
+  // ]
   async function showChat() {
+    const { WebAssistant } = internalState.agents;
+    const messages = WebAssistant.getNormalizedMessages();
+    console.log("WebAssistant messages", messages);
     await page.evaluate(insertSidePanel);
-    await page.evaluate(insertChatbot, [
-      {
-        sender: "bot",
-        text: "Hello! Welcome to the Cambrian AI assistant. How can I help you today?",
-      },
-    ]);
+    await page.evaluate(insertChatbot, messages.slice(1));
   }
   async function showSidePanel() {
     await page.evaluate(insertSidePanel);
@@ -781,6 +804,9 @@ function browserController() {
       identifier,
       elementHandler
     );
+  }
+  async function injectMarkDown() {
+    return await page.evaluate(injectMarkdownResources);
   }
   return {
     init,
@@ -835,6 +861,7 @@ function browserController() {
     showMemory,
     showChat,
     showSidePanel,
+    hideSidePanel,
     showLoading,
     clearLoading,
     deleteIdentifiers,

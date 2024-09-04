@@ -12,7 +12,7 @@ async function startLineReader() {
     output: process.stdout,
   });
 
-  driver.init({ agents: { ElementIdentifier: Agentci().rootAgent(ElementIdentifier) } });
+  driver.init({ ElementIdentifier: Agentci().rootAgent(ElementIdentifier) });
   await driver.navigate("https://egate.smithdrug.com");
   // await driver.setContainers();
   // await driver.getScreenShot();

@@ -15,6 +15,7 @@ export async function navigate({ url }, { state }) {
     throw error;
   }
 }
+
 export async function type(
   { selectedElement, elementName, inputText, identifier },
   { state }
@@ -45,9 +46,12 @@ export async function click({ selectedElement, elementName, identifier }, { stat
   }
   return `The ${elementName} was not successfully selected. ${SEARCH_HELP_MESSAGE}`;
 }
-
-export async function saveContent({ content }) {
-  console.log("data--->", content);
+export async function getScreenshot({}, { state }) {
+  state.screenshot_message = `This is an image of the page and view port. ${EXECUTION_REMINDER}`;
+  return "screenshot will be inserted into the next message";
+}
+export async function createTable({ csvData }) {
+  console.log("data--->", csvData);
   return "content saved";
 }
 

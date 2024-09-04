@@ -2,7 +2,7 @@ import driver from "../driver/index.js";
 import { removeDuplicates } from "../utils/index.js";
 
 export async function setDomainMemoryPrompt({ state }, next) {
-  if (!state.domainMemory) return "";
+  if (!state.domainMemory) return next();
   const savedIdentifiers = await driver.pageFilter(state.domainMemory);
   const filteredIdentifiers = removeDuplicates(savedIdentifiers, "selector");
   if (filteredIdentifiers.length) {
