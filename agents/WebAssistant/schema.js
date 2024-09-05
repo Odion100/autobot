@@ -79,6 +79,7 @@ export default function ({ state }) {
       },
     },
   };
+
   const click = {
     type: "function",
     function: {
@@ -138,24 +139,6 @@ export default function ({ state }) {
     },
   };
 
-  const createTable = {
-    type: "function",
-    function: {
-      name: "createTable",
-      description: "Creates a table from the provided CSV formatted data.",
-      parameters: {
-        type: "object",
-        properties: {
-          csvData: {
-            type: "string",
-            description: "The CSV formatted data to create the table from.",
-          },
-        },
-        required: ["csvData"],
-      },
-    },
-  };
-
   const scrollUp = {
     type: "function",
     function: {
@@ -210,18 +193,52 @@ export default function ({ state }) {
     },
   };
 
-  const saveJob = {
+  const updateJob = {
     type: "function",
     function: {
-      name: "saveJob",
+      name: "updateJob",
       description:
-        "Saves or updates a job with the given ID, instructions, and milestones.",
+        "Updates an existing job with the given ID, title, instructions, and milestones.",
       parameters: {
         type: "object",
         properties: {
           jobId: {
             type: "string",
-            description: "A unique identifier for the job.",
+            description: "The unique identifier of the job to update.",
+          },
+          title: {
+            type: "string",
+            description: "The title of the job.",
+          },
+          instructions: {
+            type: "string",
+            description: "Updated detailed instructions for executing the job.",
+          },
+          milestones: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+            description: "An array of milestone objectives for the job.",
+          },
+        },
+        required: ["jobId", "title", "instructions", "milestones"],
+      },
+    },
+  };
+
+  const createJob = {
+    type: "function",
+    function: {
+      name: "createJob",
+      description:
+        "Creates a new job with the given title, instructions, and milestone objectives.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: {
+            type: "string",
+            description: "The title of the new job.",
           },
           instructions: {
             type: "string",
@@ -232,13 +249,14 @@ export default function ({ state }) {
             items: {
               type: "string",
             },
-            description: "An array of milestones or checkpoints for the job.",
+            description: "An array of milestone objectives for the job.",
           },
         },
-        required: ["jobId", "instructions", "milestones"],
+        required: ["title", "instructions", "milestones"],
       },
     },
   };
+
   const getScreenshot = {
     type: "function",
     function: {
@@ -256,10 +274,10 @@ export default function ({ state }) {
     getScreenshot,
     click,
     type,
-    createTable,
     scrollUp,
     scrollDown,
     executeJob,
-    saveJob,
+    updateJob,
+    createJob,
   ];
 }

@@ -33,8 +33,8 @@ export async function type(
 export async function click({ selectedElement, elementName, identifier }, { state }) {
   if (selectedElement) {
     try {
+      await driver.saveIdentifier(identifier, selectedElement);
       await selectedElement.click();
-      driver.saveIdentifier(identifier, selectedElement);
       await wait(2000);
 
       state.screenshot_message = `The element was found and clicked. ${EXECUTION_REMINDER}`;
@@ -47,12 +47,8 @@ export async function click({ selectedElement, elementName, identifier }, { stat
   return `The ${elementName} was not successfully selected. ${SEARCH_HELP_MESSAGE}`;
 }
 export async function getScreenshot({}, { state }) {
-  state.screenshot_message = `This is an image of the page and view port. ${EXECUTION_REMINDER}`;
-  return "screenshot will be inserted into the next message";
-}
-export async function createTable({ csvData }) {
-  console.log("data--->", csvData);
-  return "content saved";
+  state.screenshot_message = `This is an image of the current page and view port. ${EXECUTION_REMINDER}`;
+  return "@Browser: inserting screenshot";
 }
 
 export async function scrollUp(data, { state }) {

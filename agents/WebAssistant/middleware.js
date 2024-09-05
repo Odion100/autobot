@@ -1,12 +1,13 @@
 import driver from "../../common/driver/index.js";
 
 export async function resetContainers({}, next) {
+  await driver.hideSidePanel();
   await driver.clearSelection();
   await driver.clearContainers();
   await driver.setContainers();
   next();
 }
-export async function clearContainer({}, next) {
+export async function clearContainers({}, next) {
   await driver.clearSelection();
   await driver.clearContainers();
   next();
