@@ -131,3 +131,6 @@ dist
 
 vectorStore
 screenshots
+
+.python-version
+autobotvenv

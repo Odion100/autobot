@@ -1,3 +1,7 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+
 export const EXECUTION_REMINDER = `@internalInstructions:
 <?xml version="1.0" encoding="UTF-8"?>
 <execution-reminder>
@@ -64,3 +68,6 @@ export const SEARCH_HELP_MESSAGE = `@internalInstructions:Please revise your sea
 10. Gather more exact containerText to help locate the correct red-bordered container, focusing on key identifiable text within the container.
 
 Remember to be as specific and accurate as possible in your descriptions to ensure the correct element and container are identified.`;
+console.log("Process ENV Results:", process.env.MONGODB_PASSWORD);
+export const DB_CONNECTION = `mongodb+srv://odion:${process.env.MONGODB_PASSWORD}@cluster0.kv76v7g.mongodb.net/?retryWrites=true&w=majority`;
+
