@@ -19,7 +19,7 @@ export async function compareElements(
     ({ matchQuality }) => matchQuality === "no-match"
   );
   args.fullMatchContainers = fullMatchContainers.length ? fullMatchContainers : null;
-
+  console.log("compareElements args", args);
   if (elementDescriptions.length) driver.cacheSelectors(elementDescriptions);
 
   if (fullMatch) return { results: [fullMatch], distances: [0.2] };

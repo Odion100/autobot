@@ -8,10 +8,10 @@ import schema from "./schema.js";
 import {
   click,
   navigate,
-  createTable,
   type,
   scrollUp,
   scrollDown,
+  getScreenshot,
 } from "../../common/methods.js";
 import {
   checkMemory,
@@ -23,7 +23,7 @@ import {
   setDomainMemoryPrompt,
 } from "../../common/middleware/index.js";
 import {
-  clearContainer,
+  clearContainers,
   clearPageLoadEvent,
   resetContainers,
   setPageLoadEvent,
@@ -34,7 +34,6 @@ import VisualConfirmation from "../../modules/VisualConfirmation.js";
 import ElementLocator from "../../modules/ElementLocator.js";
 import RefineSearch from "../../modules/RefineSearch.js";
 import CompareDescriptions from "../../modules/CompareDescriptions.js";
-import { EXECUTION_REMINDER } from "../../common/constants.js";
 import driver from "../../common/driver/index.js";
 
 function WebAssistant() {
@@ -44,6 +43,7 @@ function WebAssistant() {
     sdk: openai,
     schema,
     prompt,
+    state: { skipContainerSetup: true },
     exitConditions: {
       shortCircuit: 1,
       state: (state) => state.abort,
@@ -53,27 +53,43 @@ function WebAssistant() {
   this.navigate = navigate;
   this.type = type;
   this.click = click;
-  this.createTable = createTable;
   this.scrollUp = scrollUp;
   this.scrollDown = scrollDown;
-  this.getScreenshot = ({}, { state }) => {
-    state.screenshot_message = `This is an image of the page and view port. ${EXECUTION_REMINDER}`;
+  this.getScreenshot = getScreenshot;
+  this.createJob = function (args) {
+    console.log("createJob args", args);
   };
+  this.updateJob = function () {
+    console.log("updateJob args", args);
+  };
+  this.executeJob = function () {
+    console.log("executeJob args", args);
+  };
+
   async function hideSidePanel({}, next) {
     await driver.hideSidePanel();
     next();
   }
   this.after("navigate", getDomainMemory);
-  this.before("type", hideSidePanel, checkMemory, selectContainers, searchPage);
+
   this.before("click", hideSidePanel, checkMemory, selectContainers, searchPage);
-  this.after("click", awaitNavigation, clearContainer);
-  this.after("type", clearContainer);
-  this.after("getScreenshot", resetContainers, insertScreenshot);
+  this.after("click", awaitNavigation, clearContainers);
+
+  this.before("type", hideSidePanel, checkMemory, selectContainers, searchPage);
+  this.after("type", clearContainers);
+
+  this.before("getScreenshot", resetContainers);
+  this.after("getScreenshot", insertScreenshot, clearContainers);
+
+  this.before("scrollUP", resetContainers);
+  this.after("scrollUP", insertScreenshot, clearContainers);
+
+  this.before("scrollDown", resetContainers);
+  this.after("scrollDown", insertScreenshot, clearContainers);
+
   this.after("$all", awaitNavigation, setDomainMemoryPrompt);
-  this.before("$invoke", setPageLoadEvent, getDomainMemory, function ({}, next) {
-    state.skipContainerSetup = true;
-    next();
-  });
+
+  this.before("$invoke", setPageLoadEvent, getDomainMemory);
   this.after("$invoke", clearPageLoadEvent);
 }
 
@@ -89,12 +105,14 @@ export default Agentci()
     this.use({ exitConditions: { errors: 1 } });
   });
 
-// getDomainMemory and domainMemory functions should be turned into middleware
-// move saveIdentifier to (after) middleware
-// move driver.setContainers into a middleware that is run after navigate
-// driver.clearCache needs to moved to a middleware that runs after navigate
-// setting the screenshot needs to be moved to afterware in order to make the common methods more reusable
+//Improve the webAssistant prompt
+//1. The ai should know how to answer what element do you know on this page.
+// - Turn domainMemory to identifiedElements everywhere
+// - that means domainMemoryId will become elementId
+//2. Manual improve the prompt's focus on creating and executing jobs
+// - explain that in the intro text (its role and purpose)
 
-// create a promptHandler agent that will respond to the users questions and will call a continue function once the inquire/request is complete
-// Agentci: create an insertMessage function on the Agent class to insert messages and screenshots after invoking
-// - this means the middleware function need to be called with apply
+//Add the ability to create and edit jobs
+//1. create a mongodb collection for jobs
+//2. write the methods to create and edit jobs
+//3. create a jobs display in the ui
