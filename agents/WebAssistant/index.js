@@ -19,8 +19,8 @@ import {
   searchPage,
   awaitNavigation,
   insertScreenshot,
-  getDomainMemory,
-  setDomainMemoryPrompt,
+  getIdentifiedElements,
+  setIdentifiedElementsPrompt,
 } from "../../common/middleware/index.js";
 import {
   clearContainers,
@@ -59,10 +59,10 @@ function WebAssistant() {
   this.createJob = function (args) {
     console.log("createJob args", args);
   };
-  this.updateJob = function () {
+  this.updateJob = function (args) {
     console.log("updateJob args", args);
   };
-  this.executeJob = function () {
+  this.executeJob = function (args) {
     console.log("executeJob args", args);
   };
 
@@ -70,7 +70,7 @@ function WebAssistant() {
     await driver.hideSidePanel();
     next();
   }
-  this.after("navigate", getDomainMemory);
+  this.after("navigate", getIdentifiedElements);
 
   this.before("click", hideSidePanel, checkMemory, selectContainers, searchPage);
   this.after("click", awaitNavigation, clearContainers);
@@ -87,9 +87,10 @@ function WebAssistant() {
   this.before("scrollDown", resetContainers);
   this.after("scrollDown", insertScreenshot, clearContainers);
 
-  this.after("$all", awaitNavigation, setDomainMemoryPrompt);
+  this.before("$all", setIdentifiedElementsPrompt);
+  this.after("$all", awaitNavigation);
 
-  this.before("$invoke", setPageLoadEvent, getDomainMemory);
+  this.before("$invoke", setPageLoadEvent, getIdentifiedElements);
   this.after("$invoke", clearPageLoadEvent);
 }
 
@@ -107,12 +108,18 @@ export default Agentci()
 
 //Improve the webAssistant prompt
 //1. The ai should know how to answer what element do you know on this page.
-// - Turn domainMemory to identifiedElements everywhere
-// - that means domainMemoryId will become elementId
+// - Turn identifiedElements to identifiedElements everywhere
+// - that means identifiedElementId will become elementId
 //2. Manual improve the prompt's focus on creating and executing jobs
 // - explain that in the intro text (its role and purpose)
+//3. Don't be two verbose
+// - Respond without being to verbose unless asked for more elaborate explications
 
 //Add the ability to create and edit jobs
 //1. create a mongodb collection for jobs
 //2. write the methods to create and edit jobs
 //3. create a jobs display in the ui
+
+//Add the ability to select from a drop down
+//Fix errors
+// - recorder. I've noticed that when trying to select and element to identify in a row of siblings only the first element can be selected.

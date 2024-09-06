@@ -1,8 +1,7 @@
 import { EXECUTION_REMINDER, SEARCH_HELP_MESSAGE } from "./constants.js";
 import driver from "./driver/index.js";
-import { getDomainMemory, setDomainMemoryPrompt } from "./middleware/index.js";
 import { wait } from "./utils/index.js";
-import fs from "fs";
+
 export async function navigate({ url }, { state }) {
   let results;
   try {

@@ -44,9 +44,9 @@ async function searchMemory(
 }
 export async function checkMemory(mwData, next) {
   const { args, fn } = mwData;
-  if (args.domainMemoryId) {
-    const identifiers = await driver.getSelectors({ id: args.domainMemoryId });
-    console.log("memory id", args.domainMemoryId, identifiers);
+  if (args.identifiedElementId) {
+    const identifiers = await driver.getSelectors({ id: args.identifiedElementId });
+    console.log("memory id", args.identifiedElementId, identifiers);
     if (identifiers.length) {
       const selectedElement = await evaluateSelection(identifiers, [0.2], mwData);
       if (selectedElement) {

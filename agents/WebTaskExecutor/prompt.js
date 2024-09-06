@@ -3,9 +3,9 @@ export default function prompt({ input, state } = {}) {
 
   1. navigate({ url }): Navigates to the given URL.
   
-  2. click({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, domainMemoryId }): Clicks on the first element matching a natural language search for the item you want to click.
+  2. click({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, identifiedElementId }): Clicks on the first element matching a natural language search for the item you want to click.
   
-  3. type({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, inputText, domainMemoryId }): Types the given text into the first element matching a natural language search for the input to type into.
+  3. type({ elementName, elementFunctionality, innerText, containerText, elementDescription, containerName, containerFunctionality, inputText, identifiedElementId }): Types the given text into the first element matching a natural language search for the input to type into.
     
   4. scrollUp({ scrollLength }): Move up the webpage by a specified amount.
   
@@ -21,7 +21,7 @@ export default function prompt({ input, state } = {}) {
     - containerText: Exact text visible ONLY within the same red-bordered container as the element. Do not include text from outside this red border. Provide as much context as possible to uniquely identify the element within its container.
     - containerName: Provide a concise, highly specific label for the red-bordered container based solely on its visible content, e.g., "Sony WH-1000XM4 Wireless Headphones Product Details Panel" or "Amazon Prime Video Categories Dropdown Menu". Avoid any generic terms or assumptions about the content.
     - containerFunctionality: Describe the red-bordered container's specific purpose and its functionality as it relates to this specific item on the web page. The name should be based on visible information within the container.
-    - domainMemoryId: You will receive a Domain Memory document with info that will assist you in clicking on and typing to elements you've previously identified. Use this value ONLY when selecting an element using Domain Memory.
+    - identifiedElementId: You will receive a Identified Elements document with info that will assist you in clicking on and typing to elements you've previously identified. Use this value ONLY when selecting an element using Identified Elements.
 
   CRITICAL: 
   - For ALL containerName and elementName values, use highly specific, distinguishing labels that uniquely identify the container or element based solely on what is visible within the red-bordered container in the screenshot. 
@@ -60,7 +60,7 @@ export default function prompt({ input, state } = {}) {
   - DO NOT MAKE ASSUMPTIONS ABOUT TEXT OUTSIDE OF THE CURRENT SCREENSHOT. Before submitting, verify that you have not made assumptions about content outside the visible area.
   Good luck!
 
-  ## Domain Memory
-  ${state.domainMemoryPrompt}
+  ## Identified Elements
+  ${state.identifiedElementsPrompt}
   `;
 }
