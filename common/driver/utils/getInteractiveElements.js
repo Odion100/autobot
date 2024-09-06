@@ -8,12 +8,12 @@ export default async function getInteractiveElements(containers, filter = "*") {
         path.unshift(selector);
         break;
       } else {
-        var sib = el,
-          nth = 1;
-        while ((sib = sib.previousElementSibling)) {
-          if (sib.nodeName.toLowerCase() == selector) nth++;
+        var parent = el.parentNode;
+        var sameTypeSiblings = parent.querySelectorAll(":scope > " + selector);
+        if (sameTypeSiblings.length > 1) {
+          var index = Array.from(sameTypeSiblings).indexOf(el) + 1;
+          selector += ":nth-of-type(" + index + ")";
         }
-        if (nth != 1) selector += ":nth-of-type(" + nth + ")";
       }
       path.unshift(selector);
       el = el.parentNode;
@@ -68,6 +68,7 @@ export default async function getInteractiveElements(containers, filter = "*") {
         .join(" ");
 
       if (isVisible(element)) {
+        console.log("element, element.innerText", element, element.innerText);
         acc.push({
           tagName: element.tagName.toLowerCase(),
           selector: cssPath(element),
