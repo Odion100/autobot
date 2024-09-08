@@ -36,6 +36,8 @@ async function searchMemory(
       });
       if (matchQuality === "full-match") {
         return { results: [rest], distances: [0.2] };
+      } else if (matchQuality === "partial-match") {
+        return { results: [rest], distances: [0.36] };
       }
     }
   }
