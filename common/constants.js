@@ -28,7 +28,7 @@ export const EXECUTION_REMINDER = `@internalInstructions:
           <question>If not visible:</question>
           <bullet-points>
             <point>Should I scroll to find the element?</point>
-            <point>Is the element in the Domain memory?</point>
+            <point>Is the element in the Pre Identified Elements?</point>
           </bullet-points>
         </sub-questions>
       </questions>

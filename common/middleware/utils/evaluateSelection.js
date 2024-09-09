@@ -31,6 +31,7 @@ async function evaluateAnchoredSelector(identifier, mwData) {
   }
 }
 export async function evaluateSelection(elementIdentifiers, distances, mwData) {
+  await driver.hideContainers();
   const { args, agents } = mwData;
   const { VisualConfirmation } = agents;
   for (const i in elementIdentifiers) {

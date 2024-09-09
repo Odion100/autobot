@@ -172,11 +172,11 @@ export default function CompareDescriptions() {
     temperature: 0,
   });
 
-  this.identifyMatch = async function (result, { input }) {
-    console.log("identifyMatch results", result);
-    return input.elementDescriptions.find(
-      (desc) => desc.elementNumber === result.elementNumber
+  this.identifyMatch = async function ({ elementNumber, matchQuality }, { input }) {
+    const originalInput = input.elementDescriptions.find(
+      (desc) => desc.elementNumber === elementNumber
     );
+    return { ...originalInput, matchQuality };
   };
 
   this.noMatch = async function (result, { state }) {

@@ -50,7 +50,7 @@ export default function insertLabels(identifiers) {
       const label = document.createElement("div");
       let top = "0px";
       let right = "0px";
-      if (parseInt(rect.width) <= 120) {
+      if (parseInt(rect.width) <= 70 && parseInt(rect.height) <= 30) {
         right = "-11px";
         top = "-6px";
       }

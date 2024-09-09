@@ -19,8 +19,8 @@ import {
   searchPage,
   awaitNavigation,
   insertScreenshot,
-  getDomainMemory,
-  setDomainMemoryPrompt,
+  getIdentifiedElements,
+  setIdentifiedElementsPrompt,
 } from "../../common/middleware/index.js";
 import { clearPageLoadEvent, resetContainers, setPageLoadEvent } from "./middleware.js";
 import ElementIdentifier from "../../modules/ElementIdentifier.js";
@@ -51,12 +51,12 @@ function WebTaskExecutor() {
   this.scrollDown = scrollDown;
   this.promptUser = promptUser;
 
-  this.after("navigate", getDomainMemory, resetContainers);
+  this.after("navigate", getIdentifiedElements, resetContainers);
   this.before("type", checkMemory, selectContainers, searchPage);
   this.before("click", checkMemory, selectContainers, searchPage);
   this.after("click", awaitNavigation, insertScreenshot, resetContainers);
   this.after("type", insertScreenshot, resetContainers);
-  this.after("$all", awaitNavigation, insertScreenshot, setDomainMemoryPrompt);
+  this.after("$all", awaitNavigation, insertScreenshot, setIdentifiedElementsPrompt);
   this.before("$invoke", setPageLoadEvent);
   this.after("$invoke", clearPageLoadEvent);
 }
@@ -73,7 +73,7 @@ export default Agentci()
     this.use({ exitConditions: { errors: 1 } });
   });
 
-// getDomainMemory and domainMemory functions should be turned into middleware
+// getIdentifiedElements and identifiedElements functions should be turned into middleware
 // move saveIdentifier to (after) middleware
 // move driver.setContainers into a middleware that is run after navigate
 // driver.clearCache needs to moved to a middleware that runs after navigate

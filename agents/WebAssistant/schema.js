@@ -61,9 +61,9 @@ export default function ({ state }) {
             type: "string",
             description: "The text to type into the input",
           },
-          domainMemoryId: {
+          identifiedElementId: {
             type: "string",
-            description: `Use this value ONLY when selecting an element from Domain Memory.`,
+            description: `Use this value ONLY when selecting an element from Identified Elements.`,
           },
         },
         required: [
@@ -121,9 +121,9 @@ export default function ({ state }) {
             description:
               "As much text as can be seen around the element and within the same red container as the target element. The boundaries of the container are the red box in which the element is found",
           },
-          domainMemoryId: {
+          identifiedElementId: {
             type: "string",
-            description: `Use this value ONLY when selecting an element from Domain Memory.`,
+            description: `Use this value ONLY when selecting an element from Identified Elements.`,
           },
         },
         required: [
@@ -212,7 +212,8 @@ export default function ({ state }) {
           },
           instructions: {
             type: "string",
-            description: "Updated detailed instructions for executing the job.",
+            description:
+              "A directive for executing the job that will be passed on to another agent. This is a directive not a description or a list. Do not micro manage. Do not be to specific. Do not give direction on how to complete the job.",
           },
           milestones: {
             type: "array",
@@ -242,7 +243,8 @@ export default function ({ state }) {
           },
           instructions: {
             type: "string",
-            description: "Detailed instructions for executing the job.",
+            description:
+              "A directive for executing the job that will be passed on to another agent. This is a directive not a description or a list. Do not micro manage. Do not be to specific. Do not give direction on how to complete the job.",
           },
           milestones: {
             type: "array",
