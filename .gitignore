@@ -131,3 +131,10 @@ dist
 
 vectorStore
 screenshots
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+autobotvenv/
