@@ -35,6 +35,7 @@ import ElementLocator from "../../modules/ElementLocator.js";
 import RefineSearch from "../../modules/RefineSearch.js";
 import CompareDescriptions from "../../modules/CompareDescriptions.js";
 import driver from "../../common/driver/index.js";
+import { createJob, deleteJob, getJob, updateJob } from "./methods.js";
 
 function WebAssistant() {
   this.use({
@@ -56,12 +57,10 @@ function WebAssistant() {
   this.scrollUp = scrollUp;
   this.scrollDown = scrollDown;
   this.getScreenshot = getScreenshot;
-  this.createJob = function (args) {
-    console.log("createJob args", args);
-  };
-  this.updateJob = function (args) {
-    console.log("updateJob args", args);
-  };
+  this.createJob = createJob
+  this.getJob = getJob
+  this.updateJob = updateJob
+  this.deleteJob = deleteJob
   this.executeJob = function (args) {
     console.log("executeJob args", args);
   };
