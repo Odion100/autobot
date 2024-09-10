@@ -1,6 +1,6 @@
 import { EXECUTION_REMINDER, SEARCH_HELP_MESSAGE } from "./constants.js";
 import driver from "./driver/index.js";
-import { wait } from "./utils/index.js";
+import { generateSelectOptionsPrompt, wait } from "./utils/index.js";
 
 export async function navigate({ url }, { state }) {
   let results;
@@ -15,11 +15,73 @@ export async function navigate({ url }, { state }) {
   }
 }
 
-export async function type(
-  { selectedElement, elementName, inputText, identifier },
-  { state }
+export async function selectOptionByIndex({ optionIndex }, { state }) {
+  const selectedElement = state.selectOptionElement;
+  const identifier = state.selectOptionIdentifier;
+
+  try {
+    const output = await selectedElement.evaluate((select, idx) => {
+      if (idx >= 0 && idx < select.options.length) {
+        select.selectedIndex = idx;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      return false;
+    }, optionIndex);
+    await driver.saveIdentifier(identifier, selectedElement);
+    if (output) return "@internalInstructions: Option selected successfully";
+    else return "Browser was unable to select the option from the select element";
+  } catch (error) {
+    console.error(error);
+    return "Error selecting option";
+  } finally {
+    state.selectOptionElement = undefined;
+    state.selectOptionIdentifier = undefined;
+  }
+}
+const getSelectOptions = async (selectedElement) =>
+  selectedElement.evaluate((select) => {
+    return Array.from(select.options).map((option) => ({
+      value: option.value,
+      text: option.text,
+      selected: option.selected,
+    }));
+  });
+
+async function handleSelectElement(
+  { selectedElement, identifier, selectOption },
+  mwData
 ) {
+  const { state } = mwData;
+  state.selectOptionElement = selectedElement;
+  state.selectOptionIdentifier = identifier;
+  await selectedElement.click();
+  const options = await getSelectOptions(selectedElement);
+  if (selectOption) {
+    const optionValue = selectOption.toLowerCase();
+    const optionIndex = options.findIndex(
+      (option) =>
+        option.value.toLowerCase() === optionValue ||
+        option.text.toLowerCase() === optionValue
+    );
+    if (optionIndex !== -1) {
+      return selectOptionByIndex({ optionIndex }, mwData);
+    }
+  }
+  const optionsPrompt = generateSelectOptionsPrompt(options);
+  return `A dropdown menu has been clicked. @internalInstructions: ${optionsPrompt}`;
+}
+
+export async function type(args, mwData) {
+  const { selectedElement, elementName, inputText, identifier } = args;
+  const { state } = mwData;
   if (selectedElement) {
+    const tagName = await selectedElement.evaluate((el) => el.tagName.toLowerCase());
+    console.log("type tagName", tagName);
+    if (tagName === "select") {
+      args.selectOption = inputText;
+      return handleSelectElement(args, mwData);
+    }
     await selectedElement.type(inputText, { delay: 100 });
     driver.saveIdentifier(identifier, selectedElement);
     state.screenshot_message = `The input was found and typed into. ${EXECUTION_REMINDER}`;
@@ -29,8 +91,13 @@ export async function type(
   return `The ${elementName} was not successfully selected. ${SEARCH_HELP_MESSAGE}`;
 }
 
-export async function click({ selectedElement, elementName, identifier }, { state }) {
+export async function click(args, mwData) {
+  const { selectedElement, elementName, identifier } = args;
+  const { state } = mwData;
   if (selectedElement) {
+    const tagName = await selectedElement.evaluate((el) => el.tagName.toLowerCase());
+    console.log("click tagName", tagName);
+    if (tagName === "select") return handleSelectElement(args, mwData);
     try {
       await driver.saveIdentifier(identifier, selectedElement);
       await selectedElement.click();
@@ -47,12 +114,12 @@ export async function click({ selectedElement, elementName, identifier }, { stat
 }
 export async function getScreenshot({}, { state }) {
   state.screenshot_message = `This is an image of the current page and view port. ${EXECUTION_REMINDER}`;
-  return "@Browser: inserting screenshot";
+  return "the browser has captured a screenshot";
 }
 
 export async function scrollUp(data, { state }) {
   const scrollPosition = await driver.scrollUp();
-  const message = `You have scrolled up to section ${scrollPosition}`;
+  const message = `The browser has scrolled up to section ${scrollPosition}`;
   state.screenshot_message = message;
 
   return message;
@@ -60,7 +127,7 @@ export async function scrollUp(data, { state }) {
 
 export async function scrollDown(data, { state }) {
   const scrollPosition = await driver.scrollDown();
-  const message = `You have scrolled down to section ${scrollPosition}`;
+  const message = `The browser has scrolled down to section ${scrollPosition}`;
   state.screenshot_message = message;
 
   return message;

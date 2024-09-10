@@ -14,6 +14,7 @@ export async function compareElements(
       args,
       type,
     });
+  driver.hideContainers();
   args.searchedContainers = args.targetContainers;
   args.searchedElements = elementDescriptions.filter(
     ({ matchQuality }) => matchQuality === "no-match"

@@ -225,13 +225,7 @@ function browserController() {
     }, identifiers);
   }
 
-  const clickable =
-    'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"]';
-
-  const typeable = "input, textarea";
-  const both = clickable + ", " + typeable;
-  const elementType = { clickable, typeable, both };
-  async function searchPage(searchText, targetContainers, where) {
+  async function searchPage(searchText, targetContainers, where, targetType) {
     console.log("searchText, targetContainers", searchText, targetContainers);
     await setContainers();
     await clearInsertedLabels();
@@ -244,7 +238,7 @@ function browserController() {
     const interActiveElements = await page.evaluate(
       getInteractiveElements,
       viewportContainers,
-      both
+      targetType
     );
     const { results } = await htmlVectorSearch.findElements(
       interActiveElements,
@@ -599,8 +593,7 @@ function browserController() {
 
     const interactiveElements = await page.evaluate(
       getInteractiveElements,
-      internalState.containers,
-      both
+      internalState.containers
     );
     await page.evaluate(insertRecorder, interactiveElements);
   }

@@ -8,7 +8,7 @@ export async function searchPage(mwData, next, secondSearch) {
   if (state.navigationStarted) return next();
   if (args.selectedElement) return next();
   let filter;
-  if (args.searchedElements) {
+  if (args.searchedElements && args.searchedElements.length) {
     filter = {
       $and: [
         {
@@ -28,7 +28,8 @@ export async function searchPage(mwData, next, secondSearch) {
   const identifiedElements = await driver.searchPage(
     `${elementName}, ${innerText}`,
     args.targetContainers,
-    filter
+    filter,
+    type
   );
   if (identifiedElements.length) {
     await driver.hideContainers();

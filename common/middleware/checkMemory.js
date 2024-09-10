@@ -22,6 +22,7 @@ async function searchMemory(
     );
   }
   const { results, distances } = searchResults;
+  console.log("searchResults", searchResults);
   if (distances[0] <= 0.35) {
     const savedIdentifiers = results.filter(
       (item, index) => distances[index] <= distances[0] + 0.05

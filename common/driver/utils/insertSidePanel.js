@@ -12,14 +12,22 @@ export default function insertSidePanel() {
         top: 0;
         right: 0;
         z-index: 300001;
+        pointer-events: none;
       }
+      #cambrianAiSidePanelWrapper .cambrian-ai-side-panel > * {
+        pointer-events: auto;
+      }  
       #cambrianAiSidePanelWrapper .cambrian-ai-side-header {
         display: flex;
         justify-content: flex-end;
         margin-bottom: 1px;
         padding: 10px;
         border-radius: 5px;
+        pointer-events: none;
       }
+      #cambrianAiSidePanelWrapper .cambrian-ai-side-header > * {
+        pointer-events: auto;
+      }  
       #cambrianAiSidePanelWrapper .cambrian-ai-side-button-holder {
         background: white;
         padding: 3px;

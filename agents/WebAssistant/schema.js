@@ -101,7 +101,7 @@ export default function ({ state }) {
           elementFunctionality: {
             type: "string",
             description:
-              "Describe the element's purpose and it's functionality as it relates to the entire page.",
+              "Describe the element's purpose and its functionality as it relates to the entire page.",
           },
           innerText: {
             type: "string",
@@ -114,7 +114,7 @@ export default function ({ state }) {
           containerFunctionality: {
             type: "string",
             description:
-              "Describe the container's purpose and it's functionality as it relates to this specific component the page.",
+              "Describe the container's purpose and its functionality as it relates to this specific component the page.",
           },
           containerText: {
             type: "string",
@@ -124,6 +124,11 @@ export default function ({ state }) {
           identifiedElementId: {
             type: "string",
             description: `Use this value ONLY when selecting an element from Identified Elements.`,
+          },
+          selectOption: {
+            type: "string",
+            description:
+              "Only For dropdown menu options of HTML <select> elements, specify the option to select. Use only if the element is a dropdown and you know the available options.",
           },
         },
         required: [
@@ -271,7 +276,27 @@ export default function ({ state }) {
     },
   };
 
-  return [
+  const selectOption = {
+    type: "function",
+    function: {
+      name: "selectOption",
+      description:
+        "Selects a specific option from a dropdown menu (HTML select element) that has been inadvertently clicked open.",
+      parameters: {
+        type: "object",
+        properties: {
+          optionIndex: {
+            type: "number",
+            description:
+              "The value of the Option Index to select from the open dropdown menu.",
+          },
+        },
+        required: ["option"],
+      },
+    },
+  };
+
+  const schema = [
     navigate,
     getScreenshot,
     click,
@@ -282,4 +307,6 @@ export default function ({ state }) {
     updateJob,
     createJob,
   ];
+  if (state.selectOptionElement) schema.push(selectOption);
+  return schema;
 }

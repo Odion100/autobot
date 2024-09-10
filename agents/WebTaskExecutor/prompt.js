@@ -56,7 +56,7 @@ export default function prompt({ input, state } = {}) {
   - Always call promptUser({ text }) when finished or when you have a question.
   - If you make a mistake, acknowledge it and attempt to correct it.
   - Remember that containers are distinct, mutually relevant groups of elements surrounded by red borders. Never reference content outside of a container's red border when describing that container or its elements.
-  - THE ARGUMENTS OF THE TYPE AND CLICK FUNCTIONS MUST COME FROM INFORMATION GATHERED FROM THE SCREENSHOTS YOU WILL RECEIVE OR FROM THE DOMAIN MEMORY DOCUMENT YOU WILL RECEIVE.
+  - THE ARGUMENTS OF THE TYPE AND CLICK FUNCTIONS MUST COME FROM INFORMATION GATHERED FROM THE SCREENSHOTS YOU WILL RECEIVE OR FROM THE IDENTIFIED ELEMENTS DOCUMENT YOU WILL RECEIVE.
   - DO NOT MAKE ASSUMPTIONS ABOUT TEXT OUTSIDE OF THE CURRENT SCREENSHOT. Before submitting, verify that you have not made assumptions about content outside the visible area.
   Good luck!
 

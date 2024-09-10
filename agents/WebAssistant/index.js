@@ -12,6 +12,7 @@ import {
   scrollUp,
   scrollDown,
   getScreenshot,
+  selectOptionByIndex,
 } from "../../common/methods.js";
 import {
   checkMemory,
@@ -57,10 +58,11 @@ function WebAssistant() {
   this.scrollUp = scrollUp;
   this.scrollDown = scrollDown;
   this.getScreenshot = getScreenshot;
-  this.createJob = createJob
-  this.getJob = getJob
-  this.updateJob = updateJob
-  this.deleteJob = deleteJob
+  this.selectOption = selectOptionByIndex;
+  this.createJob = createJob;
+  this.getJob = getJob;
+  this.updateJob = updateJob;
+  this.deleteJob = deleteJob;
   this.executeJob = function (args) {
     console.log("executeJob args", args);
   };
@@ -104,21 +106,3 @@ export default Agentci()
   .config(function () {
     this.use({ exitConditions: { errors: 1 } });
   });
-
-//Improve the webAssistant prompt
-//1. The ai should know how to answer what element do you know on this page.
-// - Turn identifiedElements to identifiedElements everywhere
-// - that means identifiedElementId will become elementId
-//2. Manual improve the prompt's focus on creating and executing jobs
-// - explain that in the intro text (its role and purpose)
-//3. Don't be two verbose
-// - Respond without being to verbose unless asked for more elaborate explications
-
-//Add the ability to create and edit jobs
-//1. create a mongodb collection for jobs
-//2. write the methods to create and edit jobs
-//3. create a jobs display in the ui
-
-//Add the ability to select from a drop down
-//Fix errors
-// - recorder. I've noticed that when trying to select and element to identify in a row of siblings only the first element can be selected.
