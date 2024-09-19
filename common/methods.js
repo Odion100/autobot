@@ -76,12 +76,9 @@ export async function type(args, mwData) {
   const { selectedElement, elementName, inputText, identifier } = args;
   const { state } = mwData;
   if (selectedElement) {
-    const tagName = await selectedElement.evaluate((el) => el.tagName.toLowerCase());
-    console.log("type tagName", tagName);
-    if (tagName === "select") {
-      args.selectOption = inputText;
-      return handleSelectElement(args, mwData);
-    }
+    // await selectedElement.click({ clickCount: 2 });
+    // Type the new text (this will replace the selected text)
+    await selectedElement.evaluate((el) => (el.value = "")); // Ensure it's cleared
     await selectedElement.type(inputText, { delay: 100 });
     driver.saveIdentifier(identifier, selectedElement);
     state.screenshot_message = `The input was found and typed into. ${EXECUTION_REMINDER}`;

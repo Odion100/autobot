@@ -61,7 +61,7 @@ export async function evaluateSelection(elementIdentifiers, distances, mwData) {
             if (isMatch) {
               args.identifier = identifier;
               return element;
-            }
+            } else await driver.clearSelection();
           }
         }
       }

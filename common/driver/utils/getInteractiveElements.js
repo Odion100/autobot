@@ -2,7 +2,7 @@ export default async function getInteractiveElements(containers, targetType) {
   const clickable =
     'a, [onclick], button, input[type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="checkbox"], [type="radio"], select';
 
-  const typeable = "input, textarea, select";
+  const typeable = "input, textarea";
   const filter = clickable + ", " + typeable;
 
   const cssPath = function (el, container) {
@@ -36,6 +36,7 @@ export default async function getInteractiveElements(containers, targetType) {
       tagName === "a" ||
       tagName === "button" ||
       tagName === "button" ||
+      tagName === "select" ||
       inputType === "submit" ||
       inputType === "reset" ||
       inputType === "image" ||
@@ -44,8 +45,6 @@ export default async function getInteractiveElements(containers, targetType) {
       inputType === "radio"
     ) {
       return "clickable";
-    } else if (tagName === "select") {
-      return targetType || "clickable";
     } else if (tagName === "input" || tagName === "textarea") {
       return "typeable";
     } else {

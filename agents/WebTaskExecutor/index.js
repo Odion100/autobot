@@ -73,12 +73,6 @@ export default Agentci()
     this.use({ exitConditions: { errors: 1 } });
   });
 
-// getIdentifiedElements and identifiedElements functions should be turned into middleware
-// move saveIdentifier to (after) middleware
-// move driver.setContainers into a middleware that is run after navigate
-// driver.clearCache needs to moved to a middleware that runs after navigate
-// setting the screenshot needs to be moved to afterware in order to make the common methods more reusable
-
-// create a promptHandler agent that will respond to the users questions and will call a continue function once the inquire/request is complete
-// Agentci: create an insertMessage function on the Agent class to insert messages and screenshots after invoking
-// - this means the middleware function need to be called with apply
+// filter out saved identifiers when searching page
+// give the agent the ability to update identifiers (fix its mistakes)
+// require an extra screenshot confirmation when saving for the first time

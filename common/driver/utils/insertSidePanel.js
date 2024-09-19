@@ -65,6 +65,10 @@ export default function insertSidePanel() {
         flex-grow: 1;
         overflow-y: auto;
         display: inline-flex;
+        pointer-events: none;
+      }
+      #cambrianAiSidePanelWrapper .cambrian-ai-content-container > * {
+        pointer-events: auto;
       }
       #cambrianAiSidePanelWrapper .cambrian-ai-chat-container,
       #cambrianAiSidePanelWrapper .cambrian-ai-memory-container {
