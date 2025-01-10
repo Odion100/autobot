@@ -11,7 +11,7 @@
 
 3. Start chromadb
    `chroma run --path ./vectorStore`
-
+   `node index` 
 ## Memory Store Selection
 
 How to learn any new site quickly.
