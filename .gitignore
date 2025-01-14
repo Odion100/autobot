@@ -41,6 +41,7 @@ build/Release
 # Dependency directories
 node_modules/
 jspm_packages/
+requirements.txt
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
@@ -138,3 +139,7 @@ __pycache__/
 
 # Virtual environment
 autobotvenv/
+
+# Temp audio files
+common/server/static/audio.webm
+common/server/static/speech.mps
