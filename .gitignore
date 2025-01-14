@@ -142,4 +142,4 @@ autobotvenv/
 
 # Temp audio files
 common/server/static/audio.webm
-common/server/static/speech.mps
+common/server/static/speech.mp3
