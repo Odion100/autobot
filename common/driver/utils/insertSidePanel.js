@@ -118,6 +118,7 @@ export default function insertSidePanel() {
           </div>
         </div>
         <div class="cambrian-ai-content-container">
+          <iframe id="audioPlayer" style="display: none;" src=""></iframe>
           <div class="cambrian-ai-chat-container"></div>
           <div class="cambrian-ai-memory-container"></div>
         </div>

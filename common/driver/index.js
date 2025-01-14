@@ -18,6 +18,7 @@ import selectorStore from "./utils/selectorStore.js";
 import setLabels from "./utils/setLabels.js";
 import insertContainerLabels from "./utils/insertContainerLabels.js";
 import getElementDescriptions from "./utils/getElementDescriptions.js";
+import handleSpeechOutput from "./utils/handleSpeechOutput.js";
 const webAssistantState = { messages: [] };
 
 function browserController() {
@@ -34,6 +35,8 @@ function browserController() {
     showSelection: true,
     interactions: [],
     agents: {},
+    mic: false,
+    spoken: {},
   };
   function init({ ElementIdentifier, WebAssistant } = {}) {
     console.log(" ElementIdentifier, WebAssistant", ElementIdentifier, WebAssistant);
@@ -108,6 +111,9 @@ function browserController() {
       });
       await page.exposeFunction("showRecorder", async () => {
         await showRecorder();
+      });
+      await page.exposeFunction("toggleMic", async () => {
+        await toggleMic();
       });
       await page.exposeFunction("clearContainers", clearContainers);
       page.on("load", async function () {
@@ -635,6 +641,17 @@ function browserController() {
       try {
         const res = await WebAssistant.invoke(input, webAssistantState);
         console.log("res", res);
+
+        if (internalState.mic) {
+          await page.evaluate(handleSpeechOutput, res);
+          if (internalState.spoken.includes(res)) {
+            console.log("Skipping duplicate speech output:", res);
+            return;
+          } else {   
+            // Add to spoken messages
+            internalState.spoken.push(res);    
+          }
+        }
         await showChat();
       } catch (error) {
         console.log("InsertChatMessage ERROR", error);
@@ -693,6 +710,29 @@ function browserController() {
       elementHandler
     );
   }
+
+  async function toggleMic() {
+    try {
+      if (internalState.mic) {
+        console.log("Stopping microphone...");
+        internalState.mic = false;
+        internalState.spoken = {};
+        return;
+      } else {
+        console.log("Starting microphone...");
+        internalState.mic = true;
+        // Populate spoken messages
+        const { WebAssistant } = internalState.agents;
+        const messages = WebAssistant.getNormalizedMessages();
+        internalState.spoken = messages
+          .filter((msg) => msg.role === "assistant")
+          .map((msg) => msg.message);
+      }
+    } catch (error) {
+      console.error("Error handling microphone button:", error);
+    }
+  }
+
   async function injectMarkDown() {
     return await page.evaluate(injectMarkdownResources);
   }
@@ -737,6 +777,7 @@ function browserController() {
     onPageLoad,
     scrollIntoView,
     showRecorder,
+    toggleMic,
     setupSections,
     getCurrentSection,
     goToSection,

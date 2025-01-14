@@ -62,6 +62,7 @@ export default function insertChatbot(messages) {
       <div class="chat-input">
         <textarea placeholder="Type a message..." rows="1"></textarea>
         <img class="send-button" src="data:image/png;base64,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" alt="Converted image">
+        <button class="mic-button">🎤</button>
       </div>
     </div>
   `;
@@ -178,6 +179,25 @@ export default function insertChatbot(messages) {
         border-radius: 50%;
         margin: 0 2px;
       }
+
+      .mic-button {
+        background-color:rgba(255, 255, 255, 0);
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        margin-left: 8px;
+      }
+
+      .mic-button:hover {
+        background-color: #4CAF50;
+      }
     </style>
   `;
   const sidePanel = document.querySelector("#cambrianAiSidePanelWrapper");
@@ -192,6 +212,7 @@ export default function insertChatbot(messages) {
 
   // Get references to important elements
   const sendButton = itemsContainer.querySelector(".send-button");
+  const micButton = itemsContainer.querySelector(".mic-button");
   const textareaField = itemsContainer.querySelector(".chat-input textarea");
   const messagesContainer = itemsContainer.querySelector(".chat-messages");
 
@@ -241,8 +262,81 @@ export default function insertChatbot(messages) {
     }
   }
 
+  async function checkMicrophoneAvailability() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const hasMicrophone = devices.some((device) => device.kind === "audioinput");
+    if (!hasMicrophone) {
+      alert("No microphone detected. Please connect one and reload the page.");
+    }
+  }
+
+  async function requestMicrophoneAccess() {
+    try {
+      await checkMicrophoneAvailability();
+      console.log("Requesting microphone access from navigator.mediaDevices...");
+      console.log("Microphone request origin:", window.location.origin);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      return stream; // Return the microphone stream
+    } catch (error) {
+      console.error('Microphone access denied:', error);
+
+      // User-friendly error messages
+      if (error.name === 'NotAllowedError') {
+        alert('Microphone access is required. Please click "Allow" when prompted.');
+      } else if (error.name === 'NotFoundError') {
+        alert('No microphone detected. Please connect a microphone and try again.');
+      } else {
+        alert('An unexpected error occurred. Please check your browser settings.');
+      }
+
+      throw error; // Re-throw for higher-level handling
+    }
+  }
+
+  async function handleSpeechInput(stream, maxDuration = 10000) {
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.start();
+    return new Promise((resolve, reject) => {
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+        try {
+          const formData = new FormData();
+          formData.append('file', audioBlob, 'audio.webm');
+          const response = await fetch(`http://localhost:3000/api/speech-to-text`, {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to get transcription.');
+          }
+          const result = await response.json();
+          if (!result.text) {
+            throw new Error('No transcription received.');
+          }
+          resolve(result.text);
+        } catch (error) {
+          console.error('Speech-to-Text Error:', error.message);
+          reject(error);
+        }
+      };
+      setTimeout(() => recorder.stop(), maxDuration);
+    });
+  }
+
   // Add event listeners
   sendButton.addEventListener("click", handleSendMessage);
+ 
+  micButton.addEventListener("click", async () => { 
+    window.toggleMic()
+    // Request microphone access and process speech
+    const stream = await requestMicrophoneAccess();
+    const userSpeech = await handleSpeechInput(stream);
+    textareaField.value = userSpeech;
+    handleSendMessage();
+  });
 
   textareaField.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
