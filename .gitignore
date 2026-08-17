@@ -132,9 +132,22 @@ dist
 vectorStore
 screenshots
 
+# Claude Code — not saved with the project
+CLAUDE.md
+wiki/
+.claude/
+
 # Python cache files
 __pycache__/
 *.py[cod]
 
 # Virtual environment
 autobotvenv/
+# SystemView — runtime state, regenerates on service start (specs/ IS committed)
+.systemview/
+systemview.manifest.json
+systemview.logs
+
+# runtime artifacts
+state.json
+.DS_Store

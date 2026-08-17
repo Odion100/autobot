@@ -5,7 +5,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "hub": "node systemview/service.js"
   },
   "repository": {
     "type": "git",
@@ -28,8 +29,7 @@
     "mongoose": "^8.6.1",
     "openai": "^4.28.4",
     "puppeteer": "^19.11.1",
-    "readline": "^1.3.0",
-    "systemlynx": "^1.14.10"
+    "readline": "^1.3.0"
   },
   "config": {
     "commitizen": {
@@ -37,6 +37,8 @@
     }
   },
   "devDependencies": {
-    "cz-conventional-changelog": "^3.3.0"
+    "cz-conventional-changelog": "^3.3.0",
+    "systemlynx": "^3.3.2",
+    "systemview-plugin": "^2.21.0"
   }
 }

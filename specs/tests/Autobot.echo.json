@@ -1,0 +1,52 @@
+[
+  {
+    "title": "echoes a message built from live service info",
+    "namespace": { "serviceId": "Autobot", "moduleName": "Autobot", "methodName": "echo" },
+    "Before": [
+      {
+        "title": "read the service's own info",
+        "namespace": { "serviceId": "Autobot", "moduleName": "Autobot", "methodName": "info" },
+        "args": [],
+        "savedEvaluations": [
+          {
+            "namespace": "results.name",
+            "expected_type": "string",
+            "validations": [{ "name": "strEquals", "value": "autobot" }],
+            "save": true
+          }
+        ]
+      }
+    ],
+    "Main": [
+      {
+        "title": "echo a string carrying a tv() reference to the Before step's result",
+        "namespace": { "serviceId": "Autobot", "moduleName": "Autobot", "methodName": "echo" },
+        "args": [
+          {
+            "name": "argument:",
+            "input": "greetings from tv(test.before[0].results.name)",
+            "input_type": "string",
+            "data_type": "",
+            "targetValues": [
+              {
+                "target_namespace": "tv(test.before[0].results.name)",
+                "source_map": ["input"],
+                "source_index": 15
+              }
+            ]
+          }
+        ],
+        "savedEvaluations": [
+          {
+            "namespace": "results.message",
+            "expected_type": "string",
+            "validations": [{ "name": "isLike", "value": "greetings from autobot" }],
+            "save": true
+          }
+        ]
+      }
+    ],
+    "Events": [],
+    "After": []
+  }
+]

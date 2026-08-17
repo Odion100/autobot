@@ -1,0 +1,36 @@
+[
+  {
+    "title": "ping answers with ok, its identity, and a timestamp",
+    "namespace": { "serviceId": "Autobot", "moduleName": "Autobot", "methodName": "ping" },
+    "Before": [],
+    "Main": [
+      {
+        "title": "ping the service",
+        "namespace": { "serviceId": "Autobot", "moduleName": "Autobot", "methodName": "ping" },
+        "args": [],
+        "savedEvaluations": [
+          {
+            "namespace": "results.ok",
+            "expected_type": "boolean",
+            "validations": [{ "name": "boolEquals", "value": true }],
+            "save": true
+          },
+          {
+            "namespace": "results.service",
+            "expected_type": "string",
+            "validations": [{ "name": "strEquals", "value": "Autobot" }],
+            "save": true
+          },
+          {
+            "namespace": "results.ts",
+            "expected_type": "number",
+            "validations": [{ "name": "min", "value": 1 }],
+            "save": true
+          }
+        ]
+      }
+    ],
+    "Events": [],
+    "After": []
+  }
+]
