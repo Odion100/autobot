@@ -1,5 +1,5 @@
 import imageEncoder from "agentci/agentci/utils/imageEncoder.mjs";
-import driver from "../driver/index.js";
+import driver from "../../../common/driver/index.js";
 
 export async function insertScreenshot({ state }, next) {
   console.log("screenshot-->", state.screenshot_message);

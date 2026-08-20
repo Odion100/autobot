@@ -1,4 +1,4 @@
-import driver from "../../driver/index.js";
+import driver from "../../../../common/driver/index.js";
 
 async function evaluateAnchoredSelector(identifier, mwData) {
   const potentialAnchors = await driver.filterPotentialAnchors(identifier);

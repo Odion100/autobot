@@ -1,6 +1,6 @@
-import { EXECUTION_REMINDER, SEARCH_HELP_MESSAGE } from "./constants.js";
-import driver from "./driver/index.js";
-import { generateSelectOptionsPrompt, wait } from "./utils/index.js";
+import { EXECUTION_REMINDER, SEARCH_HELP_MESSAGE } from "../../common/constants.js";
+import driver from "../../common/driver/index.js";
+import { generateSelectOptionsPrompt, wait } from "../../common/utils/index.js";
 
 export async function navigate({ url }, { state }) {
   let results;

@@ -12,7 +12,7 @@ import {
   scrollUp,
   scrollDown,
   promptUser,
-} from "../../common/methods.js";
+} from "../common/methods.js";
 import {
   checkMemory,
   selectContainers,
@@ -21,14 +21,14 @@ import {
   insertScreenshot,
   getIdentifiedElements,
   setIdentifiedElementsPrompt,
-} from "../../common/middleware/index.js";
+} from "../common/middleware/index.js";
 import { clearPageLoadEvent, resetContainers, setPageLoadEvent } from "./middleware.js";
-import ElementIdentifier from "../../modules/ElementIdentifier.js";
-import ContainerIdentifier from "../../modules/ContainerIdentifier.js";
-import VisualConfirmation from "../../modules/VisualConfirmation.js";
-import ElementLocator from "../../modules/ElementLocator.js";
-import RefineSearch from "../../modules/RefineSearch.js";
-import CompareDescriptions from "../../modules/CompareDescriptions.js";
+import ElementIdentifier from "../common/modules/ElementIdentifier.js";
+import ContainerIdentifier from "../common/modules/ContainerIdentifier.js";
+import VisualConfirmation from "../common/modules/VisualConfirmation.js";
+import ElementLocator from "../common/modules/ElementLocator.js";
+import RefineSearch from "../common/modules/RefineSearch.js";
+import CompareDescriptions from "../common/modules/CompareDescriptions.js";
 
 function WebTaskExecutor() {
   this.use({

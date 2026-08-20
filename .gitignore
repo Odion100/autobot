@@ -151,3 +151,6 @@ systemview.logs
 # runtime artifacts
 state.json
 .DS_Store
+
+# Playwright MCP session artifacts
+.playwright-mcp/

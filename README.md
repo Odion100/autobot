@@ -12,6 +12,30 @@
 3. Start chromadb
    `chroma run --path ./vectorStore`
    `node index` 
+
+## Electron shell (the autobot browser)
+
+Launch the shell:
+
+```
+npm start
+```
+
+Opens on the shell's home page (`electron/index.html`); phase 3 grows this window into the full browser (tabs, native agent sidebar). Env knobs: `AUTOBOT_START_URL` to open on a page instead, `AUTOBOT_CDP_PORT` (default `9223`), `AUTOBOT_SHELL_SHOW=0` to run windowless. (`npm run shell` is an alias.)
+
+Smoke tests for the AX action lane:
+
+- `npm run smoke:ax` — Playwright-MCP action core driving its own Chrome (snapshot → ref → click → verify)
+- `npm run smoke:electron` — the same loop attached to OUR shell over CDP
+
+Three traps if you touch the Electron setup:
+
+1. The shell entry must stay `.cjs` (`electron/main.cjs`). The repo is ESM, and an ESM entry breaks Electron's resolution of the builtin `electron` module under the default app.
+2. Electron 43's installer needs node ≥ 22 (`nvm use 22`); v20 fails at install time with `ERR_REQUIRE_ESM`. If `node_modules/electron` was installed under v20, finish it with `node node_modules/electron/install.js` on v22.
+3. Agent harnesses (VS Code / Claude Code) export `ELECTRON_RUN_AS_NODE=1`, which silently turns the Electron binary into plain node (no `app` APIs). `electron/launch.js` and `electron/smoke.js` scrub it from the child env — never spawn the binary raw with inherited env.
+
+Files live with what they're coupled to — the launcher and shell smoke sit in `electron/`, the driver smoke next to `common/driver/axCore.js` — no catch-all scripts folder.
+
 ## Memory Store Selection
 
 How to learn any new site quickly.

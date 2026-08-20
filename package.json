@@ -6,7 +6,11 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "hub": "node systemview/service.js"
+    "hub": "node systemview/service.js",
+    "start": "node electron/launch.js",
+    "shell": "node electron/launch.js",
+    "smoke:ax": "node common/driver/ax-smoke.js",
+    "smoke:electron": "node electron/smoke.js"
   },
   "repository": {
     "type": "git",
@@ -21,6 +25,8 @@
   "dependencies": {
     "@langchain/community": "^0.0.35",
     "@langchain/openai": "^0.0.18",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@playwright/mcp": "^0.0.79",
     "agentci": "^0.5.1",
     "cheerio": "^1.0.0-rc.12",
     "chromadb": "^1.8.1",
@@ -38,7 +44,8 @@
   },
   "devDependencies": {
     "cz-conventional-changelog": "^3.3.0",
+    "electron": "^43.4.1",
     "systemlynx": "^3.3.2",
-    "systemview-plugin": "^2.21.0"
+    "systemview-plugin": "^2.22.0"
   }
 }

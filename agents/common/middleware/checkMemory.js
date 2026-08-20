@@ -1,4 +1,4 @@
-import driver from "../driver/index.js";
+import driver from "../../../common/driver/index.js";
 import { multiParameterSearch, evaluateSelection } from "./utils/index.js";
 
 async function searchMemory(

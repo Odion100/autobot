@@ -1,5 +1,5 @@
-import driver from "../../driver/index.js";
-import { uniqueId } from "../../utils/index.js";
+import driver from "../../../../common/driver/index.js";
+import { uniqueId } from "../../../../common/utils/index.js";
 
 export async function multiParameterSearch(identifiers, args, filter) {
   const params = [

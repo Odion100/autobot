@@ -1,7 +1,7 @@
 import driver from "./common/driver/index.js";
 import WebAssistant from "./agents/WebAssistant/index.js";
 import { deleteScreenshots } from "./common/utils/index.js";
-import ElementIdentifier from "./modules/ElementIdentifier.js";
+import ElementIdentifier from "./agents/common/modules/ElementIdentifier.js";
 import Agentci from "agentci";
 import { connectToMongoDB } from './db/connection.js';
 

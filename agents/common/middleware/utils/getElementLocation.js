@@ -1,4 +1,4 @@
-import driver from "../../driver/index.js";
+import driver from "../../../../common/driver/index.js";
 
 export async function getElementLocation(mwData, next) {
   const {

@@ -1,4 +1,4 @@
-import driver from "../driver/index.js";
+import driver from "../../../common/driver/index.js";
 import { compareElements, evaluateSelection } from "./utils/index.js";
 
 export async function searchPage(mwData, next, secondSearch) {

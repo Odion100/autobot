@@ -1,5 +1,5 @@
-import driver from "../driver/index.js";
-import { removeDuplicates } from "../utils/index.js";
+import driver from "../../../common/driver/index.js";
+import { removeDuplicates } from "../../../common/utils/index.js";
 
 export async function setIdentifiedElementsPrompt({ state }, next) {
   console.log(state.identifiedElements, "<---- here");

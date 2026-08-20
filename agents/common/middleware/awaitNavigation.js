@@ -1,6 +1,6 @@
-import driver from "../driver/index.js";
-import { wait } from "../utils/index.js";
-import { EXECUTION_REMINDER } from "../constants.js";
+import driver from "../../../common/driver/index.js";
+import { wait } from "../../../common/utils/index.js";
+import { EXECUTION_REMINDER } from "../../../common/constants.js";
 import { getIdentifiedElements } from "./getIdentifiedElements.js";
 
 export async function awaitNavigation({ state }, next) {
