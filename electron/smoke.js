@@ -13,7 +13,9 @@ const CDP = "http://localhost:9223";
 
 // Agent harnesses (VS Code / Claude Code) export ELECTRON_RUN_AS_NODE=1, which makes the
 // Electron binary run as plain node and strips the app APIs — scrub it or the shell never boots.
-const env = { ...process.env, AUTOBOT_SHELL_SHOW: "0" };
+// AUTOBOT_SMOKE=1 boots one plain page (no chrome/tabs) so the action lane
+// deterministically drives the page under test, not the shell's own UI.
+const env = { ...process.env, AUTOBOT_SHELL_SHOW: "0", AUTOBOT_SMOKE: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 
 const shell = spawn(electronBin, [mainEntry], { env, stdio: "ignore" });

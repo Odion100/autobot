@@ -15,13 +15,17 @@
 
 ## Electron shell (the autobot browser)
 
-Launch the shell:
+Needs **node ≥ 22** for everything shell-related (Electron 43 and Vite 8 both) — there's an `.nvmrc`, so `nvm use` sets it. Then:
 
 ```
 npm start
 ```
 
-Opens on the shell's home page (`electron/index.html`); phase 3 grows this window into the full browser (tabs, native agent sidebar). Env knobs: `AUTOBOT_START_URL` to open on a page instead, `AUTOBOT_CDP_PORT` (default `9223`), `AUTOBOT_SHELL_SHOW=0` to run windowless. (`npm run shell` is an alias.)
+Builds the chrome (`ui:build` runs automatically) and opens the browser frame: a React chrome (`electron/ui/` — tab rail, nav strip, hovering-agent placeholder) with every tab rendered as a WebContentsView beneath it — pages never contain our UI. Day-one tabs: SystemView as a local app (shows its title, not its URL) plus a web tab. Chrome development with hot reload: `npm run ui:dev`, then `AUTOBOT_UI_URL=http://localhost:5173 npm run shell`.
+
+Env knobs: `AUTOBOT_START_URL` for the web tab's starting page, `AUTOBOT_CDP_PORT` (default `9223`), `AUTOBOT_SHELL_SHOW=0` windowless, `AUTOBOT_SMOKE=1` boots one plain page with no chrome/tabs (what `npm run smoke:electron` uses so the action lane drives a deterministic target).
+
+**Developing the shell:** `npm run dev` — one command, both loops: nodemon relaunches Electron when anything in `electron/` changes (main process, preloads, home page), and the chrome runs off the Vite dev server so React edits hot-reload without any restart. Plain `npm start` stays the production-style boot (builds the chrome bundle, then launches).
 
 Smoke tests for the AX action lane:
 

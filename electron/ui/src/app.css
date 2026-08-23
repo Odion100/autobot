@@ -1,0 +1,229 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  background: #0b0e13;
+  color: #e6e8eb;
+  font-family: -apple-system, "SF Pro Text", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Layout: left dock + thin top strip. Content views sit in the remaining hole. */
+.chrome { height: 100%; }
+
+.dock {
+  position: fixed;
+  left: 0; top: 0; bottom: 0;
+  width: 188px;
+  background: linear-gradient(180deg, #10151d 0%, #0b0e13 100%);
+  border-right: 1px solid #1c232e;
+  padding: 44px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  -webkit-app-region: drag;
+  overflow-y: auto;
+}
+
+.stellar-mark { filter: drop-shadow(0 0 5px rgba(124, 196, 255, 0.45)); flex: none; }
+
+/* the app you're IN — left corner, click to open the switcher */
+.app-corner {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex: none;
+}
+.app-corner:hover { background: #1a2330; }
+.corner-logo { width: 16px; height: 16px; border-radius: 4px; flex: none; }
+.corner-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #7cc4ff;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-logo { width: 15px; height: 15px; border-radius: 4px; flex: none; }
+.card-hint { font-size: 9.5px; color: #4a5361; text-transform: uppercase; letter-spacing: 0.08em; }
+.card.closed { opacity: 0.6; }
+.card.closed:hover { opacity: 1; }
+
+.spacer { flex: 1; }
+.brand-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #7cc4ff;
+  padding-right: 4px;
+}
+
+.dock-label {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: #4a5361;
+  padding: 8px 6px 2px;
+}
+
+.card {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border-left: 2px solid transparent;
+  color: #9aa3ad;
+  cursor: default;
+  overflow: hidden;
+}
+.card:hover { background: #161d27; }
+.card.active {
+  background: #1a2330;
+  border-left-color: #7cc4ff;
+  color: #e6e8eb;
+}
+.card-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-close { opacity: 0; font-size: 10px; padding: 2px 4px; border-radius: 4px; }
+.card:hover .card-close { opacity: 0.7; }
+.card-close:hover { background: #2c3542; opacity: 1; }
+.card.new { color: #4a5361; font-size: 12px; }
+.card.new:hover { color: #9aa3ad; }
+
+.app-dot { width: 8px; height: 8px; border-radius: 3px; background: #7cc4ff; flex: none; }
+.web-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #4a5361; flex: none; }
+
+.dock-closed .dock { display: none; }
+/* dock hidden: strip takes the full width; controls start right after the traffic lights */
+.dock-closed .top-strip { left: 0; padding-left: 74px; }
+
+.top-strip {
+  position: fixed;
+  left: 188px; top: 0; right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  background: #10151d;
+  border-bottom: 1px solid #1c232e;
+  -webkit-app-region: drag;
+}
+.top-strip button {
+  -webkit-app-region: no-drag;
+  width: 28px; height: 28px;
+  border: none; border-radius: 7px;
+  background: transparent;
+  color: #e6e8eb;
+  font-size: 14px;
+  cursor: pointer;
+}
+.top-strip button:hover:not(:disabled) { background: #1a2330; }
+.top-strip button:disabled { color: #3a4250; }
+
+/* open tabs, listed across — subtle, on the other side of the back-and-forth */
+.strip-tabs {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 6px;
+  max-width: 44%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.strip-tabs::-webkit-scrollbar { display: none; }
+.strip-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  color: #627080;
+  white-space: nowrap;
+  cursor: default;
+}
+.strip-tab:hover { background: #1a2330; color: #9aa3ad; }
+.strip-tab.active { background: #1a2330; color: #e6e8eb; }
+.app-dot.mini { width: 6px; height: 6px; border-radius: 2px; }
+
+.new-tab {
+  -webkit-app-region: no-drag;
+  width: 24px; height: 24px;
+  border: none; border-radius: 6px;
+  background: transparent;
+  color: #627080;
+  font-size: 15px;
+  cursor: pointer;
+  flex: none;
+  margin-right: 4px;
+}
+.new-tab:hover { background: #1a2330; color: #e6e8eb; }
+
+.url-form { flex: 1; max-width: 620px; -webkit-app-region: no-drag; }
+/* quiet until you reach for it — the address is present, not prominent */
+.url-input {
+  width: 100%;
+  height: 28px;
+  border: none; border-radius: 8px;
+  background: transparent;
+  color: #627080;
+  padding: 0 10px;
+  font-size: 12px;
+  outline: none;
+}
+.url-input:hover { background: #0b0e13; color: #9aa3ad; }
+.url-input:focus { background: #0b0e13; color: #e6e8eb; box-shadow: 0 0 0 1.5px #2b5f8f; }
+
+.app-pill {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+.app-tag { font-size: 9.5px; color: #4a5361; text-transform: uppercase; letter-spacing: 0.08em; }
+
+.loading { color: #7cc4ff; font-size: 20px; }
+
+.agent-bubble {
+  -webkit-app-region: no-drag;
+  position: fixed;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: #2b5f8f;
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  cursor: grab;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+.agent-panel {
+  position: fixed;
+  width: 280px;
+  background: #10151d;
+  border: 1px solid #1c232e;
+  border-radius: 10px;
+  padding: 12px 14px;
+  z-index: 10;
+  -webkit-app-region: no-drag;
+}
+.agent-panel-title { font-weight: 600; margin-bottom: 6px; color: #7cc4ff; }
+.agent-panel p { color: #9aa3ad; line-height: 1.45; font-size: 12px; }

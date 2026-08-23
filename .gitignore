@@ -154,3 +154,4 @@ state.json
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+electron/ui/dist/
