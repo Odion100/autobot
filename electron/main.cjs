@@ -12,6 +12,7 @@ const fs = require("fs");
 const { APPS } = require("./apps/registry.cjs");
 const { ensureApp, isUp } = require("./apps/launcher.cjs");
 const termHost = require("./terminal/host.cjs");
+const agentHost = require("./agents/host.cjs");
 const supervisor = require("./agents/supervisor.cjs");
 
 const CDP_PORT = process.env.AUTOBOT_CDP_PORT || "9223";
@@ -29,11 +30,16 @@ if (!headless && !app.requestSingleInstanceLock()) {
 
 const HOME_URL = `file://${path.join(__dirname, "home.html")}`;
 const isHome = (url) => url && url.startsWith("file:") && url.endsWith("home.html");
+const SETUP_URL = `file://${path.join(__dirname, "setup.html")}`;
+const isSetup = (url) => url && url.startsWith("file:") && url.endsWith("setup.html");
 
 // ---- chrome geometry -----------------------------------------------------------
 const DOCK_W = 188;
 const STRIP_H = 44;
+const AGENTS_W = 380; // default; drag-to-resize updates agentsW
 let dockOpen = false;
+let agentsOpen = false;
+let agentsW = AGENTS_W;
 
 let win = null;
 const tabs = []; // { id, kind: "web" | "app", appId?, title, favicon, view }
@@ -45,6 +51,8 @@ const history = (wc) => wc.navigationHistory ?? wc;
 function state() {
   return {
     activeId,
+    agentsOpen,
+    agentsWidth: agentsW,
     tabs: tabs.map((t) => ({
       id: t.id,
       kind: t.kind,
@@ -71,10 +79,14 @@ function layout() {
   if (!win) return;
   const [w, h] = win.getContentSize();
   const dockW = dockOpen ? DOCK_W : 0;
+  // The agents panel is chrome, and tabs are NATIVE views drawn over the chrome —
+  // so the panel gets reserved space the same way the dock does. (The floating
+  // bubble version was invisible behind every page; Odion caught it.)
+  const agentsInset = agentsOpen ? agentsW : 0;
   for (const t of tabs) {
     t.view.setVisible(t.id === activeId);
     if (t.id === activeId)
-      t.view.setBounds({ x: dockW, y: STRIP_H, width: w - dockW, height: h - STRIP_H });
+      t.view.setBounds({ x: dockW, y: STRIP_H, width: w - dockW - agentsInset, height: h - STRIP_H });
   }
 }
 
@@ -120,12 +132,17 @@ function addTab({ url, kind = "web", title = "", appId = null, activate = true }
   // Local-app tabs get the host bridge (window.systemview.terminal per RFC-001's
   // frozen transport contract); the landing page gets its few verbs; plain web
   // tabs get nothing extra.
+  // sandbox: false on OUR preloads only — a sandboxed preload can require nothing
+  // but "electron", and the shared dictation module needs a real require. Context
+  // isolation stays on; plain web tabs stay fully sandboxed (they get no preload).
   const view = new WebContentsView(
     kind === "app"
-      ? { webPreferences: { preload: path.join(__dirname, "apps/svPreload.cjs") } }
+      ? { webPreferences: { preload: path.join(__dirname, "apps/svPreload.cjs"), sandbox: false } }
       : isHome(url)
-        ? { webPreferences: { preload: path.join(__dirname, "home-preload.cjs") } }
-        : {}
+        ? { webPreferences: { preload: path.join(__dirname, "home-preload.cjs"), sandbox: false } }
+        : isSetup(url)
+          ? { webPreferences: { preload: path.join(__dirname, "setup-preload.cjs"), sandbox: false } }
+          : {}
   );
   const tab = { id: nextId++, kind, appId, title, favicon: null, view };
   tabs.push(tab);
@@ -181,8 +198,69 @@ ipcMain.handle("tabs", (_e, action, payload = {}) => {
     case "forward": history(tab?.view.webContents ?? {}).goForward?.(); break;
     case "reload": tab?.view.webContents.reload(); break;
     case "dock": dockOpen = !!payload.open; layout(); break;
+    case "agents": {
+      agentsOpen = !!payload.open;
+      // no invented ceiling — the clamp MUST match the renderer's or the column
+      // draws under the native views ("off to the left, you can't see it at all")
+      if (payload.width) {
+        const maxW = (win ? win.getContentBounds().width : 4000) - 160;
+        agentsW = Math.max(180, Math.min(maxW, Math.round(payload.width)));
+      }
+      layout(); broadcast(); break;
+    }
+    case "openSetup": {
+      const existing = tabs.find((t) => isSetup(t.view.webContents.getURL()));
+      if (existing) setActive(existing.id); else addTab({ url: SETUP_URL });
+      break;
+    }
   }
   return state();
+});
+
+// The setup page's verbs — his "section in the browser I go to NOW": Claude login
+// state (read-only — the claude CLI owns the credential), the API-key fallback,
+// and add-a-project-by-folder writing the same ~/.autobot/projects.json that
+// terminals and agent sessions resolve cwd from.
+const os = require("os");
+const AUTOBOT_DIR = path.join(os.homedir(), ".autobot");
+const PROJECTS_FILE = path.join(AUTOBOT_DIR, "projects.json");
+const AUTH_FILE = path.join(AUTOBOT_DIR, "agent-auth.json");
+const readJson = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fallback; } };
+
+ipcMain.handle("setup:auth-status", () => {
+  const claude = readJson(path.join(os.homedir(), ".claude.json"), {});
+  const auth = readJson(AUTH_FILE, {});
+  return {
+    signedIn: !!claude.oauthAccount,
+    email: claude.oauthAccount?.emailAddress || null,
+    hasApiKey: !!auth.ANTHROPIC_API_KEY,
+  };
+});
+ipcMain.handle("setup:save-key", (_e, key) => {
+  const auth = readJson(AUTH_FILE, {});
+  if (key) auth.ANTHROPIC_API_KEY = key; else delete auth.ANTHROPIC_API_KEY;
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2));
+  return true;
+});
+ipcMain.handle("setup:projects", () => readJson(PROJECTS_FILE, {}));
+ipcMain.handle("setup:pick-folder", async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
+  return r.canceled ? null : r.filePaths[0];
+});
+ipcMain.handle("setup:add-project", (_e, code, dir) => {
+  const map = readJson(PROJECTS_FILE, {});
+  // same rule as the IDE picker: a code means one folder, refuse a silent re-point
+  if (map[code] && path.resolve(map[code]) !== path.resolve(dir))
+    return { error: `"${code}" already means ${map[code]}` };
+  map[code] = dir;
+  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(map, null, 2));
+  return map;
+});
+ipcMain.handle("setup:remove-project", (_e, code) => {
+  const map = readJson(PROJECTS_FILE, {});
+  delete map[code];
+  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(map, null, 2));
+  return map;
 });
 
 app.whenReady().then(async () => {
@@ -193,7 +271,7 @@ app.whenReady().then(async () => {
     title: "autobot",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#0b0e13",
-    webPreferences: { preload: path.join(__dirname, "preload.cjs") },
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), sandbox: false },
   });
 
   // Smoke mode: one plain page, no chrome, tabs, or hub — keeps the action-lane
@@ -218,6 +296,8 @@ app.whenReady().then(async () => {
   if (process.platform === "darwin") systemPreferences.askForMediaAccess("microphone").catch(() => {});
 
   termHost.register();
+  agentHost.register(); // Claude sessions via the Agent SDK, on the user's login (RFC-002)
+  require("./apps/files-host.cjs").register(() => win); // projects/files/auth for /ide (RFC-047 seam)
   require("./apps/dictation.cjs").register();
   supervisor.boot(); // hosted agent sessions from ~/.autobot/hosted.json (none by default)
 
@@ -252,6 +332,36 @@ app.whenReady().then(async () => {
         app.exit(result.bridge && result.stream && result.history ? 0 : 1);
       } catch (e) {
         console.log("TERMSMOKE error:", e.message);
+        app.exit(1);
+      }
+    };
+    setTimeout(check, 8000);
+  }
+
+  // End-to-end agent-lane smoke: a real Claude session through the preload bridge,
+  // riding the user's login. Proves the event vocabulary arrives in a page.
+  if (process.env.AUTOBOT_AGENTSMOKE === "1") {
+    const check = async () => {
+      const t = tabs.find((x) => x.appId === "systemview");
+      if (!t) { console.log("AGENTSMOKE: no systemview tab (hub down?)"); app.exit(2); return; }
+      await new Promise((r) => setTimeout(r, 4000));
+      try {
+        const result = await t.view.webContents.executeJavaScript(`(async () => {
+          if (!window.systemview?.agent) return { bridge: false };
+          const tr = await window.systemview.agent.open({ projectCode: "autobot", sessionId: "e2e" });
+          const kinds = {};
+          let text = "";
+          tr.onEvent((ev) => { kinds[ev.kind] = (kinds[ev.kind] || 0) + 1; if (ev.kind === "assistant.text" && ev.done) text += ev.text; });
+          tr.send("Reply with exactly: HARNESS-OK");
+          for (let i = 0; i < 60 && !kinds.usage; i++) await new Promise((r) => setTimeout(r, 1000));
+          const enveloped = (await tr.history()).every((ev) => ev.sessionId && ev.projectCode && ev.worktree);
+          await tr.kill();
+          return { bridge: true, ok: text.includes("HARNESS-OK"), enveloped, kinds };
+        })()`);
+        console.log("AGENTSMOKE:", JSON.stringify(result));
+        app.exit(result.bridge && result.ok ? 0 : 1);
+      } catch (e) {
+        console.log("AGENTSMOKE error:", e.message);
         app.exit(1);
       }
     };

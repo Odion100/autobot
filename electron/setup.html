@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>setup</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #0b0e13; color: #c7d0da;
+    font: 14px/1.5 -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+    display: flex; justify-content: center;
+    padding: 60px 24px;
+  }
+  main { width: 640px; max-width: 100%; }
+  h1 { font-size: 20px; color: #dbe9f6; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: #66717d; font-size: 13px; margin-bottom: 34px; }
+  section {
+    background: #10151d; border: 1px solid #1c232e; border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 18px;
+  }
+  h2 { font-size: 13px; color: #7cc4ff; font-weight: 600; text-transform: lowercase; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 13.5px; }
+  .row + .row { border-top: 1px solid #151c26; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #3a4552; flex: none; }
+  .dot.on { background: #58c78a; box-shadow: 0 0 6px rgba(88,199,138,.6); }
+  .grow { flex: 1; }
+  .muted { color: #66717d; font-size: 12.5px; }
+  code { background: #0b0e13; border: 1px solid #1c232e; border-radius: 5px; padding: 1px 6px; font-size: 12px; color: #9fc6e8; }
+  input {
+    background: #0b0e13; color: #dbe3ea; border: 1px solid #1c232e; border-radius: 8px;
+    padding: 7px 11px; font-size: 13px; outline: none; flex: 1;
+  }
+  input:focus { border-color: #2b5f8f; }
+  button {
+    background: #1d3a55; color: #dbe9f6; border: none; border-radius: 8px;
+    padding: 7px 14px; font-size: 12.5px; cursor: pointer;
+  }
+  button.quiet { background: #161d28; color: #9aa3ad; }
+  button.danger { background: transparent; color: #7d8894; padding: 4px 8px; }
+  button.danger:hover { color: #e08f8f; }
+  .path { color: #66717d; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; max-width: 300px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>setup</h1>
+  <div class="sub">agent auth — the browser's one setup job; projects live in the IDE</div>
+
+  <section id="agents">
+    <h2>agents</h2>
+    <div class="row" id="claude-row">
+      <span class="dot" id="claude-dot"></span>
+      <span class="grow" id="claude-status">checking…</span>
+    </div>
+    <div class="row muted" id="claude-hint" style="display:none">
+      Sign in once with <code>claude login</code> in any terminal — the IDE's included — and every agent in this browser rides that login. No key needed.
+    </div>
+    <div class="row">
+      <span class="dot" id="key-dot"></span>
+      <input id="key-input" type="password" placeholder="ANTHROPIC_API_KEY — only needed with no Claude login" spellcheck="false" />
+      <button id="key-save">save</button>
+      <button id="key-clear" class="quiet" style="display:none">forget</button>
+    </div>
+    <div class="row muted">Keys live in <code>~/.autobot/agent-auth.json</code> — visible, like everything the shell saves.</div>
+  </section>
+
+  <section id="locations">
+    <h2>where things live</h2>
+    <div class="row muted"><span class="grow">agent sessions (resume ids, per project)</span><code>~/.autobot/agents.json</code></div>
+    <div class="row muted"><span class="grow">browser conversations run in</span><code>~/.autobot/home</code></div>
+    <div class="row muted"><span class="grow">API-key fallback</span><code>~/.autobot/agent-auth.json</code></div>
+    <div class="row muted"><span class="grow">project roots (the IDE manages these)</span><code>~/.autobot/projects.json</code></div>
+    <div class="row muted"><span class="grow">Claude login + session transcripts (the claude CLI owns these)</span><code>~/.claude</code></div>
+  </section>
+
+</main>
+<script>
+  const S = window.autobotSetup;
+  let picked = null;
+
+  async function renderAuth() {
+    const a = await S.authStatus();
+    const dot = document.getElementById("claude-dot");
+    const status = document.getElementById("claude-status");
+    const hint = document.getElementById("claude-hint");
+    dot.className = "dot" + (a.signedIn ? " on" : "");
+    status.textContent = a.signedIn
+      ? `Signed into Claude as ${a.email || "your account"} — agents ride this login`
+      : "Not signed into Claude";
+    hint.style.display = a.signedIn ? "none" : "flex";
+    document.getElementById("key-dot").className = "dot" + (a.hasApiKey ? " on" : "");
+    document.getElementById("key-clear").style.display = a.hasApiKey ? "" : "none";
+    document.getElementById("key-input").placeholder = a.hasApiKey
+      ? "API key saved — paste to replace"
+      : "ANTHROPIC_API_KEY — only needed with no Claude login";
+  }
+
+
+  document.getElementById("key-save").onclick = async () => {
+    const v = document.getElementById("key-input").value.trim();
+    if (!v) return;
+    await S.saveKey(v);
+    document.getElementById("key-input").value = "";
+    renderAuth();
+  };
+  document.getElementById("key-clear").onclick = async () => { await S.clearKey(); renderAuth(); };
+
+  renderAuth();
+</script>
+</body>
+</html>

@@ -10,7 +10,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "hub": "node systemview/service.js",
-    "prestart": "node -e \"if(+process.versions.node.split('.')[0]<22){console.error('\\nautobot needs node >= 22 — run: nvm use 22\\n');process.exit(1)}\" && npm run ui:build",
+    "prestart": "node -e \"if(+process.versions.node.split('.')[0]<22){console.error('\\nautobot needs node >= 22 \u2014 run: nvm use 22\\n');process.exit(1)}\" && npm run ui:build",
     "start": "node electron/launch.js",
     "shell": "node electron/launch.js",
     "dev": "node electron/dev.js",
@@ -18,7 +18,9 @@
     "smoke:electron": "node electron/smoke.js",
     "smoke:terminal": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_TERMSMOKE=1 node electron/launch.js",
     "ui:dev": "vite electron/ui",
-    "ui:build": "vite build electron/ui"
+    "ui:build": "vite build electron/ui",
+    "smoke:agent": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_AGENTSMOKE=1 node electron/launch.js",
+    "smoke:status": "node tests/status-bound.js"
   },
   "repository": {
     "type": "git",
@@ -53,12 +55,14 @@
     }
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.241",
     "@vitejs/plugin-react": "^6.1.0",
     "cz-conventional-changelog": "^3.3.0",
     "electron": "^43.4.1",
+    "marked": "^18.0.10",
     "nodemon": "^3.1.14",
     "systemlynx": "^3.3.2",
-    "systemview-plugin": "^2.22.0",
+    "systemview-plugin": "^2.23.0",
     "vite": "^8.2.2"
   }
 }

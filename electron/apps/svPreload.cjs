@@ -7,106 +7,80 @@ contextBridge.exposeInMainWorld("systemview", {
   // The Web Speech API doesn't work in Electron (no Google speech service behind
   // webkitSpeechRecognition) — the host provides dictation instead. Per the dividing
   // rule (RFC-001): CAPABILITIES belong to the browser, SURFACES belong to the app.
-  dictation: {
-    // low-level: transcribe bytes you recorded yourself. opts.draft = fast rough pass.
-    transcribe: (bytes, mimeType, opts) => ipcRenderer.invoke("dictation:transcribe", bytes, mimeType, opts),
+  dictation: require("./dictationBridge.cjs")(ipcRenderer),
+  // The host-served IDE surfaces (/ide fills in from these): projects, the
+  // fileProviders-shaped codebase methods, and read-only auth status.
+  projects: {
+    list: () => ipcRenderer.invoke("files:projects"),
+    // name-first flow (his rule: choose the code BEFORE it's in): pickFolder()
+    // opens the dialog and writes NOTHING → ask the human, defaultCode prefilled
+    // → put(code, dir) commits. rename migrates saved sessions with it.
+    pickFolder: () => ipcRenderer.invoke("files:pick-folder"), // -> { dir, defaultCode } | null
+    put: (code, dir) => ipcRenderer.invoke("files:add-project", code, dir), // -> { code, dir } | { error }
+    rename: (code, next) => ipcRenderer.invoke("files:rename-project", code, next), // -> { code, dir } | { error }
+    // opens the native folder picker; code defaults to the folder name
+    add: (code) => ipcRenderer.invoke("files:pick-project", code),
+    remove: (code) => ipcRenderer.invoke("files:remove-project", code),
+  },
+  files: {
+    readFile: (pc, rel) => ipcRenderer.invoke("files:read", pc, rel),
+    writeFile: (pc, rel, content) => ipcRenderer.invoke("files:write", pc, rel, content),
+    listFiles: (pc, rel) => ipcRenderer.invoke("files:list", pc, rel),
+    search: (pc, pattern, opts) => ipcRenderer.invoke("files:search", pc, pattern, opts),
+    // git: read + staging
+    gitState: (pc) => ipcRenderer.invoke("files:git-state", pc),
+    changedFiles: (pc) => ipcRenderer.invoke("files:changed", pc),
+    getDiff: (pc, rel, opts) => ipcRenderer.invoke("files:diff", pc, rel, opts),
+    stageFiles: (pc, paths, unstage) => ipcRenderer.invoke("files:stage", pc, paths, unstage),
+    stageHunk: (pc, rel, hunk, unstage) => ipcRenderer.invoke("files:stage-hunk", pc, rel, hunk, unstage),
+    // git verbs (gitState/getDiff/stageFiles/commit) CUT 2026-08-24 with their
+    // handlers — his call: the new plugin doesn't need them; commits stay his press.
+  },
+  auth: {
+    status: () => ipcRenderer.invoke("files:auth-status"),
+  },
+  agent: {
+    // Every live agent session in this shell: { key, projectCode, sessionId, cwd,
+    // sdkSessionId, startedAt }. Sessions ride the user's Claude Code login.
+    sessions: () => ipcRenderer.invoke("agent:list"),
+    // Claude conversations already on disk for this project's directory —
+    // [{sessionId, lastActive, sizeBytes, about}]; open({resume: sessionId})
+    // continues one of them HERE, same data, nothing copied.
+    transcripts: (projectCode) => ipcRenderer.invoke("agent:transcripts", projectCode),
+    // one conversation's messages, newest last: [{kind, text, ts}]
+    transcript: (projectCode, sessionId, opts) => ipcRenderer.invoke("agent:transcript", projectCode, sessionId, opts),
+    killSession: (projectCode, sessionId = "agent") =>
+      ipcRenderer.invoke("agent:kill", `${projectCode}:${sessionId}`),
 
-    // The whole voice-recognition BEHAVIOR, host-owned: capture, pause detection,
-    // per-sentence segmentation, draft cadence. The app only supplies surfaces:
-    //   onDraft(text)   — rough live text of the sentence in progress
-    //   onSegment(text) — final-quality text, committed at each pause
-    // Returns { flush, stop, cancel }: flush force-finishes the current sentence and
-    // keeps recording (send while hot); stop finishes and releases; cancel discards.
-    async listen({ onDraft, onSegment, pauseMs = 1500, draftMs = 1200, levelThreshold = 0.023, _stream, _debug } = {}) {
-      const stream = _stream ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
-      const audioCtx = new AudioContext();
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      audioCtx.createMediaStreamSource(stream).connect(analyser);
-      const buf = new Uint8Array(analyser.fftSize);
-      const rms = () => {
-        analyser.getByteTimeDomainData(buf);
-        let s = 0;
-        for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; s += v * v; }
-        return Math.sqrt(s / buf.length);
-      };
-
-      const wanted = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
-      const mime = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported &&
-        wanted.find((m) => MediaRecorder.isTypeSupported(m))) || "";
-
-      let rec = null, chunks = [], spoke = false, quietSince = null;
-      let draftBusy = false, stopped = false;
-      let pipeline = Promise.resolve(); // keeps segment commits ordered
-
-      const startSegment = () => {
-        chunks = []; spoke = false; quietSince = null;
-        rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-        rec.start(250);
-      };
-
-      // ends the CURRENT segment; commits its text if it held speech. No restart here.
-      const closeSegment = async (forced) => {
-        const r = rec;
-        if (!r || r.state === "inactive") return;
-        const ended = new Promise((res) => (r.onstop = res));
-        r.stop();
-        await ended;
-        _debug?.("segment-closed");
-        if (!spoke && !forced) return; // pure silence — nothing to commit
-        const blob = new Blob(chunks, { type: mime || "audio/webm" });
-        if (blob.size < 2000) return;
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        const res = await ipcRenderer.invoke("dictation:transcribe", bytes, blob.type);
-        const text = (res?.text ?? "").trim();
-        if (text) onSegment?.(text);
-      };
-
-      const levelTimer = setInterval(() => {
-        if (stopped || !rec || rec.state === "inactive") return;
-        if (rms() > levelThreshold) { spoke = true; quietSince = null; return; }
-        if (!spoke) return;
-        if (quietSince == null) { quietSince = Date.now(); return; }
-        if (Date.now() - quietSince >= pauseMs) {
-          quietSince = null;
-          pipeline = pipeline.then(() => closeSegment(false)).then(() => { if (!stopped) startSegment(); });
-        }
-      }, 100);
-
-      const draftTimer = setInterval(async () => {
-        if (stopped || draftBusy || !spoke || !chunks.length) return;
-        draftBusy = true;
-        try {
-          const blob = new Blob(chunks, { type: mime || "audio/webm" });
-          if (blob.size >= 2000) {
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            const res = await ipcRenderer.invoke("dictation:transcribe", bytes, blob.type, { draft: true });
-            const t = (res?.text ?? "").trim();
-            if (t && !stopped) onDraft?.(t);
-          }
-        } catch { /* a failed draft is just a skipped repaint */ } finally { draftBusy = false; }
-      }, draftMs);
-
-      const release = () => {
-        clearInterval(levelTimer);
-        clearInterval(draftTimer);
-        try { if (rec && rec.state !== "inactive") rec.stop(); } catch {}
-        if (!_stream) stream.getTracks().forEach((t) => t.stop());
-        audioCtx.close().catch(() => {});
-      };
-
-      startSegment();
-
+    // open({ projectCode, sessionId?, model?, permissionMode? }) -> Promise<AgentTransport>
+    // Events speak RFC-048 (the session event vocabulary): session.started /
+    // assistant.text / assistant.thinking / tool.call / tool.result / file.changed /
+    // permission.request / usage / compaction / status / session.ended — every
+    // event enveloped with sessionId, projectCode, cwd, branch, worktree.
+    // (compaction = the boundary receipt with pre/postTokens; status = the SDK's
+    // own compacting/compact_result narration. Both were shipping unlisted — d2
+    // built against the documented nine and missed compaction for a week.)
+    async open(opts) {
+      const { key, history } = await ipcRenderer.invoke("agent:open", opts);
       return {
-        // send pressed mid-sentence: commit what's being said, mic stays hot
-        flush: () => (pipeline = pipeline.then(() => closeSegment(true)).then(() => { if (!stopped) startSegment(); })),
-        stop: async () => {
-          stopped = true;
-          await (pipeline = pipeline.then(() => closeSegment(true)));
-          release();
+        onEvent(cb) {
+          const l = (_e, event) => cb(event);
+          ipcRenderer.on(`agent:event:${key}`, l);
+          return () => ipcRenderer.removeListener(`agent:event:${key}`, l);
         },
-        cancel: () => { stopped = true; release(); },
+        send: (text) => ipcRenderer.send("agent:send", key, text),
+        // answer a permission-request event; allow=false may carry a reason
+        answerPermission: (id, allow, message) =>
+          ipcRenderer.invoke("agent:permission", key, id, allow, message),
+        interrupt: () => ipcRenderer.invoke("agent:interrupt", key),
+        // model switching — SDK menu + a request whose truth is the next re-init
+        models: () => ipcRenderer.invoke("agent:models", key),
+        setModel: (model) => ipcRenderer.invoke("agent:setModel", key, model),
+        history: () => ipcRenderer.invoke("agent:history", key),
+        // detaches this view; the session keeps thinking (kill is separate + deliberate)
+        dispose: () => ipcRenderer.send("agent:dispose", key),
+        kill: () => ipcRenderer.invoke("agent:kill", key),
+        initialEvents: history,
       };
     },
   },
