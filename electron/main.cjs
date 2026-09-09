@@ -296,9 +296,22 @@ app.whenReady().then(async () => {
   if (process.platform === "darwin") systemPreferences.askForMediaAccess("microphone").catch(() => {});
 
   termHost.register();
-  agentHost.register(); // Claude sessions via the Agent SDK, on the user's login (RFC-002)
+  // WHICH APPLICATION IS USING THIS AGENT — his correction, 2026-08-25: "we're
+  // talking about how it's used in the autobot browser, like what application is
+  // using it?" That is NOT the cwd (where it runs from); it is the surface that
+  // opened it. Only main knows that, because only main owns the tabs — so the
+  // agent host is handed a resolver rather than guessing.
+  agentHost.register((wc) => {
+    if (!wc) return null;
+    const t = tabs.find((x) => x.view?.webContents === wc || x.view?.webContents?.id === wc.id);
+    if (t) return { id: t.appId || `tab:${t.id}`, title: t.kind === "app" ? t.title : (t.view.webContents.getTitle() || "web"), kind: t.kind };
+    // the shell's own chrome is a real consumer too — the agents panel
+    if (win && !win.isDestroyed() && win.webContents === wc) return { id: "autobot", title: "autobot", kind: "shell" };
+    return null;
+  }); // Claude sessions via the Agent SDK, on the user's login (RFC-002)
   require("./apps/files-host.cjs").register(() => win); // projects/files/auth for /ide (RFC-047 seam)
   require("./apps/dictation.cjs").register();
+  require("./apps/vectors-host.cjs").register(); // RFC-055 — local semantic retrieval, a harness capability
   supervisor.boot(); // hosted agent sessions from ~/.autobot/hosted.json (none by default)
 
   // Every start lands on the landing page — his call ("for now, I need to be in

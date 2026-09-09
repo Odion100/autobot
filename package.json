@@ -10,7 +10,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "hub": "node systemview/service.js",
-    "prestart": "node -e \"if(+process.versions.node.split('.')[0]<22){console.error('\\nautobot needs node >= 22 \u2014 run: nvm use 22\\n');process.exit(1)}\" && npm run ui:build",
+    "prestart": "node -e \"const m=+process.versions.node.split('.')[0];if(m<22||process.arch!=='arm64'){console.error('\\n  \\u2716  wrong node: '+process.version+' '+process.arch+' at '+process.execPath+'\\n     the installed native modules are arm64; an x64 node under Rosetta cannot load them.'+'\\n\\n     fix:  nvm use 22   (.nvmrc says 22)\\n');process.exit(1)}\" && npm run ui:build",
     "start": "node electron/launch.js",
     "shell": "node electron/launch.js",
     "dev": "node electron/dev.js",
@@ -20,7 +20,11 @@
     "ui:dev": "vite electron/ui",
     "ui:build": "vite build electron/ui",
     "smoke:agent": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_AGENTSMOKE=1 node electron/launch.js",
-    "smoke:status": "node tests/status-bound.js"
+    "smoke:status": "node tests/status-bound.js",
+    "smoke:defs": "node tests/agent-definitions.js",
+    "dev:nowatch": "node electron/dev.js --no-watch",
+    "smoke:worklist": "node tests/worklist.js",
+    "smoke:origin": "node tests/same-origin.js"
   },
   "repository": {
     "type": "git",
@@ -33,6 +37,7 @@
   },
   "homepage": "https://github.com/Odion100/autobot#readme",
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@langchain/community": "^0.0.35",
     "@langchain/openai": "^0.0.18",
     "@modelcontextprotocol/sdk": "^1.30.0",

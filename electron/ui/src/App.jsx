@@ -418,11 +418,44 @@ function AgentsPanel({ width }) {
   const offRef = React.useRef(null);
 
   const [onDisk, setOnDisk] = useState([]);
+  const [defs, setDefs] = useState([]); // RFC-003 agent definitions (not runs)
+  // HIS CALL, 2026-08-25: "it should just be open and could be open further."
+  // The configuration is not a secret behind a chevron — it is what the row IS.
+  // So: always shown, and `expanded` reveals the FULL lists instead of the first
+  // few, because 28 tools in a 380px rail is a wall, not information.
+  const [expanded, setExpanded] = useState(null); // agent id whose lists are shown in full
+  // the strip above the chat: one row by default, expandable to see them all, and
+  // the expanded height is his to drag ("resizable to show more if necessary").
+  // Both remembered — a control you re-open every time is a control you resent.
+  const [stripOpen, setStripOpen] = useState(() => localStorage.getItem("agent:strip") === "open");
+  const [stripH, setStripH] = useState(() => +localStorage.getItem("agent:stripH") || 108);
+  const dragS = React.useRef(null);
+  const startStripResize = (e) => {
+    dragS.current = { y: e.clientY, h: stripH };
+    e.target.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  };
+  const moveStripResize = (e) => {
+    if (!dragS.current) return;
+    const next = Math.max(44, Math.min(420, dragS.current.h + (e.clientY - dragS.current.y)));
+    setStripH(next);
+  };
+  const endStripResize = () => {
+    if (!dragS.current) return;
+    dragS.current = null;
+    try { localStorage.setItem("agent:stripH", String(stripH)); } catch {}
+  };
+  const toggleStrip = () => {
+    const next = !stripOpen;
+    setStripOpen(next);
+    try { localStorage.setItem("agent:strip", next ? "open" : "shut"); } catch {}
+  };
   const refresh = async () => {
     const l = await window.autobot.agents.list();
     const r = await window.autobot.agents.resumable();
     setLive(l);
     setResumable(r);
+    try { setDefs(await window.autobot.agents.defs()); } catch {}
     // conversations saved on disk — including ones OTHER apps or a terminal started.
     // The newest few per project that aren't already live or sticky here.
     try {
@@ -452,9 +485,11 @@ function AgentsPanel({ width }) {
     if (stickRef.current) feedRef.current?.scrollTo(0, feedRef.current.scrollHeight);
   }, [feed]);
 
-  const attach = async (projectCode, sessionId, resume) => {
+  const attach = async (projectCode, sessionId, resume, agentId) => {
     offRef.current?.();
-    const tr = await window.autobot.agents.open({ projectCode, ...(sessionId ? { sessionId } : {}), ...(resume ? { resume } : {}) });
+    // agentId opens a RUN OF A DEFINITION (RFC-003): the definition supplies the
+    // assignment, tools, skills and gating; anything passed here still wins.
+    const tr = await window.autobot.agents.open({ projectCode, ...(sessionId ? { sessionId } : {}), ...(resume ? { resume } : {}), ...(agentId ? { agentId } : {}) });
     setCurrent({ projectCode, tr });
     stickRef.current = true;
     setFeed(tr.initialEvents || []);
@@ -623,6 +658,124 @@ function AgentsPanel({ width }) {
     : Math.max(1000000, maxSeen));
   const ctxPct = lastCtx != null ? Math.min(100, Math.round((lastCtx / ctxWindow) * 100)) : null;
 
+  // ONE LIST, TWO PLACES. His ask: "when I go into a conversation I don't want to
+  // have to go back to switch." The list view and the chat view were mutually
+  // exclusive — {!current && list} / {current && chat} — so switching meant leaving.
+  // Same rows, derived once here, rendered as a strip above the chat too. attach()
+  // already swaps a live view cleanly (it detaches first), so switching in place
+  // needs no new machinery — only somewhere to click that isn't behind a back button.
+  // what a session is ABOUT: the transcript list already carries the ai-title, and
+  // a resumed session's sessionId IS its transcript id — so the name is a lookup,
+  // not something we have to invent or store.
+  const aboutOf = (s) => {
+    const t = onDisk.find((d) => d.sessionId === s.sessionId || d.sessionId === s.sdkSessionId);
+    return t?.about ? t.about.slice(0, 26) : "";
+  };
+  const sameProject = (s) =>
+    [...live, ...resumable].filter((x) => x.projectCode === s.projectCode).length > 1;
+  // ONE LIST. His correction, 2026-08-25: "there are no more conversations" —
+  // that category only existed to carry the transfer off the old harness. Every
+  // conversation IS an agent; the six running right now are agents SystemView
+  // defined implicitly, which is why a separate "definitions" section sat empty
+  // while six real agents ran below it. State (running / idle / saved) is a
+  // PROPERTY of an agent, not a section it lives in.
+  //
+  // Nothing is hidden: a defined agent with no run, a run with no definition, and
+  // a transcript on disk are all agents here, each saying which it is.
+  const byAgentId = new Map(defs.map((d) => [d.id, d]));
+  const runs = [...live, ...resumable];
+  const seenSession = new Set();
+  const agentList = [];
+
+  for (const s2 of runs) {
+    seenSession.add(s2.sessionId);
+    const d = s2.agentId ? byAgentId.get(s2.agentId) : null;
+    agentList.push({
+      id: s2.key,
+      kind: "run",
+      state: live.some((l) => l.key === s2.key) ? "running" : "idle",
+      name: d?.name || (s2.projectCode === "browser"
+        ? `browser · ${new Date(s2.startedAt || s2.lastActive).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+        : s2.projectCode),
+      projectCode: s2.projectCode,
+      cwd: s2.cwd,
+      sessionId: s2.sessionId,
+      resume: null,
+      agentId: s2.agentId || null,
+      def: d?.def || null,
+      // an implicit agent is one nothing here configured — SystemView started it.
+      // It is REAL and must show as real; what it lacks is a definition we hold.
+      implicit: !s2.agentId,
+      permissionMode: s2.permissionMode,
+      capabilities: s2.capabilities || null,
+      worklist: s2.worklist || [],
+      usedBy: s2.usedBy || [],
+      about: "",
+      lastActive: s2.startedAt || s2.lastActive || 0,
+      sessionKey: s2.key,
+    });
+  }
+  // defined agents with nothing running — the ones you can start
+  for (const d of defs) {
+    if (runs.some((r) => r.agentId === d.id)) continue;
+    agentList.push({
+      id: `def:${d.id}`,
+      kind: "def",
+      state: "defined",
+      name: d.name,
+      projectCode: d.projectCode,
+      cwd: d.cwd,
+      sessionId: null,
+      resume: null,
+      agentId: d.id,
+      def: d.def || {},
+      implicit: false,
+      permissionMode: d.permissionMode,
+      about: d.def?.description || "",
+      lastActive: d.updatedAt || 0,
+    });
+  }
+  // conversations on disk that aren't running here — history, still resumable
+  for (const t of onDisk) {
+    if (seenSession.has(t.sessionId)) continue;
+    agentList.push({
+      id: `disk:${t.projectCode}:${t.sessionId}`,
+      kind: "disk",
+      state: "saved",
+      name: t.projectCode,
+      projectCode: t.projectCode,
+      cwd: null,
+      sessionId: t.sessionId,
+      resume: t.sessionId,
+      agentId: null,
+      def: null,
+      implicit: true,
+      permissionMode: null,
+      about: t.about || "",
+      lastActive: t.lastActive || 0,
+    });
+  }
+  const RANK = { running: 0, idle: 1, defined: 2, saved: 3 };
+  agentList.sort((a, b) => (RANK[a.state] - RANK[b.state]) || (b.lastActive - a.lastActive));
+
+  // the strip above the chat rides the SAME list — one derivation, two places
+  const convs = agentList.map((a) => ({
+    id: a.id,
+    projectCode: a.projectCode || "browser",
+    sessionId: a.sessionId,
+    resume: a.resume,
+    agentId: a.kind === "def" ? a.agentId : null,
+    live: a.state === "running",
+    disk: a.state === "saved",
+    label: a.name,
+  }));
+
+  // the chip that is ON must be findable after a resume, when the row's id was a
+  // disk id and the session's key is now projectCode:sessionId
+  const isCurrentConv = (c) =>
+    current?.tr?.key === c.id ||
+    (current && current.projectCode === c.projectCode && current.tr?.key === `${c.projectCode}:${c.sessionId}`);
+
   return (
     <div className="agent-column" style={{ width: w }}>
       <div
@@ -645,72 +798,203 @@ function AgentsPanel({ width }) {
       </div>
 
           {!current && <div className="agent-sessions">
-            <div className="agent-section-label">conversations</div>
-            {[...live, ...resumable]
-              .filter((s) => s.projectCode === "browser")
-              .map((s) => {
-                const isLive = live.some((l) => l.key === s.key);
-                const isCurrent = current?.tr?.key === s.key;
-                return (
-                  <div key={s.key} className={`agent-row ${isCurrent ? "active" : ""}`} title={`tied to: the browser\nlives in: ${s.cwd || "~/.autobot/home"}`} onClick={() => attach("browser", s.sessionId)}>
-                    <span className={`agent-state ${isLive ? "on" : "sticky"}`} />
-                    <span className="agent-name">chat · {new Date(s.startedAt || s.lastActive).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                    <span className="agent-hint">{isLive ? "attach" : "resume"}</span>
-                    <span className="card-close" onClick={(e) => { e.stopPropagation(); endSession(s.key, s); }} title="end">✕</span>
-                  </div>
-                );
-              })}
-            <div className="agent-row new" onClick={() => attach("browser", `chat-${Date.now().toString(36)}`)}>
-              <span className="agent-state" />
-              <span className="agent-name">+ new conversation</span>
+            {/* ONE LIST — every agent, whatever state it is in. Sections used to
+                split "conversations" from "runs" from "definitions", which put
+                six real agents under three headings and left the heading called
+                "agents" empty. State is a dot and a word, not a category. */}
+            <div className="agent-section-label">
+              agents
+              <span className="agent-section-note">{agentList.filter((a) => a.state === "running").length} running · {agentList.length} total</span>
             </div>
 
-            <div className="agent-section-label">agents</div>
-            {[...live, ...resumable]
-              .filter((s) => s.projectCode !== "browser")
-              .map((s) => {
-                const isLive = live.some((l) => l.key === s.key);
-                const isCurrent = current?.tr?.key === s.key;
-                return (
-                  <div key={s.key} className={`agent-row ${isCurrent ? "active" : ""}`} title={`tied to: ${s.projectCode}\nlives in: ${s.cwd || ""}`} onClick={() => attach(s.projectCode, s.sessionId)}>
-                    <span className={`agent-state ${isLive ? "on" : "sticky"}`} />
-                    <span className="agent-name">{s.projectCode}{s.sessionId !== "agent" ? ` · ${s.sessionId}` : ""}</span>
-                    <span className="agent-hint">{isLive ? "attach" : "resume"}</span>
-                    <span className="card-close" onClick={(e) => { e.stopPropagation(); endSession(s.key, s); }} title="end">✕</span>
+            {agentList.map((a) => {
+              const t = a.def || {};
+              const axes = [
+                t.tools?.length ? `${t.tools.length} tools` : t.disallowedTools?.length ? "limited tools" : "",
+                t.skills?.length ? `${t.skills.length} skills` : "",
+                t.mcpServers?.length ? `${t.mcpServers.length} mcp` : "",
+              ].filter(Boolean);
+              const isFull = expanded === a.id;
+              const cap = a.capabilities;
+              const show = (arr, n) => (isFull ? arr : arr.slice(0, n));
+              const active = a.worklist?.find((i) => i.state === "active");
+              const done = a.worklist?.filter((i) => i.state === "done").length || 0;
+              return (
+                <div key={a.id} className={`agent-card${isFull ? " full" : ""}${current?.tr?.key === a.id ? " current" : ""}`}>
+                  {/* THE HEAD. The card does NOT open a conversation — his call:
+                      "I don't want to click into the conversation in the row, I
+                      want to click an icon." So the whole card is safe to touch,
+                      read and manage; only ▸ enters. */}
+                  <div className="card-head">
+                    <span className={`agent-state ${a.state === "running" ? "on" : a.state === "idle" ? "sticky" : a.state === "defined" ? "def" : ""}`} />
+                    <span className="card-name">{a.name}</span>
+                    <span className={`card-state ${a.state}`}>{a.state}</span>
+                    <span className="spacer" />
+                    <span
+                      className="card-enter"
+                      title="open this conversation"
+                      onClick={() => attach(a.projectCode || "browser",
+                        a.kind === "def" ? `${a.agentId}-${Date.now().toString(36)}` : a.sessionId,
+                        a.resume,
+                        a.kind === "def" ? a.agentId : null)}
+                    >▸</span>
+                    <span
+                      className="card-x"
+                      title={a.kind === "def" ? "forget this agent — its conversations are untouched"
+                        : a.kind === "disk" ? "remove from this list — the transcript stays on disk"
+                        : "end this agent"}
+                      onClick={() => {
+                        if (a.kind === "def") window.autobot.agents.removeDef(a.agentId).then(refresh);
+                        else if (a.kind === "disk") dismiss(a.projectCode, a.sessionId);
+                        else endSession(a.sessionKey, a);
+                      }}
+                    >✕</span>
                   </div>
-                );
-              })}
-            {![...live, ...resumable].some((s) => s.projectCode !== "browser") && onDisk.length === 0 && (
-              <div className="agent-row muted-row">no agents running — the IDE starts them on its projects</div>
+
+                  {/* USED BY — the line he actually asked for. Not where it runs:
+                      WHICH APPLICATION in this browser is using it. An agent can
+                      work on the autobot repo while being used by SystemView, and
+                      that sentence was unsayable before. */}
+                  <div className="card-usedby">
+                    {a.usedBy?.length ? (
+                      <>used in {a.usedBy.map((u) => <span key={u.id} className="app-chip">{u.title}</span>)}</>
+                    ) : (
+                      <span className="cfg-none">not open in any application</span>
+                    )}
+                  </div>
+
+                  {/* the worklist, on the face of the card */}
+                  {a.worklist?.length > 0 && (
+                    <div className="card-work">
+                      <span className="work-count">{done}/{a.worklist.length}</span>
+                      <span className="work-now">{active ? active.text : "no active step"}</span>
+                    </div>
+                  )}
+
+                  <div className="card-facts">
+                    <span className="fact"><b>on</b> {a.projectCode || "—"}</span>
+                    <span className="fact"><b>in</b> {a.cwd ? a.cwd.replace(/^\/Users\/[^/]+/, "~") : "—"}</span>
+                    <span className="fact"><b>gating</b> {a.permissionMode === "default" ? "asks" : "open"}</span>
+                    {(a.def?.model || a.model) && <span className="fact"><b>model</b> {a.def?.model || a.model}</span>}
+                  </div>
+
+                  {cap ? (
+                    <>
+                      <div className="card-list">
+                        <div className="card-list-k">skills <b>{cap.skills.length}</b></div>
+                        <div className="card-list-v">
+                          {cap.skills.length === 0 ? <span className="cfg-none">none</span> : <>
+                            {show(cap.skills, 6).map((t) => <span key={t} className="chip skill">{t}</span>)}
+                            {!isFull && cap.skills.length > 6 && <span className="chip more">+{cap.skills.length - 6}</span>}
+                          </>}
+                        </div>
+                      </div>
+                      <div className="card-list">
+                        <div className="card-list-k">tools <b>{cap.tools.length}</b></div>
+                        <div className="card-list-v">
+                          {show(cap.tools, 6).map((t) => (
+                            <span key={t} className={`chip${t.startsWith("mcp__") ? " mcp" : ""}`}>{t.replace(/^mcp__/, "")}</span>
+                          ))}
+                          {!isFull && cap.tools.length > 6 && <span className="chip more">+{cap.tools.length - 6}</span>}
+                        </div>
+                      </div>
+                      <div className="card-list">
+                        <div className="card-list-k">mcp <b>{cap.mcpServers.length}</b></div>
+                        <div className="card-list-v">
+                          {cap.mcpServers.length === 0 ? <span className="cfg-none">none</span> :
+                            cap.mcpServers.map((m) => (
+                              <span key={m.name} className={`chip ${m.status === "connected" ? "ok" : "bad"}`} title={m.status}>{m.name}</span>
+                            ))}
+                        </div>
+                      </div>
+                      {isFull && cap.agents?.length > 0 && (
+                        <div className="card-list">
+                          <div className="card-list-k">subagents <b>{cap.agents.length}</b></div>
+                          <div className="card-list-v">{cap.agents.map((t) => <span key={t} className="chip">{t}</span>)}</div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="card-list">
+                      <div className="card-list-k">tools</div>
+                      <div className="card-list-v cfg-none">not reported yet — an agent lists what it has when it starts</div>
+                    </div>
+                  )}
+
+                  <div className="cfg-more" onClick={() => setExpanded(isFull ? null : a.id)}>
+                    {isFull ? "less" : "open further"}
+                  </div>
+                </div>
+              );
+            })}
+
+            {agentList.length === 0 && (
+              <div className="agent-row muted-row">no agents yet — start one below</div>
             )}
-            {onDisk.length > 0 && <div className="agent-section-label">saved conversations</div>}
-            {onDisk.map((t) => (
-              <div
-                key={t.sessionId}
-                className="agent-row"
-                title={`saved at: ~/.claude/projects (for ${t.projectCode})\nlast active ${new Date(t.lastActive).toLocaleString()}\n${t.about}`}
-                onClick={() => attach(t.projectCode, t.sessionId, t.sessionId)}
-              >
-                <span className="agent-state" />
-                <span className="agent-name">{t.projectCode}<span className="agent-about"> — {t.about.slice(0, 42) || "conversation"}</span></span>
-                <span className="agent-time">{relTime(t.lastActive)}</span>
-                <span className="agent-hint">resume</span>
-                <span
-                  className="card-close"
-                  onClick={(e) => { e.stopPropagation(); dismiss(t.projectCode, t.sessionId); }}
-                  title="remove from this list — the transcript stays on disk"
-                >✕</span>
-              </div>
-            ))}
+            <div className="agent-row new" onClick={() => attach("browser", `chat-${Date.now().toString(36)}`)}>
+              <span className="agent-state" />
+              <span className="agent-name">+ new agent</span>
+            </div>
           </div>}
 
           {current && (
             <div className="agent-chat">
+              {/* THE OTHER CONVERSATIONS, WITHOUT LEAVING THIS ONE. Collapsed it is one
+                  scrollable row; open it wraps and the height drags. Clicking a chip
+                  swaps the view in place — the session you came from keeps running,
+                  exactly as it does behind the back button. */}
+              <div className={`conv-strip${stripOpen ? " open" : ""}`}>
+                <div className="conv-strip-rows" style={stripOpen ? { height: stripH } : undefined}>
+                  {convs.map((c) => (
+                    <span
+                      key={c.id}
+                      className={`conv-chip${isCurrentConv(c) ? " on" : ""}${c.live ? " live" : c.disk ? " disk" : " sticky"}`}
+                      title={`${c.projectCode}${c.disk ? " — saved conversation" : c.live ? " — running" : " — idle"}\nclick to switch; this one keeps running`}
+                      onClick={() => { if (!isCurrentConv(c)) attach(c.projectCode, c.sessionId, c.resume); }}
+                    >
+                      <span className={`agent-state ${c.live ? "on" : c.disk ? "" : "sticky"}`} />
+                      {c.label}
+                    </span>
+                  ))}
+                  <span
+                    className="conv-chip new"
+                    title="start another conversation"
+                    onClick={() => attach("browser", `chat-${Date.now().toString(36)}`)}
+                  >+ new</span>
+                </div>
+                <button
+                  className="conv-strip-more"
+                  title={stripOpen ? "show fewer" : `show all ${convs.length} conversations`}
+                  onClick={toggleStrip}
+                >{stripOpen ? "⌃" : "⌄"}{!stripOpen && convs.length > 1 ? <span className="conv-count">{convs.length}</span> : null}</button>
+                {stripOpen && (
+                  <div
+                    className="conv-strip-grip"
+                    title="drag to show more"
+                    onPointerDown={startStripResize}
+                    onPointerMove={moveStripResize}
+                    onPointerUp={endStripResize}
+                  />
+                )}
+              </div>
               <div className="agent-chat-head">
                 <button className="chat-back" title="back to the list — the session keeps running (Esc)" onClick={detach}>←</button>
                 <span>{current.projectCode}</span>
                 <span className="agent-cwd" title="where this session lives">{(([...live, ...resumable].find((l) => l.key === current.tr.key) || {}).cwd || "").replace(/^\/Users\/[^/]+/, "~")}</span>
                 <span className="spacer" />
+                {/* SAVE AS AGENT — the authoring path that isn't a blank form
+                    (RFC-003 §4). The run already knows where it lives and how it
+                    is gated; he supplies the name and, later, the assignment. */}
+                <button
+                  className="save-agent"
+                  title="save this conversation's setup as an agent you can run again"
+                  onClick={async () => {
+                    const name = prompt("Name this agent", current.projectCode);
+                    if (!name) return;
+                    await window.autobot.agents.defFromSession(current.tr.key, { name });
+                    refresh();
+                  }}
+                >save as agent</button>
                 <ModelPick tr={current.tr} model={model} />
                 {ctxPct != null && (
                   <button

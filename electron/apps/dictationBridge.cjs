@@ -30,7 +30,7 @@ module.exports = (ipcRenderer) => ({
         wanted.find((m) => MediaRecorder.isTypeSupported(m))) || "";
 
       let rec = null, chunks = [], spoke = false, quietSince = null;
-      let draftBusy = false, stopped = false;
+      let draftBusy = false, stopped = false, cancelled = false;
       let pipeline = Promise.resolve(); // keeps segment commits ordered
 
       const startSegment = () => {
@@ -51,11 +51,25 @@ module.exports = (ipcRenderer) => ({
         if (!spoke && !forced) return ""; // pure silence — nothing to commit
         const blob = new Blob(chunks, { type: mime || "audio/webm" });
         if (blob.size < 2000) return "";
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        const res = await ipcRenderer.invoke("dictation:transcribe", bytes, blob.type);
-        const text = (res?.text ?? "").trim();
-        if (text && !silent) onSegment?.(text);
-        return text;
+        try {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          const res = await ipcRenderer.invoke("dictation:transcribe", bytes, blob.type);
+          const text = (res?.text ?? "").trim();
+          // A CANCELLED SESSION DELIVERS NOTHING LATE. Send takes the visible words and cancels;
+          // a transcription already in flight then finished and handed the SAME words to the input
+          // anyway (his repro: "it did send, and then it landed in the input anyway"). `cancelled`
+          // — not `stopped` — because stop()'s tail commit is the stop button's whole point.
+          if (text && !silent && !cancelled) onSegment?.(text);
+          return text;
+        } catch {
+          // ONE FAILED TRANSCRIPTION MUST NOT WEDGE THE SESSION (found live, systemview-test:
+          // this rejection poisoned the pipeline — every later commit silently skipped, the
+          // recorder never restarted, drafts repainting the same frozen audio with the light on,
+          // words never landing, stop() vaporizing them. His exact symptoms, all four). A lost
+          // sentence is recoverable; a dead session is not.
+          _debug?.("segment-transcribe-failed");
+          return "";
+        }
       };
 
       const levelTimer = setInterval(() => {
@@ -65,7 +79,10 @@ module.exports = (ipcRenderer) => ({
         if (quietSince == null) { quietSince = Date.now(); return; }
         if (Date.now() - quietSince >= pauseMs) {
           quietSince = null;
-          pipeline = pipeline.then(() => closeSegment(false)).then(() => { if (!stopped) startSegment(); });
+          pipeline = pipeline
+            .then(() => closeSegment(false))
+            .catch(() => {})
+            .then(() => { if (!stopped) startSegment(); }); // the restart is UNCONDITIONAL on the way through
         }
       }, 100);
 
@@ -97,19 +114,25 @@ module.exports = (ipcRenderer) => ({
         // send pressed mid-sentence: finish the sentence being said and RETURN its
         // text so the send takes it along (their AgentChat awaits exactly this)
         flush: () => {
-          const done = pipeline.then(() => closeSegment(true, true)).then((text) => {
-            if (!stopped) startSegment();
-            return text || "";
-          });
-          pipeline = done.then(() => {});
+          const done = pipeline
+            .catch(() => {})
+            .then(() => closeSegment(true, true))
+            .catch(() => "")
+            .then((text) => {
+              if (!stopped) startSegment();
+              return text || "";
+            });
+          pipeline = done.then(() => {}, () => {});
           return done;
         },
         stop: async () => {
           stopped = true;
-          await (pipeline = pipeline.then(() => closeSegment(true)));
+          try {
+            await (pipeline = pipeline.catch(() => {}).then(() => closeSegment(true)));
+          } catch {}
           release();
         },
-        cancel: () => { stopped = true; release(); },
+        cancel: () => { cancelled = true; stopped = true; release(); },
       };
     },
   });

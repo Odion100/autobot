@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "worklist": {
+      "command": "node",
+      "args": ["electron/agents/worklist-mcp.cjs"]
+    }
+  }
+}

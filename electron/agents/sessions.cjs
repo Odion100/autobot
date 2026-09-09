@@ -17,12 +17,25 @@ const HISTORY_LIMIT = 2000;
 const sessions = new Map(); // key -> session record
 
 // Sticky across shell restarts: the SDK's session id is enough to resume a
-// conversation, so it lives in ~/.autobot/agents.json (the visible shell-state
+// conversation, so it lives in ~/.autobot/sessions.json (the visible shell-state
 // home). open() auto-resumes from here; kill() is the deliberate forget.
 const os = require("os");
-const STORE = path.join(os.homedir(), ".autobot", "agents.json");
+// RFC-003 §3 — THIS FILE HOLDS RUNS, NOT AGENTS. It was named agents.json before
+// an agent was a thing you could define; now that definitions exist (agents/
+// definitions.cjs) the old name would have two meanings a week apart. Renamed to
+// sessions.json, READ-BOTH / WRITE-NEW for one release so a shell that comes up
+// on the old file loses nothing — same migration shape as the project rename.
+const STORE = path.join(os.homedir(), ".autobot", "sessions.json");
+const STORE_LEGACY = path.join(os.homedir(), ".autobot", "agents.json");
 function loadStore() {
-  try { return JSON.parse(fs.readFileSync(STORE, "utf8")); } catch { return {}; }
+  // READ-BOTH means MERGE, not "new else old". Returning the new file the moment
+  // it parses orphans every legacy-only key — invisible, not an error, and only
+  // survivable by luck (right now both files happen to hold the same 6 runs).
+  // New wins per key; legacy fills the gaps until it is empty of anything unique.
+  let legacy = {}, current = {};
+  try { legacy = JSON.parse(fs.readFileSync(STORE_LEGACY, "utf8")); } catch {}
+  try { current = JSON.parse(fs.readFileSync(STORE, "utf8")); } catch {}
+  return { ...legacy, ...current };
 }
 function saveStore(mutate) {
   const store = loadStore();
@@ -31,6 +44,51 @@ function saveStore(mutate) {
 }
 
 const keyOf = (projectCode, sessionId = "agent") => `${projectCode}:${sessionId}`;
+
+const definitions = require("./definitions.cjs");
+const worklist = require("./worklist.cjs");
+const discovery = require("./discovery.cjs");
+const services = require("./services.cjs");
+
+// The definition's SDK half → query options. Only tool access, skills and MCP are
+// forwarded as-is; `prompt` becomes systemPrompt (the assignment IS the system
+// prompt), and undefined fields are omitted entirely rather than sent as
+// undefined, which the SDK would treat as "set to nothing" for some of them.
+function sdkOptionsOf(def = {}) {
+  const o = {};
+  if (def.prompt) o.systemPrompt = def.prompt;
+  // A definition that PINS `tools` would otherwise drop the worklist without
+  // saying so — the agent keeps working and quietly stops being able to plan.
+  // The worklist is harness state, so it is always appended, never negotiable.
+  if (def.tools?.length)
+    o.allowedTools = [...def.tools, worklist.TOOL_NAME, discovery.TOOL_NAME, ...services.TOOL_NAMES];
+  if (def.disallowedTools?.length) o.disallowedTools = def.disallowedTools;
+  // FORWARDED NOW — the "real server to wire" arrived (SystemLynx's MCP workbench,
+  // the first SystemLynx service exposing tools over MCP). The shape mismatch this
+  // comment warned about is the whole job: a definition stores an ARRAY of specs
+  // because that is a list a human edits and orders; query options want a RECORD
+  // keyed by name. Mapping here keeps the definition human-shaped and the SDK call
+  // correct, instead of making one of them wear the other's shape.
+  //
+  // A spec is { name, ...connection } — whatever the SDK's own server config takes
+  // (type/url for http, command/args for stdio). We do not interpret the connection
+  // half: unknown transports are the SDK's business, and inventing validation here
+  // would mean a new transport needs a change in this file to be usable.
+  if (Array.isArray(def.mcpServers) && def.mcpServers.length) {
+    const record = {};
+    def.mcpServers.forEach((spec, i) => {
+      if (!spec || typeof spec !== "object") return;
+      const { name, ...connection } = spec;
+      // A nameless spec is still a spec — key it positionally rather than dropping
+      // it silently, which is the failure this comment existed to prevent.
+      const key = String(name || `mcp-${i}`);
+      if (Object.keys(connection).length) record[key] = connection;
+    });
+    if (Object.keys(record).length) o.mcpServers = record;
+  }
+  if (def.maxTurns) o.maxTurns = def.maxTurns;
+  return o;
+}
 
 // The model's REAL context window — the rule App.jsx learned the hard way (the
 // 200k-era guess pegged red at 457k of real context on a 1M-window model).
@@ -95,7 +153,11 @@ function toolLabel(name, input = {}) {
     case "Glob": return `finding ${String(input.pattern || "").slice(0, 40)}`;
     case "WebFetch": return `fetching ${String(input.url || "").slice(0, 60)}`;
     case "WebSearch": return `searching the web: ${String(input.query || "").slice(0, 40)}`;
+    // TodoWrite is NOT in this SDK's tool set (measured 2026-08-25 — the model
+    // searched for a todo tool and found none). Kept only for transcripts written
+    // by an older harness; the live path is the worklist tool below.
     case "TodoWrite": return "updating the plan";
+    case worklist.TOOL_NAME: return "updating the worklist";
     case "Task": case "Agent": return `delegating: ${String(input.description || "").slice(0, 50)}`;
     default: return name;
   }
@@ -161,10 +223,25 @@ async function pump(s) {
             cwd: s.cwd,
             sdkSessionId: m.session_id,
             permissionMode: s.permissionMode,
+            agentId: s.agentId,       // RFC-003: a run belongs to a definition, or to none
+            agentName: s.agentName,
+            worklist: s.worklist,
             lastActive: Date.now(),
           };
         });
         s.model = m.model; // rides usage events so the meter knows its real window
+        // WHAT THIS AGENT ACTUALLY HAS. The init message carries the real lists —
+        // tools (including our mcp__worklist__set), skills, subagents, mcp servers
+        // with their connection status. The panel was printing "everything the
+        // shell allows" while this sat here unread; his catch, and the same class
+        // as the UUID labels: a placeholder standing where real data already was.
+        s.capabilities = {
+          tools: m.tools || [],
+          skills: m.skills || [],
+          agents: m.agents || [],
+          mcpServers: m.mcp_servers || [],
+          slashCommands: m.slash_commands || [],
+        };
         logLife(s, `started: model ${m.model} sdk ${m.session_id}${s.resumedFrom ? " resumed " + s.resumedFrom : ""}`);
         emit(s, {
           kind: "session.started",
@@ -172,7 +249,14 @@ async function pump(s) {
           contextWindow: contextWindowOf(m.model),
           sdkSessionId: m.session_id,
           permissionMode: s.permissionMode, // gated-vs-open is decided at open; the UI needs to know which it got
+          capabilities: s.capabilities,     // the real lists, so no consumer has to guess or label
         });
+        // REPLAY THE SURVIVING PLAN. A resumed conversation has its worklist back
+        // in memory, but a subscriber only ever learns a list from an event — so
+        // without this the rail stays empty until the model happens to write
+        // again, which may be never. Same full-list shape; nothing distinguishes
+        // a replayed list from a fresh one, because nothing should.
+        if (s.worklist.length) emit(s, { kind: "todo.updated", items: s.worklist });
       } else if (m.type === "system" && m.subtype === "compact_boundary") {
         // compaction is an EVENT the user watches finish, not a silent gap — the
         // harness reports exactly what it freed (his ask: "see that it's working
@@ -282,7 +366,25 @@ async function pump(s) {
   }
 }
 
-async function open({ projectCode, sessionId = "agent", cwd, model, permissionMode, resume }) {
+async function open({ projectCode, sessionId = "agent", cwd, model, permissionMode, resume, agentId }) {
+  // RFC-003: an agent is a configured session. A definition supplies defaults —
+  // never an override — so an explicit argument at open always wins. That is q1's
+  // lean made concrete: placement is a default you can point somewhere else.
+  let agent = agentId ? definitions.resolve(agentId) : null;
+  if (agentId && !agent) throw new Error(`unknown agent: ${agentId}`);
+  // NO IMPLICIT AGENTS GOING FORWARD (his call). A run opened without a definition
+  // gets one written for it now, keyed by placement so a project's many
+  // conversations stay ONE agent. The browser's own chats are placed too — they
+  // are agents like everything else, per "there are no more conversations".
+  if (!agent) {
+    try { agent = definitions.adopt({ projectCode, cwd, permissionMode, model }); } catch {}
+  }
+  if (agent) {
+    projectCode = projectCode || agent.projectCode;
+    cwd = cwd || agent.cwd;
+    model = model || agent.def.model;
+    permissionMode = permissionMode || agent.permissionMode;
+  }
   const key = keyOf(projectCode, sessionId);
   const existing = sessions.get(key);
   if (existing) return existing;
@@ -306,6 +408,8 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     pendingPermissions: new Map(), // id -> resolve
     permissionSeq: 0,
     sdkSessionId: null,
+    agentId: agent ? agent.id : null,   // a run remembers its definition; ad-hoc runs keep null
+    agentName: agent ? agent.name : null,
     startedAt: Date.now(),
     // His posture: permissions-off is the personal default. NOTE (SDK fact): in
     // bypassPermissions the canUseTool callback NEVER fires — permission.request
@@ -326,6 +430,36 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     }
   } catch {}
 
+  // THE WORKLIST — one per session, harness state. The handler closes over THIS
+  // session, so the tool takes no session id and cannot write to another list.
+  // emit() pushes into s.events, which history() returns verbatim — so this
+  // rides history for free and a panel opened an hour late renders the current
+  // list from one event, which was their whole requirement.
+  // SEEDED FROM THE STORE, not empty. systemview-test's rendering decision —
+  // "the plan outlives the turn that wrote it" — is only true if the plan also
+  // outlives a RESTART, and sessions here outlive views and restarts by design.
+  // Without this the worklist would be the one piece of session state that
+  // silently didn't, and their rail would show nothing for a conversation that
+  // still has a plan.
+  s.worklist = Array.isArray(loadStore()[key]?.worklist) ? loadStore()[key].worklist : [];
+  s.usedBy = Array.isArray(loadStore()[key]?.usedBy) ? loadStore()[key].usedBy : [];
+  const worklistServer = worklist.serverFor((items) => {
+    s.worklist = items;
+    // persisted on every write, not at init — a plan written mid-session and
+    // then interrupted is exactly the one worth keeping
+    saveStore((store) => { if (store[s.key]) store[s.key].worklist = items; });
+    emit(s, { kind: "todo.updated", items });
+  });
+
+  // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
+  // definition's OWN mcpServers record, so it can never describe a server this agent is
+  // not actually wired to: the thing doing the connecting is the thing reporting the
+  // connection, which is the presence principle applied one layer down.
+  const wiredMcp = agent ? sdkOptionsOf(agent.def).mcpServers : null;
+  const discoveryServer = discovery.serverFor(wiredMcp);
+  // The third tier: SystemLynx services he has whitelisted, attachable mid-session.
+  const servicesServer = services.serverFor();
+
   s.query = query({
     prompt: s.input,
     options: {
@@ -335,6 +469,29 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       resume: remembered,
       includePartialMessages: true,
       permissionMode: s.permissionMode,
+      // THE SDK HALF, SPREAD VERBATIM — no mapping step, because the definition
+      // already stores the SDK's own AgentDefinition fields (systemPrompt aside:
+      // `prompt` is the assignment, and it is what the SDK reads). Anything the
+      // definition doesn't set simply isn't here, so an unconfigured agent opens
+      // exactly like today's ad-hoc session.
+      ...(agent ? sdkOptionsOf(agent.def) : {}),
+      // EVERY session gets the worklist — it is harness state, not a capability
+      // that touches the repo, so nothing is gained by withholding it. Merged
+      // AFTER the definition's options so a definition cannot drop it by accident.
+      // …and the definition's OWN servers ride alongside rather than being
+      // overwritten: spreading the mapped record first and the worklist second
+      // keeps "never negotiable" true for the worklist without making it the only
+      // server an agent may have. A definition naming a server called "worklist"
+      // still loses to ours, deliberately.
+      mcpServers: {
+        ...(agent ? sdkOptionsOf(agent.def).mcpServers : {}),
+        [worklist.SERVER]: worklistServer,
+        // Same reasoning as the worklist: every agent should be able to ASK what it can
+        // do rather than be told. Withholding discovery buys nothing — it exposes no new
+        // reach, it only makes the reach an agent already has findable.
+        [discovery.SERVER]: discoveryServer,
+        [services.SERVER]: servicesServer,
+      },
       canUseTool: (tool, input) =>
         new Promise((resolve) => {
           const id = `perm-${++s.permissionSeq}`;
@@ -435,6 +592,23 @@ async function kill(key) {
   return true;
 }
 
+// USED BY — which APPLICATION in this browser is using the agent. Distinct from
+// cwd (where it runs) and from projectCode (whose code it works on): an agent can
+// run on the autobot repo while being USED by SystemView. His correction, and it
+// is the thing the panel most needed to say. A set, because a session can be
+// opened by several surfaces over its life and the last one to ask is not the
+// only truth.
+function noteUsedBy(key, surface) {
+  const s = sessions.get(key);
+  if (!s || !surface || !surface.id) return;
+  s.usedBy = s.usedBy || [];
+  if (!s.usedBy.some((u) => u.id === surface.id)) {
+    s.usedBy.push({ id: surface.id, title: surface.title, kind: surface.kind });
+    saveStore((store) => { if (store[key]) store[key].usedBy = s.usedBy; });
+    emit(s, { kind: "status", status: "used-by", usedBy: s.usedBy });
+  }
+}
+
 const list = () =>
   [...sessions.values()].map((s) => ({
     key: s.key,
@@ -443,6 +617,11 @@ const list = () =>
     cwd: s.cwd,
     sdkSessionId: s.sdkSessionId,
     permissionMode: s.permissionMode,
+    agentId: s.agentId,
+    agentName: s.agentName,
+    capabilities: s.capabilities || null,   // null = not started yet, NOT "has nothing"
+    usedBy: s.usedBy || [],                 // which applications are using this agent
+    worklist: s.worklist || [],
     startedAt: s.startedAt,
   }));
 
@@ -598,4 +777,14 @@ function transcriptsFor(cwd, projectCode) {
   return out.sort((a, b) => b.lastActive - a.lastActive).slice(0, 50);
 }
 
-module.exports = { open, send, answerPermission, interrupt, models, setModel, subscribe, history, kill, list, keyOf, transcriptsFor, transcriptMessages, dismissTranscript, toolSummary };
+module.exports = {
+  open, send, answerPermission, interrupt, models, setModel, subscribe, history, kill, list, keyOf, noteUsedBy,
+  transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
+  // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
+  // file by path; with the name changing, a missed caller reads an empty object
+  // and silently reports no resumable sessions — the same "both halves moved,
+  // nothing left answering" shape that cost the blank-code-panel hour. Anyone
+  // who needs the store takes it from here, so the rename is one edit forever.
+  loadSessionStore: loadStore,
+  saveSessionStore: saveStore,
+};

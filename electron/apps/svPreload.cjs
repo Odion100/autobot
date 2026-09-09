@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld("systemview", {
   // webkitSpeechRecognition) — the host provides dictation instead. Per the dividing
   // rule (RFC-001): CAPABILITIES belong to the browser, SURFACES belong to the app.
   dictation: require("./dictationBridge.cjs")(ipcRenderer),
+  // RFC-055 — semantic retrieval belongs to the HARNESS, so every app gets it;
+  // SystemView supplies the corpus and the node types, never the runtime.
+  vectors: require("./vectorsBridge.cjs")(ipcRenderer),
   // The host-served IDE surfaces (/ide fills in from these): projects, the
   // fileProviders-shaped codebase methods, and read-only auth status.
   projects: {
@@ -51,6 +54,19 @@ contextBridge.exposeInMainWorld("systemview", {
     transcript: (projectCode, sessionId, opts) => ipcRenderer.invoke("agent:transcript", projectCode, sessionId, opts),
     killSession: (projectCode, sessionId = "agent") =>
       ipcRenderer.invoke("agent:kill", `${projectCode}:${sessionId}`),
+
+    // AGENT DEFINITIONS (RFC-003). An agent is a configured session:
+    //   { id, name, def: <SDK AgentDefinition>, projectCode, cwd, permissionMode }
+    // `def` holds the SDK's own fields (prompt, tools, disallowedTools, skills,
+    // mcpServers, model, …) so nothing needs translating; placement and gating sit
+    // beside it because they are session facts, not agent facts.
+    // Run one with open({ agentId }) — anything passed explicitly still wins.
+    defs: () => ipcRenderer.invoke("agent:defs"),
+    def: (id) => ipcRenderer.invoke("agent:def", id),
+    saveDef: (rec) => ipcRenderer.invoke("agent:def-save", rec),
+    removeDef: (id) => ipcRenderer.invoke("agent:def-remove", id),
+    // capture a definition from a run that already works, instead of a blank form
+    defFromSession: (key, extra) => ipcRenderer.invoke("agent:def-from-session", key, extra),
 
     // open({ projectCode, sessionId?, model?, permissionMode? }) -> Promise<AgentTransport>
     // Events speak RFC-048 (the session event vocabulary): session.started /

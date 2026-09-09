@@ -6,6 +6,9 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const files = require("./files.cjs");
+// the run store and the agent definitions both follow a project rename
+const sessions = require("../agents/sessions.cjs");
+const definitions = require("../agents/definitions.cjs");
 
 const PROJECTS_FILE = path.join(os.homedir(), ".autobot", "projects.json");
 const readProjects = () => {
@@ -51,7 +54,8 @@ function register(getWin) {
     return { code: finalCode, dir };
   });
   // rename — the identity is his to change, not remove-and-re-add's. Migrates
-  // agents.json (`code:sessionId` keys + projectCode fields) so saved
+  // the run store (`code:sessionId` keys + projectCode fields) and the agent
+  // definitions that name this project, so saved
   // conversations survive under the new name. Live in-memory sessions keep the
   // old code until reopened — visible, not fatal.
   ipcMain.handle("files:rename-project", (_e, code, next) => {
@@ -67,21 +71,24 @@ function register(getWin) {
     map[finalNext] = map[code];
     delete map[code];
     fs.writeFileSync(PROJECTS_FILE, JSON.stringify(map, null, 2));
-    const AGENTS_FILE = path.join(os.homedir(), ".autobot", "agents.json");
+    // the RUN store, through the substrate — it was ~/.autobot/agents.json and is
+    // now sessions.json (RFC-003 §3). Reading it by path here is how a rename
+    // quietly stops migrating anything.
     try {
-      const store = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf8"));
-      let touched = false;
-      for (const key of Object.keys(store)) {
-        if (store[key]?.projectCode !== code) continue;
-        const nextKey = key.startsWith(`${code}:`)
-          ? `${finalNext}:${key.slice(code.length + 1)}`
-          : key;
-        store[nextKey] = { ...store[key], projectCode: finalNext };
-        if (nextKey !== key) delete store[key];
-        touched = true;
-      }
-      if (touched) fs.writeFileSync(AGENTS_FILE, JSON.stringify(store, null, 2));
-    } catch {} // no agents.json yet is fine
+      sessions.saveSessionStore((store) => {
+        for (const key of Object.keys(store)) {
+          if (store[key]?.projectCode !== code) continue;
+          const nextKey = key.startsWith(`${code}:`)
+            ? `${finalNext}:${key.slice(code.length + 1)}`
+            : key;
+          store[nextKey] = { ...store[key], projectCode: finalNext };
+          if (nextKey !== key) delete store[key];
+        }
+      });
+    } catch {} // no run store yet is fine
+    try {
+      definitions.renameProject(code, finalNext);
+    } catch {}
     return { code: finalNext, dir: map[finalNext] };
   });
   // legacy one-shot door: dialog + write in one call, code defaulting to the

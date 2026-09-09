@@ -293,6 +293,158 @@ body {
 .agent-state.sticky { background: #e2a03f; }
 .agent-name { flex: 1; }
 .agent-hint { font-size: 10.5px; color: var(--sv-text-faint); }
+/* AGENT CARDS. A row was the wrong container: an agent has an application using
+   it, a place it runs, a plan in flight, skills, tools and servers — that is a
+   CARD's worth of facts, and squeezing it into one line is why the display read
+   as thin. Clicking the card does nothing on purpose; ▸ is the only way in. */
+.agent-card {
+  border: 1px solid var(--sv-border); border-radius: 10px;
+  padding: 8px 10px; margin-bottom: 8px; background: #2b3038;
+}
+.agent-card.current { border-color: var(--sv-blue-deep); }
+.agent-card.full { background: #30363f; }
+.card-head { display: flex; align-items: center; gap: 7px; }
+.card-name { font-size: 12.5px; color: var(--sv-text-strong); font-weight: 500; }
+.card-state {
+  font-size: 9.5px; padding: 1px 6px; border-radius: 999px;
+  background: #343a45; color: var(--sv-text-faint);
+}
+.card-state.running { background: rgba(76,175,80,.16); color: #86d189; }
+.card-state.idle { background: rgba(226,160,63,.16); color: #e2a03f; }
+.card-enter, .card-x {
+  cursor: pointer; color: var(--sv-text-faint); font-size: 12px; padding: 0 4px;
+}
+.card-enter { font-size: 13px; }
+.card-enter:hover { color: var(--sv-blue-deep); }
+.card-x:hover { color: #e05252; }
+/* the application using it — the loudest line after the name, because it is the
+   question the panel could not answer before */
+.card-usedby { margin-top: 5px; font-size: 10.5px; color: var(--sv-text-muted); }
+.app-chip {
+  display: inline-block; margin-left: 4px; padding: 1px 7px; border-radius: 5px;
+  background: rgba(143,182,232,.16); color: #8fb6e8; font-size: 10px;
+}
+.card-work {
+  margin-top: 6px; padding: 4px 7px; border-radius: 6px; background: #242931;
+  display: flex; gap: 7px; align-items: baseline; font-size: 10.5px;
+}
+.work-count { color: var(--sv-blue-deep); font-variant-numeric: tabular-nums; }
+.work-now { color: var(--sv-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-facts { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 10px; color: var(--sv-text-muted); }
+.card-facts .fact b { color: var(--sv-text-faint); font-weight: 400; margin-right: 3px; }
+.card-list { margin-top: 6px; display: flex; gap: 8px; align-items: baseline; }
+.card-list-k { flex: none; width: 58px; font-size: 10px; color: var(--sv-text-faint); }
+.card-list-k b { color: var(--sv-text-muted); font-weight: 500; }
+.card-list-v { flex: 1; min-width: 0; }
+.chip.skill { background: #33404a; color: #9fd0c4; }
+
+/* CHIPS — a tool is a NAME, and a name is a thing you can read and count. The
+   panel used to say "everything the shell allows", which is a sentence, not a
+   list: it told him nothing about whether an agent had the worklist tool. */
+.chip {
+  display: inline-block; margin: 0 3px 3px 0; padding: 1px 6px;
+  border-radius: 5px; background: #343a45; color: var(--sv-text-muted);
+  font-size: 10px; line-height: 15px; white-space: nowrap;
+}
+.chip.mcp { background: #2f3b4a; color: #8fb6e8; }      /* ours, not the model's */
+.chip.ok  { background: rgba(76,175,80,.16); color: #86d189; }
+.chip.bad { background: rgba(224,82,82,.16); color: #e88; }
+.chip.more { background: transparent; color: var(--sv-text-faint); }
+.cfg-none { color: var(--sv-text-faint); font-style: italic; }
+.agent-where { font-size: 10px; color: var(--sv-text-faint); }
+.cfg-more {
+  margin-top: 4px; font-size: 10px; color: var(--sv-text-faint);
+  cursor: pointer; user-select: none;
+}
+.cfg-more:hover { color: var(--sv-text-strong); }
+.agent-item { margin-bottom: 6px; }
+.agent-item.full { background: #2b3038; border-radius: 8px; }
+.agent-item.full .cfg-v { max-height: none; }
+
+/* THE CONFIGURATION, READ IN THE UI — his rule: "that's the whole point we have
+   a UI", so nothing about an agent should require opening a file to know. */
+.agent-item.open { background: #2b3038; border-radius: 8px; }
+.agent-section-note { float: right; font-size: 10px; color: var(--sv-text-faint); font-weight: 400; }
+.agent-cfg-toggle {
+  font-size: 9px; color: var(--sv-text-faint); padding: 0 3px; cursor: pointer; flex: none;
+}
+.agent-cfg-toggle:hover { color: var(--sv-text-strong); }
+.agent-cfg { padding: 2px 10px 8px 24px; font-size: 11px; }
+.cfg-row { display: flex; gap: 8px; padding: 2px 0; align-items: baseline; }
+.cfg-k { flex: none; width: 74px; color: var(--sv-text-faint); }
+.cfg-v { flex: 1; min-width: 0; color: var(--sv-text-muted); word-break: break-word; }
+.cfg-note {
+  margin-top: 6px; padding: 6px 8px; border-radius: 6px;
+  background: rgba(226, 160, 63, 0.10); border: 1px solid rgba(226, 160, 63, 0.35);
+  color: var(--sv-text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.cfg-btn {
+  background: transparent; border: 1px solid var(--sv-border); border-radius: 6px;
+  color: var(--sv-text); font-size: 10.5px; padding: 2px 8px; cursor: pointer;
+}
+.cfg-btn:hover { border-color: var(--sv-blue-deep); color: var(--sv-text-strong); }
+
+/* AGENT DEFINITIONS in the panel — a definition is not a run, so it does not wear
+   the running/idle dot. Its own mark says "this is a thing you can start". */
+.agent-state.def { background: transparent; border: 1.5px solid var(--sv-blue-deep); }
+.def-row .agent-name { flex: none; }
+.def-axes {
+  flex: 1; min-width: 0; font-size: 10.5px; color: var(--sv-text-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.save-agent {
+  background: transparent; border: 1px solid var(--sv-border); border-radius: 6px;
+  color: var(--sv-text-muted); font-size: 10.5px; padding: 2px 7px; cursor: pointer;
+}
+.save-agent:hover { color: var(--sv-text-strong); border-color: var(--sv-blue-deep); }
+
+/* THE CONVERSATION STRIP — the other conversations, reachable without leaving this
+   one. Collapsed: a single scrollable row, so it costs one line of the chat.
+   Open: it wraps and the height is dragged. Same dots as the list rows, because
+   the same fact (running / idle / on disk) should not learn a second vocabulary. */
+.conv-strip { position: relative; display: flex; align-items: flex-start; gap: 4px; padding: 0 2px 6px; }
+.conv-strip-rows {
+  flex: 1; min-width: 0; display: flex; gap: 5px;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.conv-strip-rows::-webkit-scrollbar { display: none; }
+.conv-strip.open .conv-strip-rows {
+  flex-wrap: wrap; align-content: flex-start;
+  overflow-x: hidden; overflow-y: auto; scrollbar-width: thin;
+}
+.conv-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 190px;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  font-size: 11.5px; color: var(--sv-text-muted);
+  background: #2b3038; border: 1px solid transparent;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conv-strip.open .conv-chip { max-width: 100%; }
+.conv-chip:hover { background: #313640; color: var(--sv-text); }
+/* the one you are IN reads as selected, not merely hovered */
+.conv-chip.on {
+  background: var(--sv-surface); border-color: var(--sv-border);
+  color: var(--sv-text-strong); cursor: default;
+}
+.conv-chip.disk { font-style: italic; }
+.conv-chip.new { color: var(--sv-text-faint); }
+.conv-chip.new:hover { color: var(--sv-text-strong); }
+.conv-strip-more {
+  flex: none; background: transparent; border: 1px solid var(--sv-border);
+  border-radius: 6px; height: 22px; min-width: 24px; padding: 0 5px;
+  color: var(--sv-text-muted); cursor: pointer; font-size: 10px;
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.conv-strip-more:hover { color: var(--sv-text-strong); }
+.conv-count { font-size: 9.5px; color: var(--sv-text-faint); }
+/* the grip sits UNDER the open strip, full width — a resize you can find without
+   hunting for a 3px edge */
+.conv-strip-grip {
+  position: absolute; left: 0; right: 26px; bottom: 0; height: 6px;
+  cursor: ns-resize; border-radius: 3px;
+}
+.conv-strip-grip:hover { background: var(--sv-border); }
+
 .agent-chat { border-top: 1px solid #333845; padding-top: 8px; display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .agent-chat-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--sv-blue-deep); padding: 0 2px 6px; }
 .cooking { flex: 1; color: var(--sv-text-muted); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: cook 1.6s ease-in-out infinite; }
