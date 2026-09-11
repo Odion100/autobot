@@ -192,11 +192,13 @@ function serverFor(mcpRecord) {
           // Scores are reported, not hidden. The GAP between #1 and #2 is information — one
           // strong hit reads differently from five weak ones, and a caller that cannot see
           // the spread cannot tell those apart.
-          const lines = hits.map(
-            (h) => `${h.score.toFixed(3)}  ${h.meta.callable}\n        ${h.meta.description || "(no description)"}`
-          );
+          // WRITTEN FOR A READER — same words for the model and the chat, no reformatting downstream.
+          const lines = hits.map((h, i) => {
+            const desc = h.meta.description ? `\n   ${h.meta.description}` : "";
+            return `${i + 1}. ${h.meta.callable} — match ${h.score.toFixed(2)}${desc}`;
+          });
           const note = built?.failed?.length ? `\n\n(could not read: ${built.failed.join("; ")})` : "";
-          return { content: [{ type: "text", text: `Candidates ${scope}:\n\n${lines.join("\n")}${note}` }] };
+          return { content: [{ type: "text", text: `Candidates ${scope}:\n\n${lines.join("\n\n")}${note}` }] };
         },
         { alwaysLoad: true }
       ),

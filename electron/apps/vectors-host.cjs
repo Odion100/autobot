@@ -12,6 +12,7 @@ function register() {
   ipcMain.handle("vectors:drop", (_e, collection) => vectors.drop(collection));
   ipcMain.handle("vectors:search", (_e, collection, query, opts) => vectors.search(collection, query, opts));
   ipcMain.handle("vectors:collections", () => vectors.collections());
+  ipcMain.handle("vectors:records", (_e, collection) => vectors.records(collection));
 }
 
 module.exports = { register };

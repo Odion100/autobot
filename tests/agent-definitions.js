@@ -142,5 +142,32 @@ assert.equal(definitions.adopt({}), null, "no placement, nothing adopted — nev
 assert.equal(definitions.get(a1.id).adopted, true, "adopted agents are marked, never disguised as authored");
 ok("adoption is per-placement, marked, and never nameless");
 
+// ---- THE ROUND TRIP: reading a record and saving it back must not wipe it -------
+// Found 2026-09-09 reviewing systemview-0c's docs/skills work. normalize() reads
+// TOP-LEVEL SDK fields, but a STORED record keeps them nested under `def` — so
+// `{...prev}` never surfaced them and save() rebuilt an empty def. The live path
+// was the panel's own save button (agent:def-save -> definitions.save(rec)):
+// rename an agent in the UI and its assignment, tools and skills were gone, with
+// NO error, still running, still pointed at the right repo. Placement and gating
+// survived, which is what made it look healthy.
+//
+// The class: ONE VALUE, TWO SHAPES — flat as authored, nested as stored — and a
+// function that only understood one of them. Same family as the number-scope and
+// label/record cases: ask which other shape resolves this, and whether it agrees.
+const full = definitions.save({
+  name: "RoundTrip", prompt: "P", tools: ["Read", "Grep"], skills: ["cr"],
+  description: "d", model: "m", projectCode: "autobot", permissionMode: "default",
+});
+const stored = definitions.get("roundtrip");
+assert.deepEqual(definitions.save(stored).def, full.def,
+  "saving a record straight back from get() must keep the def — this is what the UI does");
+assert.deepEqual(definitions.save({ id: "roundtrip", name: "Renamed" }).def, full.def,
+  "a rename-only save must not wipe prompt/tools/skills");
+const edited = definitions.save({ id: "roundtrip", prompt: "NEW" });
+assert.equal(edited.def.prompt, "NEW", "an explicit edit still wins over the stored value");
+assert.deepEqual(edited.def.tools, ["Read", "Grep"], "...and leaves the fields it did not name alone");
+assert.equal(edited.projectCode, "autobot", "placement survives every shape");
+ok("a save that reads then writes keeps the whole def (both shapes accepted)");
+
 fs.rmSync(scratch, { recursive: true, force: true });
-console.log(`\n${pass} claims held — RFC-003 definitions + adoption\n`);
+console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip\n`);

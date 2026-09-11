@@ -98,7 +98,23 @@ function register(surfaceOf) {
   ipcMain.handle("agent:defs", () => definitions.list());
   ipcMain.handle("agent:def", (_e, id) => definitions.get(id));
   ipcMain.handle("agent:def-save", (_e, rec) => definitions.save(rec));
-  ipcMain.handle("agent:def-remove", (_e, id) => definitions.remove(id));
+  ipcMain.handle("agent:def-remove", (_e, id) => {
+    // DELETE MEANS GONE — def + its context (in definitions.remove) + its sessions (here, where
+    // both modules are in scope without a circular require).
+    const ok = definitions.remove(id);
+    try { sessions.purgeAgent(id); } catch {}
+    return ok;
+  });
+  // THE DOCS FEEDING AN AGENT (RFC-055 "one window"): def prompt + the CLAUDE.md
+  // stack at its cwd, listed with content, written back by key (never by path).
+  ipcMain.handle("agent:docs", (_e, id) => definitions.docs(id));
+  ipcMain.handle("agent:doc-save", (_e, id, key, text) => definitions.saveDoc(id, key, text));
+  // skills are docs that load ON DEMAND — shared files (user / project), editable like the rest
+  ipcMain.handle("agent:skills", (_e, id) => definitions.skills(id));
+  ipcMain.handle("agent:skill-save", (_e, id, name, where, text) => definitions.saveSkill(id, name, where, text));
+  // per-agent run summary from the store — runs, last activity, last-known real
+  // capabilities — so the profile can tell a dead test agent from a working one.
+  ipcMain.handle("agent:runs", () => sessions.agentRuns());
   // save-as-agent: capture a definition from a run that already works, rather
   // than asking him to fill a blank form (RFC-003 §4)
   ipcMain.handle("agent:def-from-session", (_e, key, extra) => {

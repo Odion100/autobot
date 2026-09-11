@@ -260,6 +260,23 @@ async function search(collection, query, { k = 5, min = 0, where } = {}) {
     .slice(0, k);
 }
 
+// RECORDS — the surface's read path. Search answers "what matches"; this answers "what is IN
+// here", which is what a management UI needs (browse, not query). Strips `vec` deliberately:
+// 384 floats per record is real payload and nothing a human view uses. Newest first, because a
+// store read by a person is a list they scan, and the thing just written is the thing they want.
+function records(collection) {
+  const d = read(collection);
+  return {
+    collection,
+    model: d.model,
+    count: d.records.length,
+    indexed: d.indexed || null,
+    records: d.records
+      .map((r) => ({ id: r.id, text: r.text, meta: r.meta || {} }))
+      .sort((a, b) => String((b.meta && b.meta.created) || "").localeCompare(String((a.meta && a.meta.created) || ""))),
+  };
+}
+
 function collections() {
   try {
     return fs.readdirSync(STORE)
@@ -276,4 +293,4 @@ function collections() {
 
 const status = () => ({ model: MODEL, dim: DIM, ready: modelReady(), models: MODELS, store: STORE, collections: collections() });
 
-module.exports = { embed, stop, replaceWhere, index, upsert, remove, drop, search, collections, status, modelReady, MODEL, DIM };
+module.exports = { embed, stop, records, replaceWhere, index, upsert, remove, drop, search, collections, status, modelReady, MODEL, DIM };

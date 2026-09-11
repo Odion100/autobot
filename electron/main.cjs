@@ -312,6 +312,7 @@ app.whenReady().then(async () => {
   require("./apps/files-host.cjs").register(() => win); // projects/files/auth for /ide (RFC-047 seam)
   require("./apps/dictation.cjs").register();
   require("./apps/vectors-host.cjs").register(); // RFC-055 — local semantic retrieval, a harness capability
+  require("./apps/context-host.cjs").register(); // RFC-055 — the context management surface (his curate verbs)
   supervisor.boot(); // hosted agent sessions from ~/.autobot/hosted.json (none by default)
 
   // Every start lands on the landing page — his call ("for now, I need to be in

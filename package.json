@@ -24,7 +24,8 @@
     "smoke:defs": "node tests/agent-definitions.js",
     "dev:nowatch": "node electron/dev.js --no-watch",
     "smoke:worklist": "node tests/worklist.js",
-    "smoke:origin": "node tests/same-origin.js"
+    "smoke:origin": "node tests/same-origin.js",
+    "smoke:context": "node tests/context.js"
   },
   "repository": {
     "type": "git",

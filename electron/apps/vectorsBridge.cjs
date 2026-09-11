@@ -9,4 +9,5 @@ module.exports = (ipcRenderer) => ({
   drop: (collection) => ipcRenderer.invoke("vectors:drop", collection),
   search: (collection, query, opts) => ipcRenderer.invoke("vectors:search", collection, query, opts),
   collections: () => ipcRenderer.invoke("vectors:collections"),
+  records: (collection) => ipcRenderer.invoke("vectors:records", collection),
 });

@@ -45,10 +45,85 @@ function saveStore(mutate) {
 
 const keyOf = (projectCode, sessionId = "agent") => `${projectCode}:${sessionId}`;
 
+// DELETE MEANS GONE — purge every run that belonged to a deleted agent (his rule: a confirmed
+// delete leaves nothing behind). Keyed off the run's agentId, which open() stamps on it.
+function purgeAgent(id) {
+  let n = 0;
+  saveStore((store) => {
+    for (const key of Object.keys(store)) {
+      if (store[key] && store[key].agentId === id) { delete store[key]; n++; }
+    }
+  });
+  return n;
+}
+
+// WHAT THE STORE KNOWS PER AGENT — for the profile's delete decision: how many runs a
+// definition has, when it last did anything, and the real capability lists its last
+// session reported. Live sessions are a separate question (list() answers it).
+function agentRuns() {
+  const store = loadStore();
+  const out = {};
+  for (const key of Object.keys(store)) {
+    const r = store[key];
+    if (!r || !r.agentId) continue;
+    const a = out[r.agentId] || (out[r.agentId] = { runs: 0, lastActive: 0, capabilities: null });
+    a.runs++;
+    if ((r.lastActive || 0) >= a.lastActive) {
+      a.lastActive = r.lastActive || 0;
+      if (r.capabilities) a.capabilities = r.capabilities;
+    }
+  }
+  return out;
+}
+
 const definitions = require("./definitions.cjs");
 const worklist = require("./worklist.cjs");
+const context = require("./context.cjs");
 const discovery = require("./discovery.cjs");
 const services = require("./services.cjs");
+
+// THE LEVEL-0 STAMP (RFC-055, my half of the context MCP).
+//
+// The premise it exists for: an agent does not reach for tools it was never told
+// exist. Discovery, worklist and context are all merged into every session, but a
+// merged tool the model never considers is a tool that is not there.
+//
+// IT RIDES THE SYSTEM PROMPT, NOT A USER TURN. The obvious implementation — push a
+// message into the input queue at open — is wrong twice: it would spend a model
+// turn the human did not ask for on EVERY session open, and it would show up in
+// his feed as words he did not type. The system prompt costs no turn and is not
+// part of the conversation at all.
+//
+// WHICH ALSO ANSWERS THE RE-STAMP. Compaction rewrites the CONVERSATION; the system
+// prompt is not in it, so a stamp placed here survives a boundary by construction
+// and there is nothing to re-fire. A re-stamp would have been a user turn arriving
+// out of nowhere immediately after a compaction — the worst moment for one.
+// PRESENCE RIDES WITH THE STAMP — his call, 2026-09-09: the stamp named the tools but
+// nothing said WHERE THE AGENT IS. An agent outside systemview's repo knew nothing of the
+// browser, the chat, or that its reply renders as interactive markdown — the original
+// Part-A failure, rebuilt. The text is a FILE he edits (~/.autobot/presence.md), read at
+// open, so fixing "we forgot to tell them X" is one edit, no rebuild, no code. Known
+// imperfection, his words: harness-level for now — an app should eventually inject its own
+// presence through its handle, because "in the browser" does not necessarily mean "in
+// SystemView". Structure upgrades later; context gets solved now.
+const PRESENCE_FILE = path.join(os.homedir(), ".autobot", "presence.md");
+function presence() {
+  try {
+    const t = fs.readFileSync(PRESENCE_FILE, "utf8").trim();
+    return t ? t + "\n\n" : "";
+  } catch {
+    return "";
+  }
+}
+
+const STAMP =
+  "SHARED MEMORY. This harness carries context across sessions and agents:\n" +
+  `- \`${context.TOOL_NAMES[1]}\` — search what has already been learned (conventions, corrections, ` +
+  "project facts, prior lessons) BEFORE deriving or guessing. An empty answer means nothing matches; proceed.\n" +
+  `- \`${context.TOOL_NAMES[0]}\` — write one small note the moment you learn something a future ` +
+  "session would otherwise rediscover: a correction from the user, a convention, a gotcha, what a command really does.\n" +
+  `- \`${worklist.TOOL_NAME}\` — your plan for multi-step work; send the whole list every time.\n` +
+  `- \`${discovery.TOOL_NAME}\` — find a tool by describing what you need, instead of assuming none exists.`;
 
 // The definition's SDK half → query options. Only tool access, skills and MCP are
 // forwarded as-is; `prompt` becomes systemPrompt (the assignment IS the system
@@ -56,12 +131,20 @@ const services = require("./services.cjs");
 // undefined, which the SDK would treat as "set to nothing" for some of them.
 function sdkOptionsOf(def = {}) {
   const o = {};
-  if (def.prompt) o.systemPrompt = def.prompt;
+  // A CUSTOM systemPrompt REPLACES the preset — and per the SDK, `append` has no
+  // effect once systemPrompt is a string. So the stamp is composed differently in
+  // each case rather than set once: appended to the agent's own assignment when it
+  // has one, appended to the claude_code preset when it does not. Either way it is
+  // present, and neither way costs a turn.
+  const stamped = presence() + STAMP;
+  o.systemPrompt = def.prompt
+    ? `${def.prompt}\n\n${stamped}`
+    : { type: "preset", preset: "claude_code", append: stamped };
   // A definition that PINS `tools` would otherwise drop the worklist without
   // saying so — the agent keeps working and quietly stops being able to plan.
   // The worklist is harness state, so it is always appended, never negotiable.
   if (def.tools?.length)
-    o.allowedTools = [...def.tools, worklist.TOOL_NAME, discovery.TOOL_NAME, ...services.TOOL_NAMES];
+    o.allowedTools = [...def.tools, worklist.TOOL_NAME, discovery.TOOL_NAME, ...services.TOOL_NAMES, ...context.TOOL_NAMES];
   if (def.disallowedTools?.length) o.disallowedTools = def.disallowedTools;
   // FORWARDED NOW — the "real server to wire" arrived (SystemLynx's MCP workbench,
   // the first SystemLynx service exposing tools over MCP). The shape mismatch this
@@ -194,13 +277,19 @@ function startWatcher(s) {
   } catch {} // recursive watch unavailable → schema half still covers Edit/Write
 }
 
-// Compress a tool result to something a feed can show without drowning in bytes.
-function brief(content) {
-  if (typeof content === "string") return content.slice(0, 400);
+// Compress a tool result to something a feed can show without drowning in bytes. The harness's
+// own MCP tools (context/discovery/systemlynx) get a bigger budget: their outputs are AUTHORED
+// for human reading — his rule, "our logs come out human" — and clipping a ranked list of notes
+// at 400 chars re-creates the dump problem by amputation. Their sizes are bounded at the source
+// (top-k results, 40KB cap on call), so the budget is honest, not unbounded.
+function brief(content, max = 400) {
+  if (typeof content === "string") return content.slice(0, max);
   if (Array.isArray(content))
-    return content.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join(" ").slice(0, 400);
+    return content.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n").slice(0, max);
   return "";
 }
+const HARNESS_MCP = /^mcp__(context|discovery|systemlynx)__/;
+const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6000 : 400);
 
 // Lifecycle breadcrumbs — when a session dies on its own, this file says why.
 function logLife(s, what) {
@@ -216,19 +305,6 @@ async function pump(s) {
     for await (const m of s.query) {
       if (m.type === "system" && m.subtype === "init") {
         s.sdkSessionId = m.session_id;
-        saveStore((store) => {
-          store[s.key] = {
-            projectCode: s.projectCode,
-            sessionId: s.sessionId,
-            cwd: s.cwd,
-            sdkSessionId: m.session_id,
-            permissionMode: s.permissionMode,
-            agentId: s.agentId,       // RFC-003: a run belongs to a definition, or to none
-            agentName: s.agentName,
-            worklist: s.worklist,
-            lastActive: Date.now(),
-          };
-        });
         s.model = m.model; // rides usage events so the meter knows its real window
         // WHAT THIS AGENT ACTUALLY HAS. The init message carries the real lists —
         // tools (including our mcp__worklist__set), skills, subagents, mcp servers
@@ -242,6 +318,22 @@ async function pump(s) {
           mcpServers: m.mcp_servers || [],
           slashCommands: m.slash_commands || [],
         };
+        saveStore((store) => {
+          store[s.key] = {
+            projectCode: s.projectCode,
+            sessionId: s.sessionId,
+            cwd: s.cwd,
+            sdkSessionId: m.session_id,
+            permissionMode: s.permissionMode,
+            agentId: s.agentId,       // RFC-003: a run belongs to a definition, or to none
+            agentName: s.agentName,
+            worklist: s.worklist,
+            // persisted so the profile can show an agent's REAL lists when it is
+            // not running — last session's truth beats the definition's guess
+            capabilities: s.capabilities,
+            lastActive: Date.now(),
+          };
+        });
         logLife(s, `started: model ${m.model} sdk ${m.session_id}${s.resumedFrom ? " resumed " + s.resumedFrom : ""}`);
         emit(s, {
           kind: "session.started",
@@ -330,7 +422,7 @@ async function pump(s) {
                 id: b.tool_use_id,
                 ok,
                 summary: `${toolSummary(call.name, call.input)} — ${ok ? "done" : "failed"}`,
-                detail: brief(b.content),
+                detail: brief(b.content, resultBudget(call.name)),
               });
               const fc = ok && call.name ? fileChangeOf(call.name, call.input) : null;
               if (fc && fc.path) {
@@ -460,6 +552,15 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // The third tier: SystemLynx services he has whitelisted, attachable mid-session.
   const servicesServer = services.serverFor();
 
+  // CONTEXT — shared memory across sessions and agents (RFC-055). Identity is
+  // CLOSED OVER here and never taken from tool arguments: `slot` is the agent
+  // DEFINITION id, so a note filed to agent scope follows the slot across
+  // re-clones and cannot be misfiled by a model inventing a name. An ad-hoc run
+  // with no definition has no slot — it gets system (and project when known) and
+  // no agent scope at all, which is the honest degradation: an anonymous session
+  // has no slot to inherit from or write to.
+  const contextServer = context.serverFor({ projectCode, slot: agent ? agent.id : null });
+
   s.query = query({
     prompt: s.input,
     options: {
@@ -475,6 +576,14 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       // definition doesn't set simply isn't here, so an unconfigured agent opens
       // exactly like today's ad-hoc session.
       ...(agent ? sdkOptionsOf(agent.def) : {}),
+      // THE STAMP IS NOT NEGOTIABLE AND NOT CONDITIONAL. sdkOptionsOf only runs
+      // when a definition exists, so composing the stamp only in there would have
+      // left ad-hoc runs — the ones adoption could not place — as the single
+      // session kind that never hears its tools exist. Same rule as the worklist:
+      // merged AFTER the definition's options so a definition cannot drop it.
+      systemPrompt: agent?.def?.prompt
+        ? `${agent.def.prompt}\n\n${STAMP}`
+        : { type: "preset", preset: "claude_code", append: STAMP },
       // EVERY session gets the worklist — it is harness state, not a capability
       // that touches the repo, so nothing is gained by withholding it. Merged
       // AFTER the definition's options so a definition cannot drop it by accident.
@@ -491,6 +600,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         // reach, it only makes the reach an agent already has findable.
         [discovery.SERVER]: discoveryServer,
         [services.SERVER]: servicesServer,
+        [context.SERVER]: contextServer,
       },
       canUseTool: (tool, input) =>
         new Promise((resolve) => {
@@ -778,6 +888,7 @@ function transcriptsFor(cwd, projectCode) {
 }
 
 module.exports = {
+  purgeAgent, agentRuns,
   open, send, answerPermission, interrupt, models, setModel, subscribe, history, kill, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this

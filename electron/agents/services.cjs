@@ -182,6 +182,7 @@ async function attach(name) {
     url: serviceUrl,
     modules: modules.map((m) => m.name),
     methods: docs.length,
+    methodList: docs.map((d) => ({ namespace: d.meta.namespace, module: d.meta.module, described: !!d.meta.described })),
     described: docs.filter((d) => d.meta.described).length,
     mcpRoutes: use.map((r) => r.path),
     indexed: new Date().toISOString(),
@@ -247,7 +248,9 @@ function serverFor() {
             return {
               content: [{
                 type: "text",
-                text: `Attached ${r.service}: ${r.methods} methods across ${r.modules.join(", ")} (${r.described} carry schemas). Search them with findTool; call them with the call tool.`,
+                text:
+                  `Attached ${r.service}: ${r.methods} methods across ${r.modules.join(", ")} (${r.described} carry schemas).\n\n` +
+                  (r.methodList || []).map((m) => `${m.namespace}${m.described ? " [schema]" : ""}`).join("\n"),
               }],
             };
           } catch (e) {
@@ -268,9 +271,12 @@ function serverFor() {
         async ({ service, namespace, arguments: args }) => {
           try {
             const r = await call(service, namespace, args);
-            // The status is reported, never flattened to ok/failed: an in-method {status:400}
-            // usually means THE CALLER SENT THE WRONG SHAPE, which is the actionable finding.
-            return { content: [{ type: "text", text: JSON.stringify(r, null, 1).slice(0, 40000) }] };
+            // WRITTEN FOR A READER — status first as a sentence (never flattened to ok/failed: an
+            // in-method 400 usually means THE CALLER SENT THE WRONG SHAPE, which is the finding),
+            // then the return value alone. The envelope's plumbing fields stay out of the log.
+            const head = `${namespace} returned ${r.status}${r.status >= 400 && r.message ? ` — ${r.message}` : ""}`;
+            const payload = r.returnValue !== undefined ? JSON.stringify(r.returnValue, null, 2) : JSON.stringify(r, null, 2);
+            return { content: [{ type: "text", text: `${head}\n\n${payload}`.slice(0, 40000) }] };
           } catch (e) {
             return { content: [{ type: "text", text: `${namespace} failed: ${e.message}` }], isError: true };
           }

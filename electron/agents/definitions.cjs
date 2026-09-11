@@ -90,7 +90,12 @@ function get(id) {
 function save(input) {
   ensureDir();
   const prev = input.id ? get(input.id) : null;
-  const rec = normalize({ ...(prev || {}), ...input, createdAt: prev?.createdAt });
+  // BOTH SHAPES, ALWAYS (autobot-e1's find, measured): normalize() reads TOP-LEVEL SDK fields,
+  // but a STORED record nests them under `def` — so `{...prev}` alone never surfaced them and
+  // any save that didn't hand back a flattened record silently WIPED description/prompt/tools/
+  // skills (a rename in the UI emptied the agent, no error, still ran). Spread the nested def
+  // halves up after their records, input last so an explicit edit still wins.
+  const rec = normalize({ ...(prev || {}), ...(prev?.def || {}), ...input, ...(input.def || {}), createdAt: prev?.createdAt });
   fs.writeFileSync(fileOf(rec.id), JSON.stringify(rec, null, 2));
   return rec;
 }
@@ -98,8 +103,111 @@ function save(input) {
 // Removing a definition never touches the runs it started — those are
 // conversations, and a conversation outliving the config that opened it is the
 // same rule as a session outliving its view.
+// DELETE MEANS GONE — his rule: the confirmation IS the safety, so a confirmed delete wipes the
+// agent, not just its definition file. Def + the agent's context (vector collection AND the
+// markdown notes behind it). Sessions are purged by the caller (host.cjs) because requiring
+// sessions.cjs here would be circular. Nothing is kept "in case it's useful" — keeping is the
+// thing he rejected.
 function remove(id) {
-  try { fs.unlinkSync(fileOf(id)); return true; } catch { return false; }
+  let ok = false;
+  try { fs.unlinkSync(fileOf(id)); ok = true; } catch {}
+  // the agent's learned memory: context.cjs is the ONE writer of ctx-agent-* (the writer map),
+  // so the wipe is ITS function and this module only calls it — never touches the scope itself.
+  try { require("./context.cjs").purgeAgent(id); } catch {}
+  return ok;
+}
+
+// THE DOCS FEEDING AN AGENT — RFC-055, "one window." What actually loads into a session at this
+// agent's placement is more than the def prompt: Claude Code reads the CLAUDE.md stack for the
+// cwd too. Those files were invisible from the profile — you had to know they exist. This lists
+// every doc in the stack WITH its content so the surface can show them as chips that open and
+// edit in place. Only files that exist are listed (an absent file is not part of the stack).
+function docPaths(rec) {
+  const map = {};
+  if (rec.cwd) {
+    map["claude-md"] = { label: "CLAUDE.md", path: path.join(rec.cwd, "CLAUDE.md") };
+    map["claude-local-md"] = { label: "CLAUDE.local.md", path: path.join(rec.cwd, "CLAUDE.local.md") };
+  }
+  map["global-claude-md"] = { label: "~/.claude/CLAUDE.md", path: path.join(os.homedir(), ".claude", "CLAUDE.md") };
+  return map;
+}
+
+function docs(id) {
+  const rec = get(id);
+  if (!rec) return [];
+  const out = [
+    // the def prompt is a doc like the others — stored in the definition, not on disk.
+    { key: "prompt", label: "agent doc", where: "agent definition", text: (rec.def && rec.def.prompt) || "" },
+  ];
+  const paths = docPaths(rec);
+  for (const key of Object.keys(paths)) {
+    try {
+      out.push({ key, label: paths[key].label, where: paths[key].path, text: fs.readFileSync(paths[key].path, "utf8") });
+    } catch {}
+  }
+  return out;
+}
+
+// Writes go only to keys docPaths knows — the renderer names a doc, never a path.
+function saveDoc(id, key, text) {
+  const rec = get(id);
+  if (!rec) return { ok: false, error: "unknown agent" };
+  if (key === "prompt") {
+    // save() takes the FLATTENED shape (normalize reads top-level SDK fields), so hand every def
+    // field back or a prompt edit would silently drop tools/skills/description.
+    save({ id: rec.id, name: rec.name, ...(rec.def || {}), prompt: String(text), projectCode: rec.projectCode, cwd: rec.cwd, permissionMode: rec.permissionMode });
+    return { ok: true };
+  }
+  const target = docPaths(rec)[key];
+  if (!target) return { ok: false, error: `unknown doc: ${key}` };
+  try {
+    fs.writeFileSync(target.path, String(text));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// SKILLS ARE DOCUMENTS TOO (his point: a skill is a doc that loads ON DEMAND — the only thing
+// separating it from CLAUDE.md is when it loads). They are SHARED files — user-level or the
+// project's .claude/skills — not per-agent state; an agent only chooses to carry them. Listed
+// with content so the profile can open and edit them like any other doc.
+function skillDirs(rec) {
+  const dirs = [{ where: "user", dir: path.join(os.homedir(), ".claude", "skills") }];
+  if (rec && rec.cwd) dirs.push({ where: "project", dir: path.join(rec.cwd, ".claude", "skills") });
+  return dirs;
+}
+
+function skills(id) {
+  const rec = get(id);
+  const out = [];
+  for (const { where, dir } of skillDirs(rec)) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      // the standard shape is <name>/SKILL.md; a flat <name>.md counts too
+      const p = n.endsWith(".md") ? path.join(dir, n) : path.join(dir, n, "SKILL.md");
+      try {
+        const text = fs.readFileSync(p, "utf8");
+        const desc = (text.match(/^description:\s*(.+)$/m) || [])[1] || "";
+        out.push({ name: n.replace(/\.md$/, ""), where, path: p, description: desc.slice(0, 300), text });
+      } catch {}
+    }
+  }
+  return out;
+}
+
+// Writes go only to a skill the scan already knows — the renderer names a skill, never a path,
+// and editing is not creating (a typo must not mint a file).
+function saveSkill(id, name, where, text) {
+  const target = skills(id).find((s) => s.name === name && s.where === where);
+  if (!target) return { ok: false, error: `unknown skill: ${name} (${where})` };
+  try {
+    fs.writeFileSync(target.path, String(text));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 // A project rename must carry its agents, or they point at a code that no longer
@@ -194,4 +302,4 @@ function adopt({ projectCode, cwd, permissionMode, model } = {}) {
   } catch { return resolve(rec.id); }
 }
 
-module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR };
+module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, saveDoc, skills, saveSkill };

@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld("systemview", {
   // RFC-055 — semantic retrieval belongs to the HARNESS, so every app gets it;
   // SystemView supplies the corpus and the node types, never the runtime.
   vectors: require("./vectorsBridge.cjs")(ipcRenderer),
+  // RFC-055 — the context store's management half: list/edit/delete notes. Reading and
+  // querying ride on `vectors` above; these are the curate verbs his surface needs.
+  context: {
+    notes: (scope) => ipcRenderer.invoke("context:notes", scope),
+    save: (scope, id, fields) => ipcRenderer.invoke("context:save", scope, id, fields),
+    remove: (scope, id) => ipcRenderer.invoke("context:delete", scope, id),
+  },
   // The host-served IDE surfaces (/ide fills in from these): projects, the
   // fileProviders-shaped codebase methods, and read-only auth status.
   projects: {
@@ -67,6 +74,14 @@ contextBridge.exposeInMainWorld("systemview", {
     removeDef: (id) => ipcRenderer.invoke("agent:def-remove", id),
     // capture a definition from a run that already works, instead of a blank form
     defFromSession: (key, extra) => ipcRenderer.invoke("agent:def-from-session", key, extra),
+    // every doc feeding an agent (def prompt + CLAUDE.md stack), and the write-back
+    docs: (id) => ipcRenderer.invoke("agent:docs", id),
+    saveDoc: (id, key, text) => ipcRenderer.invoke("agent:doc-save", id, key, text),
+    // skills: shared on-demand docs (user + project scan), editable by name
+    skills: (id) => ipcRenderer.invoke("agent:skills", id),
+    saveSkill: (id, name, where, text) => ipcRenderer.invoke("agent:skill-save", id, name, where, text),
+    // per-agent run history: { [agentId]: { runs, lastActive, capabilities } }
+    runs: () => ipcRenderer.invoke("agent:runs"),
 
     // open({ projectCode, sessionId?, model?, permissionMode? }) -> Promise<AgentTransport>
     // Events speak RFC-048 (the session event vocabulary): session.started /
