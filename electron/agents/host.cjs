@@ -112,6 +112,10 @@ function register(surfaceOf) {
   // skills are docs that load ON DEMAND — shared files (user / project), editable like the rest
   ipcMain.handle("agent:skills", (_e, id) => definitions.skills(id));
   ipcMain.handle("agent:skill-save", (_e, id, name, where, text) => definitions.saveSkill(id, name, where, text));
+  // PAGE-LEVEL HELP — for the humans designing agents, scoped to no agent (so NOT agent:docs).
+  // Lives by the agent list; the defining-agents template/walkthrough is the first one.
+  ipcMain.handle("agent:help", () => definitions.help());
+  ipcMain.handle("agent:help-save", (_e, key, text) => definitions.saveHelp(key, text));
   // per-agent run summary from the store — runs, last activity, last-known real
   // capabilities — so the profile can tell a dead test agent from a working one.
   ipcMain.handle("agent:runs", () => sessions.agentRuns());

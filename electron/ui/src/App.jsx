@@ -111,8 +111,25 @@ export default function App() {
 
   const pick = (fn) => { fn(); setUrlDraft(null); toggleDock(false); };
 
+  // + ADD APP — name and address, written to ~/.autobot/apps.json (the same file an install
+  // lands in). The error comes BACK and gets shown: a door that fails silently is the exact
+  // shape we spent today removing. Cancel at either prompt is a no-op, not an error.
+  const addApp = async () => {
+    const title = prompt("App name");
+    if (!title) return;
+    const url = prompt(`Address for ${title}`, "http://localhost:");
+    if (!url) return;
+    const r = await window.autobot.tabs("addApp", { title, url });
+    if (r?.error) alert(r.error);
+    else toggleDock(true);
+  };
+
   return (
-    <div className={`chrome ${dockOpen ? "" : "dock-closed"}`}>
+    <div className={`chrome ${dockOpen ? "" : "dock-closed"} ${state.fullScreen ? "fullscreen" : ""}`}>
+      {/* THE DOCK IS APPS NOW, NOT TABS. Tabs lived here AND in the strip — and the copy
+          with close buttons was the one behind a toggle, so the crowded copy was the one you
+          couldn't act on. Tabs belong in the strip (his call: you shouldn't open a sidebar to
+          navigate tabs). This is the door to apps, and where a new one gets added. */}
       <div className="dock">
         <div className="dock-label">apps</div>
         {state.apps.map((a) => (
@@ -129,35 +146,49 @@ export default function App() {
             )}
           </div>
         ))}
-
-        <div className="dock-label">web</div>
-        {webs.map((t) => (
-          <div
-            key={t.id}
-            className={`card ${t.id === state.activeId ? "active" : ""}`}
-            onClick={() => pick(() => window.autobot.tabs("switch", { id: t.id }))}
-            title={t.url}
-          >
-            {t.favicon ? <img className="card-logo" src={t.favicon} /> : <span className="web-dot" />}
-            <span className="card-title">{t.title || "…"}</span>
-            <span className="card-close" onClick={(e) => { e.stopPropagation(); window.autobot.tabs("close", { id: t.id }); }}>✕</span>
-          </div>
-        ))}
-        <div className="card new" onClick={() => pick(() => window.autobot.tabs("create", {}))}>
-          + new tab
+        {/* ADDING AN APP IS A FIRST-CLASS DOOR, not something you find in settings — this is
+            where the next app lands. Registry-backed; the handler is the next piece of work. */}
+        <div className="card new" onClick={addApp}>
+          + add app
         </div>
       </div>
 
+      {/* THE STRIP, REDESIGNED (his mandate, 2026-09-09: none of it was written in stone —
+          it was scaffolding to host SystemView). Measured first: of 1728px, tabs got 156px
+          while an EMPTY spacer took 514px and a decorative wordmark 85px. Three things were
+          pure cost and are gone — the app corner (the tab already names the app), the brand
+          mark, and the theme toggle (a preference, not chrome).
+
+          HIS ONE STRUCTURAL STEER: back / forward / reload and "where you are" are ONE UNIT.
+          They're now a single pill — the address is the unit's body, not a separate widget
+          competing with tabs for the row. */}
       <div className="top-strip">
-        <span className="app-corner" onClick={() => toggleDock()} title="switch app / tabs (⌘B)">
-          {active?.favicon ? <img className="corner-logo" src={active.favicon} /> : <StellarMark />}
-          <span className="corner-name">{cornerName}</span>
-        </span>
+        <button
+          className={`apps-btn ${dockOpen ? "active" : ""}`}
+          title="apps (⌘B)"
+          onClick={() => toggleDock()}
+        ><AppsIcon /></button>
 
-        <button disabled={!active?.canGoBack} onClick={() => window.autobot.tabs("back", { id: active.id })}><ArrowIcon /></button>
-        <button disabled={!active?.canGoForward} onClick={() => window.autobot.tabs("forward", { id: active.id })}><ArrowIcon flip /></button>
-        <button disabled={!active} onClick={() => window.autobot.tabs("reload", { id: active.id })}><ReloadIcon /></button>
+        {/* one unit: move through history, reload, and see/edit where you are */}
+        <div className={`navbar ${active?.loading ? "loading" : ""}`}>
+          <button disabled={!active?.canGoBack} onClick={() => window.autobot.tabs("back", { id: active.id })} title="back"><ArrowIcon /></button>
+          <button disabled={!active?.canGoForward} onClick={() => window.autobot.tabs("forward", { id: active.id })} title="forward"><ArrowIcon flip /></button>
+          <button disabled={!active} onClick={() => window.autobot.tabs("reload", { id: active.id })} title="reload"><ReloadIcon /></button>
+          <form className="url-form" onSubmit={go}>
+            <input
+              className="url-input"
+              value={urlDraft ?? (isHome(active?.url) ? "" : active?.url ?? "")}
+              onChange={(e) => setUrlDraft(e.target.value)}
+              onBlur={() => setUrlDraft(null)}
+              placeholder="search or enter address"
+              spellCheck={false}
+            />
+          </form>
+        </div>
 
+        {/* tabs take what's left, and SHRINK rather than push — a long title used to keep its
+            full width forever (nowrap, no min-width), which is what made the row feel like it
+            was overflowing no matter how much room it had. */}
         <span className="strip-tabs">
           {state.tabs.map((t) => (
             <span
@@ -166,35 +197,28 @@ export default function App() {
               onClick={() => { setUrlDraft(null); window.autobot.tabs("switch", { id: t.id }); }}
               title={t.url}
             >
-              {t.kind === "app" && <span className="app-dot mini" />}
-              {t.kind === "app" ? t.title : isHome(t.url) ? "new tab" : host(t.url) || t.title || "…"}
+              {t.favicon ? <img className="tab-favicon" src={t.favicon} /> : <span className={t.kind === "app" ? "app-dot mini" : "web-dot"} />}
+              <span className="tab-title">{t.kind === "app" ? t.title : isHome(t.url) ? "new tab" : host(t.url) || t.title || "…"}</span>
+              {/* CLOSE WHERE THE TAB IS — it only existed in the dock, so the crowded copy was
+                  the one you couldn't act on. "No way to get new tabs out of the way." */}
+              <span
+                className="tab-close"
+                title="close"
+                onClick={(e) => { e.stopPropagation(); window.autobot.tabs("close", { id: t.id }); }}
+              >✕</span>
             </span>
           ))}
         </span>
+
+        {/* NEW TAB SITS APART from the list (his call) — inside it, it scrolled with the tabs
+            and read as one of them. It's an action, not a tab. */}
         <button className="new-tab" title="new tab" onClick={() => window.autobot.tabs("create", {})}>+</button>
 
-        <form className="url-form" onSubmit={go}>
-          <input
-            className="url-input"
-            value={urlDraft ?? (isHome(active?.url) ? "" : active?.url ?? "")}
-            onChange={(e) => setUrlDraft(e.target.value)}
-            onBlur={() => setUrlDraft(null)}
-            placeholder="search or enter address"
-            spellCheck={false}
-          />
-        </form>
-
-        <span className="spacer" />
-        {active?.loading && <span className="loading">•</span>}
-        <button className="theme-btn" title={dark ? "light mode" : "dark mode"} onClick={() => setDark((d) => !d)}>
-          {dark ? "☀" : "☾"}
-        </button>
         <button
           className={`agents-btn ${state.agentsOpen ? "active" : ""} ${agentCount ? "lit" : ""}`}
-          title="agents"
+          title={agentCount ? `${agentCount} agents running` : "agents"}
           onClick={() => window.autobot.tabs("agents", { open: !state.agentsOpen })}
-        >◍{agentCount ? <span className="agents-count">{agentCount}</span> : null}</button>
-        <span className="brand-right"><StellarMark /> <span>autobot</span></span>
+        ><AgentsIcon />{agentCount ? <span className="agents-count">{agentCount}</span> : null}</button>
       </div>
 
       {state.agentsOpen && <AgentsPanel width={state.agentsWidth || 380} />}
@@ -303,6 +327,33 @@ function ReloadIcon() {
 }
 
 // The Stellar spark — Odion's mark from the Stellar Assistant days, in the shell's blue.
+// APPS — a grid, because that's what a launcher is everywhere. Replaces the corner
+// that spent 130px telling you the name of the app the active tab already names.
+function AppsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <rect x="1" y="1" width="5.5" height="5.5" rx="1.6" />
+      <rect x="9.5" y="1" width="5.5" height="5.5" rx="1.6" />
+      <rect x="1" y="9.5" width="5.5" height="5.5" rx="1.6" />
+      <rect x="9.5" y="9.5" width="5.5" height="5.5" rx="1.6" />
+    </svg>
+  );
+}
+
+// AGENTS — his "stupid dumb looking thing" was the ◍ glyph. A node with two others
+// orbiting it: several minds, one place. Draws in currentColor so the lit state is
+// a colour change, not a second icon.
+function AgentsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden>
+      <circle cx="8" cy="8" r="2.4" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="5.6" opacity="0.5" />
+      <circle cx="13.2" cy="4.4" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="3" cy="11.4" r="1.2" fill="currentColor" stroke="none" opacity="0.75" />
+    </svg>
+  );
+}
+
 function StellarMark() {
   return (
     <svg width="18" height="18" viewBox="0 0 100 100" className="stellar-mark">

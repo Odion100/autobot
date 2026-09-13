@@ -81,6 +81,7 @@ const worklist = require("./worklist.cjs");
 const context = require("./context.cjs");
 const discovery = require("./discovery.cjs");
 const services = require("./services.cjs");
+const systemview = require("./systemview.cjs");
 
 // THE LEVEL-0 STAMP (RFC-055, my half of the context MCP).
 //
@@ -116,6 +117,21 @@ function presence() {
   }
 }
 
+// THE SYSTEM CONTEXT — the one definition EVERY agent gets (his design, the defining-agents
+// draft): presence says WHERE you are, this says HOW TO BE — context is retrieved not memorized,
+// the store is yours to keep clean, the room rules. Same mold as presence deliberately: one file
+// he edits, read at open, injected for every agent, so there are no copies and nothing to drift.
+// It rides the same composition as presence, so it re-arrives after compaction the same way.
+const SYSTEM_CONTEXT_FILE = path.join(os.homedir(), ".autobot", "system-context.md");
+function systemContext() {
+  try {
+    const t = fs.readFileSync(SYSTEM_CONTEXT_FILE, "utf8").trim();
+    return t ? t + "\n\n" : "";
+  } catch {
+    return "";
+  }
+}
+
 const STAMP =
   "SHARED MEMORY. This harness carries context across sessions and agents:\n" +
   `- \`${context.TOOL_NAMES[1]}\` — search what has already been learned (conventions, corrections, ` +
@@ -123,6 +139,8 @@ const STAMP =
   `- \`${context.TOOL_NAMES[0]}\` — write one small note the moment you learn something a future ` +
   "session would otherwise rediscover: a correction from the user, a convention, a gotcha, what a command really does.\n" +
   `- \`${worklist.TOOL_NAME}\` — your plan for multi-step work; send the whole list every time.\n` +
+  `- \`${worklist.TOOL_READ_NAME}\` — read that plan back. It is harness state, so it survives a ` +
+  "compaction the conversation does not: after one, this is where you left off.\n" +
   `- \`${discovery.TOOL_NAME}\` — find a tool by describing what you need, instead of assuming none exists.`;
 
 // The definition's SDK half → query options. Only tool access, skills and MCP are
@@ -136,7 +154,7 @@ function sdkOptionsOf(def = {}) {
   // each case rather than set once: appended to the agent's own assignment when it
   // has one, appended to the claude_code preset when it does not. Either way it is
   // present, and neither way costs a turn.
-  const stamped = presence() + STAMP;
+  const stamped = presence() + systemContext() + STAMP;
   o.systemPrompt = def.prompt
     ? `${def.prompt}\n\n${stamped}`
     : { type: "preset", preset: "claude_code", append: stamped };
@@ -144,7 +162,7 @@ function sdkOptionsOf(def = {}) {
   // saying so — the agent keeps working and quietly stops being able to plan.
   // The worklist is harness state, so it is always appended, never negotiable.
   if (def.tools?.length)
-    o.allowedTools = [...def.tools, worklist.TOOL_NAME, discovery.TOOL_NAME, ...services.TOOL_NAMES, ...context.TOOL_NAMES];
+    o.allowedTools = [...def.tools, ...worklist.TOOL_NAMES, discovery.TOOL_NAME, ...services.TOOL_NAMES, ...context.TOOL_NAMES];
   if (def.disallowedTools?.length) o.disallowedTools = def.disallowedTools;
   // FORWARDED NOW — the "real server to wire" arrived (SystemLynx's MCP workbench,
   // the first SystemLynx service exposing tools over MCP). The shape mismatch this
@@ -241,6 +259,7 @@ function toolLabel(name, input = {}) {
     // by an older harness; the live path is the worklist tool below.
     case "TodoWrite": return "updating the plan";
     case worklist.TOOL_NAME: return "updating the worklist";
+    case worklist.TOOL_READ_NAME: return "reading the worklist";
     case "Task": case "Agent": return `delegating: ${String(input.description || "").slice(0, 50)}`;
     default: return name;
   }
@@ -288,7 +307,7 @@ function brief(content, max = 400) {
     return content.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n").slice(0, max);
   return "";
 }
-const HARNESS_MCP = /^mcp__(context|discovery|systemlynx)__/;
+const HARNESS_MCP = /^mcp__(context|discovery|systemlynx|systemview)__/;
 const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6000 : 400);
 
 // Lifecycle breadcrumbs — when a session dies on its own, this file says why.
@@ -411,6 +430,21 @@ async function pump(s) {
         }
       } else if (m.type === "user") {
         const content = m.message?.content;
+        // MESSAGE LANDING IS VISIBLE (RFC-056, his requirement: "I can see when you send, I
+        // can't see when it lands"). A cross-session message arrives as an injected user turn
+        // wrapped in <cross-session-message from="…">; surfacing it here puts the RECEIPT in the
+        // receiving agent's feed — traceability on both ends, not just the sender's tool call.
+        {
+          const texts = Array.isArray(content)
+            ? content.filter((b) => b.type === "text").map((b) => b.text || "")
+            : typeof content === "string"
+            ? [content]
+            : [];
+          for (const tx of texts) {
+            const cm = /<cross-session-message from="([^"]*)"(?:\s+from-name="([^"]*)")?/.exec(tx);
+            if (cm) emit(s, { kind: "message.landed", from: cm[2] || cm[1], preview: tx.replace(/<[^>]*>/g, " ").trim().slice(0, 140) });
+          }
+        }
         if (Array.isArray(content))
           for (const b of content)
             if (b.type === "tool_result") {
@@ -541,7 +575,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // then interrupted is exactly the one worth keeping
     saveStore((store) => { if (store[s.key]) store[s.key].worklist = items; });
     emit(s, { kind: "todo.updated", items });
-  });
+  }, () => s.worklist);
 
   // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
   // definition's OWN mcpServers record, so it can never describe a server this agent is
@@ -549,8 +583,9 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // connection, which is the presence principle applied one layer down.
   const wiredMcp = agent ? sdkOptionsOf(agent.def).mcpServers : null;
   const discoveryServer = discovery.serverFor(wiredMcp);
-  // The third tier: SystemLynx services he has whitelisted, attachable mid-session.
-  const servicesServer = services.serverFor();
+  // The third tier: SystemLynx services he has whitelisted, attachable mid-session. Identity
+  // rides in (RFC-056): per-agent call sessions — each agent's sign-in cookies are its own.
+  const servicesServer = services.serverFor({ projectCode, slot: agent ? agent.id : null });
 
   // CONTEXT — shared memory across sessions and agents (RFC-055). Identity is
   // CLOSED OVER here and never taken from tool arguments: `slot` is the agent
@@ -560,6 +595,10 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // no agent scope at all, which is the honest degradation: an anonymous session
   // has no slot to inherit from or write to.
   const contextServer = context.serverFor({ projectCode, slot: agent ? agent.id : null });
+
+  // SYSTEMVIEW — the agent face of the hub (RFC-056): tests, probe-grade calls, logs, stats, the
+  // TV, the window-driving verbs — as tools with THIS session's identity, replacing the CLI door.
+  const systemviewServer = systemview.serverFor({ projectCode, slot: agent ? agent.id : null });
 
   s.query = query({
     prompt: s.input,
@@ -601,6 +640,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         [discovery.SERVER]: discoveryServer,
         [services.SERVER]: servicesServer,
         [context.SERVER]: contextServer,
+        [systemview.SERVER]: systemviewServer,
       },
       canUseTool: (tool, input) =>
         new Promise((resolve) => {
@@ -755,6 +795,7 @@ function transcriptMessages(cwd, sessionId, { limit = 50 } = {}) {
   if (want < size) lines = lines.slice(1); // first line is a partial record
   const out = [];
   let lastUsage = null; // declared HERE — an implicit global leaked one session's meter into another
+  const callNames = new Map(); // tool_use id -> name, so a replayed result gets the same budget the live pump gave it
 
   for (const line of lines) {
     let rec;
@@ -775,7 +816,7 @@ function transcriptMessages(cwd, sessionId, { limit = 50 } = {}) {
             out.push({ kind: "user.prompt", text: b.text, ts });
           // the work is part of the conversation — results replay too
           else if (b.type === "tool_result")
-            out.push({ kind: "tool.result", id: b.tool_use_id, ok: !b.is_error, detail: brief(b.content), ts });
+            out.push({ kind: "tool.result", id: b.tool_use_id, ok: !b.is_error, detail: brief(b.content, resultBudget(callNames.get(b.tool_use_id))), ts });
         }
       }
     } else if (rec.type === "system" && rec.subtype === "compact_boundary") {
@@ -798,8 +839,10 @@ function transcriptMessages(cwd, sessionId, { limit = 50 } = {}) {
       for (const b of rec.message?.content || []) {
         if (b.type === "text" && b.text) out.push({ kind: "assistant.text", done: true, delta: "", text: b.text, ts });
         else if (b.type === "thinking" && b.thinking) out.push({ kind: "assistant.thinking", done: true, delta: "", text: b.thinking, ts });
-        else if (b.type === "tool_use")
+        else if (b.type === "tool_use") {
+          callNames.set(b.id, b.name);
           out.push({ kind: "tool.call", id: b.id, name: b.name, summary: toolSummary(b.name, b.input), input: b.input, ts });
+        }
       }
     }
   }

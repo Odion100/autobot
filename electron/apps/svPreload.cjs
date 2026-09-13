@@ -80,6 +80,9 @@ contextBridge.exposeInMainWorld("systemview", {
     // skills: shared on-demand docs (user + project scan), editable by name
     skills: (id) => ipcRenderer.invoke("agent:skills", id),
     saveSkill: (id, name, where, text) => ipcRenderer.invoke("agent:skill-save", id, name, where, text),
+    // page-level HELP — for the humans designing agents, scoped to no agent
+    help: () => ipcRenderer.invoke("agent:help"),
+    saveHelp: (key, text) => ipcRenderer.invoke("agent:help-save", key, text),
     // per-agent run history: { [agentId]: { runs, lastActive, capabilities } }
     runs: () => ipcRenderer.invoke("agent:runs"),
 

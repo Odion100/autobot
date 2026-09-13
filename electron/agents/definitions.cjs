@@ -132,11 +132,41 @@ function docPaths(rec) {
   return map;
 }
 
+// PAGE-LEVEL DOCS — scoped to NO single agent, so they live by the agent list, not inside one
+// agent's doc stack (his catch: a thing that applies to everybody must not wear one agent's
+// clothes). Two SIDES:
+//   agent — context that LOADS INTO every agent (the system context, injected beside presence)
+//   human — help for whoever DESIGNS agents (the defining-agents walkthrough), read by us, never
+//           sent to an agent
+// A file each; add or drop one without touching code beyond this map.
+const PAGE_DOCS = {
+  presence: { label: "Presence", side: "agent", path: path.join(os.homedir(), ".autobot", "presence.md") },
+  "system-context": { label: "System context", side: "agent", path: path.join(os.homedir(), ".autobot", "system-context.md") },
+  "defining-agents": { label: "Defining agents", side: "human", path: path.join(os.homedir(), ".autobot", "defining-agents.md") },
+};
+// `help` is the historical channel name; it now carries every page-level doc, tagged by side so
+// the surface renders the agent-side and human-side chips distinctly.
+function help() {
+  return Object.entries(PAGE_DOCS).map(([key, s]) => {
+    let text = "";
+    try { text = fs.readFileSync(s.path, "utf8"); } catch {}
+    return { key, label: s.label, side: s.side, where: s.path, text };
+  });
+}
+function saveHelp(key, text) {
+  const s = PAGE_DOCS[key];
+  if (!s) return { ok: false, error: `unknown page doc: ${key}` };
+  try { fs.writeFileSync(s.path, String(text)); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+}
+
 function docs(id) {
   const rec = get(id);
   if (!rec) return [];
+  // ONLY THIS AGENT'S OWN DOCS here — the shared system context is NOT one of them (it applies to
+  // everybody, so it lives page-level, not inside one agent's stack). The def prompt leads: it is
+  // a doc like the others, stored in the definition rather than on disk.
   const out = [
-    // the def prompt is a doc like the others — stored in the definition, not on disk.
     { key: "prompt", label: "agent doc", where: "agent definition", text: (rec.def && rec.def.prompt) || "" },
   ];
   const paths = docPaths(rec);
@@ -302,4 +332,4 @@ function adopt({ projectCode, cwd, permissionMode, model } = {}) {
   } catch { return resolve(rec.id); }
 }
 
-module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, saveDoc, skills, saveSkill };
+module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, saveDoc, skills, saveSkill, help, saveHelp };

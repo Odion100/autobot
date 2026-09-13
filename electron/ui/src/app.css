@@ -47,46 +47,12 @@ body {
 .stellar-mark { filter: drop-shadow(0 0 5px rgba(124, 196, 255, 0.45)); flex: none; }
 
 /* the app you're IN — left corner, click to open the switcher */
-.app-corner {
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 9px;
-  border-radius: 8px;
-  cursor: pointer;
-  flex: none;
-}
-.app-corner:hover { background: var(--sv-hover); }
-.corner-logo { width: 16px; height: 16px; border-radius: 4px; flex: none; }
-.corner-name {
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: var(--sv-blue);
-  white-space: nowrap;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .card-logo { width: 15px; height: 15px; border-radius: 4px; flex: none; }
 .card-hint { font-size: 9.5px; color: var(--sv-text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
 .card.closed { opacity: 0.6; }
 .card.closed:hover { opacity: 1; }
 
 .spacer { flex: 1; }
-.brand-right {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  color: var(--sv-blue);
-  padding-right: 4px;
-}
-
 .dock-label {
   font-size: 9.5px;
   text-transform: uppercase;
@@ -126,6 +92,10 @@ body {
 .dock-closed .dock { display: none; }
 /* dock hidden: strip takes the full width; controls start right after the traffic lights */
 .dock-closed .top-strip { left: 0; padding-left: 74px; }
+/* IN FULLSCREEN THE BANDS ARE GONE, so the reserve is a hole. macOS hides close/minimize/zoom
+   entirely in fullscreen (they come back only on a top-edge hover), and holding 74px for
+   buttons that aren't drawn is exactly the empty corner. Chrome reclaims this; so do we. */
+.fullscreen.dock-closed .top-strip { padding-left: 12px; }
 
 .top-strip {
   position: fixed;
@@ -151,60 +121,122 @@ body {
 .top-strip button:hover:not(:disabled) { background: var(--sv-hover); }
 .top-strip button:disabled { color: var(--sv-text-faint); }
 
-/* open tabs, listed across — subtle, on the other side of the back-and-forth */
+/* ---- THE STRIP, REDESIGNED ------------------------------------------------------
+   Measured before touching it: of 1728px the tabs held 156px while an EMPTY spacer
+   held 514px and a wordmark 85px. The corner, the brand and the theme toggle are
+   gone; what's left is apps · [nav+address as ONE unit] · tabs · agents. */
+
+/* apps — one button, not a 130px corner naming the app the tab already names */
+.apps-btn {
+  -webkit-app-region: no-drag;
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--sv-text-muted);
+  cursor: pointer;
+}
+.apps-btn:hover { background: var(--sv-hover); color: var(--sv-text-strong); }
+.apps-btn.active { background: var(--sv-hover); color: var(--sv-text-strong); }
+
+/* HIS STRUCTURAL STEER: back, forward, reload and where-you-are are ONE UNIT.
+   One pill, one border, one focus ring — the address is the unit's body rather than
+   a separate widget competing with tabs for the row. */
+.navbar {
+  -webkit-app-region: no-drag;
+  flex: 0 1 420px;
+  min-width: 200px;
+  display: flex; align-items: center; gap: 1px;
+  height: 30px; padding: 0 4px 0 2px;
+  border-radius: 9px;
+  background: var(--sv-bg);
+  border: 1px solid transparent;
+}
+.navbar:focus-within { border-color: var(--sv-blue); }
+.navbar button {
+  width: 26px; height: 26px;
+  border: none; border-radius: 7px;
+  background: transparent; color: var(--sv-text-muted);
+  cursor: pointer; flex: none;
+}
+.navbar button:hover:not(:disabled) { background: var(--sv-hover); color: var(--sv-text-strong); }
+.navbar button:disabled { color: var(--sv-text-faint); cursor: default; }
+.navbar .url-form { flex: 1; min-width: 0; margin: 0; }
+.url-input {
+  width: 100%; height: 26px;
+  border: none; background: transparent;
+  color: var(--sv-text-muted);
+  font-size: 12px; padding: 0 6px;
+  outline: none;
+}
+.url-input:focus { color: var(--sv-text-strong); }
+/* loading reads on the unit itself — one less widget in the row */
+.navbar.loading { border-color: var(--sv-border); }
+
+/* tabs take what's left and SHRINK instead of pushing. The old rule was nowrap with
+   no min-width, so one long title kept its full width forever — that is the whole
+   mechanism behind "it just keeps pushing to the right". */
 .strip-tabs {
   -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin: 0 6px;
-  max-width: 44%;
-  overflow-x: auto;
-  scrollbar-width: none;
+  /* 0 1 auto, NOT 1 1 auto: greedy growth ate the whole row and shoved the + button to the
+     far end, away from the tabs it belongs beside. The list takes what it needs and shrinks
+     when crowded; the leftover room falls AFTER the +, and agents is pinned right below. */
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex; align-items: center; gap: 2px;
+  overflow-x: auto; scrollbar-width: none;
 }
 .strip-tabs::-webkit-scrollbar { display: none; }
 .strip-tab {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 7px;
-  font-size: 11.5px;
+  display: flex; align-items: center; gap: 6px;
+  /* A FIXED 140px BASIS CLIPPED THE ONLY TAB (his report, 2026-09-12: "SystemView" came
+     back as an ellipsis with the whole row empty beside it). 0-grow + a 140px basis means
+     a tab can never take free room — one tab or ten, always 140px, ~80px of it left for
+     text after the favicon, padding and close. `auto` sizes to the title instead, so an
+     uncrowded tab shows its full name; shrink still does the crowding work, and max-width
+     keeps the original point that tabs must not eat the row. */
+  flex: 0 1 auto;
+  max-width: 240px;
+  min-width: 40px;      /* favicon + close when fully crowded */
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
   color: var(--sv-text-muted);
-  white-space: nowrap;
   cursor: default;
+  overflow: hidden;
+  /* AN UNSELECTED TAB IS STILL A THING (his note: they had no presence at all). A border
+     alone — it reads as an object without competing with the selected one, which keeps its
+     fill. Presence from the outline, emphasis from the fill. */
+  border: 1px solid var(--sv-border-soft);
+  background: transparent;
 }
-.strip-tab:hover { background: var(--sv-hover); color: var(--sv-text-muted); }
-.strip-tab.active { background: var(--sv-hover); color: var(--sv-text-strong); }
-.app-dot.mini { width: 6px; height: 6px; border-radius: 2px; }
+.strip-tab:hover { background: var(--sv-hover); border-color: var(--sv-border); }
+.strip-tab.active {
+  background: var(--sv-hover);
+  border-color: var(--sv-border);
+  color: var(--sv-text-strong);
+}
+.tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-favicon { width: 14px; height: 14px; border-radius: 3px; flex: none; }
+/* CLOSE LIVES ON THE TAB — it used to exist only in the dock, so the crowded copy was
+   the one you could not act on ("no way to get new tabs out of the way"). */
+.tab-close {
+  flex: none; width: 15px; height: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px; font-size: 9px;
+  color: var(--sv-text-faint); opacity: 0;
+}
+.strip-tab:hover .tab-close, .strip-tab.active .tab-close { opacity: 1; }
+.tab-close:hover { background: var(--sv-border); color: var(--sv-text-strong); }
 
 .new-tab {
   -webkit-app-region: no-drag;
-  width: 24px; height: 24px;
-  border: none; border-radius: 6px;
-  background: transparent;
-  color: var(--sv-text-muted);
-  font-size: 15px;
-  cursor: pointer;
-  flex: none;
-  margin-right: 4px;
+  width: 26px; height: 26px;
+  border: none; border-radius: 7px;
+  background: transparent; color: var(--sv-text-muted);
+  font-size: 15px; cursor: pointer; flex: none;
 }
 .new-tab:hover { background: var(--sv-hover); color: var(--sv-text-strong); }
-
-.url-form { flex: 1; max-width: 620px; -webkit-app-region: no-drag; }
-/* quiet until you reach for it — the address is present, not prominent */
-.url-input {
-  width: 100%;
-  height: 28px;
-  border: none; border-radius: 8px;
-  background: transparent;
-  color: var(--sv-text-muted);
-  padding: 0 10px;
-  font-size: 12px;
-  outline: none;
-}
-.url-input:hover { background: var(--sv-bg); color: var(--sv-text-muted); }
-.url-input:focus { background: var(--sv-bg); color: var(--sv-text-strong); box-shadow: 0 0 0 1.5px var(--sv-blue); }
 
 .app-pill {
   -webkit-app-region: no-drag;
@@ -250,16 +282,28 @@ body {
    share; chat, icons and flow come from SystemView's AgentChat). sv-dark palette:
    surface var(--sv-surface), canvas #1e2127, blue var(--sv-blue), running-green #4caf50. */
 .agents-btn {
+  -webkit-app-region: no-drag;
+  flex: none;
+  margin-left: auto;   /* pinned right — this is what the empty spacer used to do, for free */
   position: relative;
-  font-size: 15px;
-  color: var(--sv-text-faint);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--sv-text-muted);
+  cursor: pointer;
 }
-.agents-btn.lit { color: var(--sv-blue); }
-.agents-btn.active { color: var(--sv-blue); background: #313640; border-radius: 7px; }
+.agents-btn:hover { background: var(--sv-hover); color: var(--sv-text-strong); }
+.agents-btn.active { background: var(--sv-hover); color: var(--sv-text-strong); }
+/* LIT = agents are alive. A colour change on the same mark, not a second icon —
+   the state is the thing that changed, not the object. */
+.agents-btn.lit { color: #4caf50; }
 .agents-count {
-  position: absolute; top: -2px; right: -4px;
-  font-size: 9px; background: #4caf50; color: #fff;
-  border-radius: 8px; padding: 0 4px; line-height: 13px;
+  position: absolute; top: 1px; right: 0;
+  min-width: 13px; height: 13px; padding: 0 3px;
+  border-radius: 7px;
+  background: #4caf50; color: #0b0e13;
+  font-size: 9px; font-weight: 600; line-height: 13px;
+  text-align: center;
 }
 .agent-column {
   position: fixed; top: 44px; right: 0; bottom: 0; width: 380px;

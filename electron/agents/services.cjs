@@ -195,7 +195,20 @@ async function attach(name) {
 // context argument: two tool names, flat, whether the estate is 6 methods or 661. It is also
 // the single place per-method policy, call recording and audit can ever live — 661 declared
 // tools would be 661 places.
-async function call(service, namespace, args) {
+//
+// SESSIONS ARE NATIVE NOW (RFC-056, his correction on the audit: "don't sit there and think that
+// call should just be raw" — the CLI's separate cookie jar only existed because it wasn't in the
+// browser). Each AGENT gets its own jar per service (his Q3 answer: per agent, real isolation):
+// a sign-in's Set-Cookie is captured and rides every later call from that agent, so auth works
+// the way it does in a browser — sign in once, be signed in.
+const jars = new Map(); // "<who>::<service>" -> Map(cookieName -> value)
+function jarFor(who, service) {
+  const k = `${who || "anon"}::${service}`;
+  if (!jars.has(k)) jars.set(k, new Map());
+  return jars.get(k);
+}
+
+async function call(service, namespace, args, { headers = {}, who = null } = {}) {
   const rec = attached.get(service);
   if (!rec) throw new Error(`"${service}" is not attached — attach it first`);
   const [moduleName, fn] = String(namespace).split(".");
@@ -204,14 +217,43 @@ async function call(service, namespace, args) {
   // SystemLynx methods are VARIADIC and `req.arguments` is an ARRAY — a caller that sends one
   // object as the whole shape mislabels every multi-arg method. Accept either, send an array.
   const list = Array.isArray(args) ? args : args === undefined ? [] : [args];
-  return getJSON(url, {
+  const jar = jarFor(who, service);
+  const cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+  // THE JAR IS THE IDENTITY, NOT A DEFAULT (autobot-c5's find): caller headers merged last let an
+  // agent send its own `cookie` and ride another session — and `Cookie`/`COOKIE` spellings survive
+  // an object spread, so only a case-insensitive strip closes it. Every other header (Origin is the
+  // legitimate use this param exists for) still passes through untouched.
+  const passthrough = Object.fromEntries(
+    Object.entries(headers).filter(([k]) => !/^cookie$/i.test(k)),
+  );
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...passthrough,
+      ...(cookie ? { cookie } : {}), // the jar wins by position too, belt and suspenders
+    },
     body: JSON.stringify({ __arguments: list }),
   });
+  // capture the session: every Set-Cookie lands in this agent's jar for this service
+  try {
+    const set = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [res.headers.get("set-cookie")].filter(Boolean);
+    for (const line of set) {
+      const m = /^([^=;]+)=([^;]*)/.exec(String(line));
+      if (m) jar.set(m[1].trim(), m[2]);
+    }
+  } catch {}
+  const text = await res.text();
+  const body = text.trimStart().startsWith("{")
+    ? text
+    : (text.match(/^data:\s*(.+)$/gm) || []).map((l) => l.replace(/^data:\s*/, "")).pop();
+  if (!body) throw new Error(`no JSON from ${url}`);
+  return JSON.parse(body);
 }
 
-function serverFor() {
+function serverFor(identity = {}) {
+  // the jar key: the agent's slot when defined, else the project — per-agent isolation (his call)
+  const who = identity.slot || identity.projectCode || null;
   return createSdkMcpServer({
     name: SERVER,
     version: "1.0.0",
@@ -266,11 +308,17 @@ function serverFor() {
         {
           service: z.string().describe("the attached service name"),
           namespace: z.string().describe("Module.method, e.g. Repo.findRfc"),
-          arguments: z.any().optional().describe("one object for an object-shaped method, or an array for a variadic one"),
+          // RENAMED from `arguments` (the reserved-word name never passed through — every
+          // arg-taking call 400'd; noted in the store). `arguments` stays accepted as an alias
+          // so an agent mid-transition isn't wrong twice.
+          input: z.any().optional().describe("one object for an object-shaped method, or an array for a variadic one"),
+          arguments: z.any().optional().describe("deprecated alias of input"),
+          headers: z.record(z.string()).optional().describe('extra request headers, e.g. {"Origin": "http://localhost:3000"}'),
         },
-        async ({ service, namespace, arguments: args }) => {
+        async ({ service, namespace, input, arguments: legacy, headers }) => {
           try {
-            const r = await call(service, namespace, args);
+            const args = input !== undefined ? input : legacy;
+            const r = await call(service, namespace, args, { headers: headers || {}, who });
             // WRITTEN FOR A READER — status first as a sentence (never flattened to ok/failed: an
             // in-method 400 usually means THE CALLER SENT THE WRONG SHAPE, which is the finding),
             // then the return value alone. The envelope's plumbing fields stay out of the log.

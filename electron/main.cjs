@@ -10,6 +10,7 @@ const { app, BrowserWindow, WebContentsView, ipcMain, Menu, clipboard, session, 
 const path = require("path");
 const fs = require("fs");
 const { APPS } = require("./apps/registry.cjs");
+const registry = require("./apps/registry.cjs");
 const { ensureApp, isUp } = require("./apps/launcher.cjs");
 const termHost = require("./terminal/host.cjs");
 const agentHost = require("./agents/host.cjs");
@@ -53,6 +54,12 @@ function state() {
     activeId,
     agentsOpen,
     agentsWidth: agentsW,
+    // THE 74px CORNER IS THE WINDOW BANDS' SPACE — and in macOS fullscreen the bands are GONE
+    // (they only return on a hover at the top edge). So a fixed reserve holds a hole open for
+    // buttons that aren't there, which is the empty corner he reported. Chrome doesn't leave
+    // that gap; it reclaims the room. Shipping the state so the CSS can reserve only when the
+    // bands actually exist.
+    fullScreen: !!(win && !win.isDestroyed() && win.isFullScreen()),
     tabs: tabs.map((t) => ({
       id: t.id,
       kind: t.kind,
@@ -64,7 +71,9 @@ function state() {
       canGoBack: history(t.view.webContents).canGoBack(),
       canGoForward: history(t.view.webContents).canGoForward(),
     })),
-    apps: APPS.map((a) => {
+    // registry.current(), not the require-time APPS snapshot — a freshly added app has to
+    // appear without a restart, or "+ add app" writes a file and looks like it did nothing.
+    apps: registry.current().map((a) => {
       const t = tabs.find((x) => x.appId === a.id);
       return { id: a.id, title: a.title, tabId: t?.id ?? null, favicon: t?.favicon ?? null };
     }),
@@ -193,6 +202,14 @@ ipcMain.handle("tabs", (_e, action, payload = {}) => {
     case "switch": setActive(payload.id); break;
     case "close": closeTab(payload.id); break;
     case "openApp": openApp(payload.appId); break;
+    // + add app — writes ~/.autobot/apps.json (the same file an install lands in) and
+    // rebroadcasts so the dock shows it immediately. Errors come BACK; a door that fails
+    // silently is the shape we keep finding.
+    case "addApp": {
+      const r = registry.addApp(payload || {});
+      broadcast();
+      return r;
+    }
     case "navigate": tab?.view.webContents.loadURL(payload.url); break;
     case "back": history(tab?.view.webContents ?? {}).goBack?.(); break;
     case "forward": history(tab?.view.webContents ?? {}).goForward?.(); break;
@@ -270,9 +287,36 @@ app.whenReady().then(async () => {
     show: process.env.AUTOBOT_SHELL_SHOW !== "0",
     title: "autobot",
     titleBarStyle: "hiddenInset",
+    // THE WINDOW BANDS MUST ACTUALLY BE THERE (his report, 2026-09-09: the 74px corner is
+    // reserved and EMPTY — no red/yellow/green). hiddenInset alone should draw them, and
+    // nothing here suppressed them, so the position is made EXPLICIT rather than left to a
+    // default that something in the window state can move out of view. y:14 centres them in
+    // the 44px strip; x:20 is macOS's own inset.
+    trafficLightPosition: { x: 20, y: 14 },
     backgroundColor: "#0b0e13",
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), sandbox: false },
   });
+
+  // ...and assert it after creation too. setWindowButtonVisibility is the only API that can
+  // force them back if some window state (Split View, Stage Manager) hid them; calling it
+  // with true is a no-op when they were already visible, so it costs nothing to be sure.
+  try { win.setWindowButtonVisibility(true); } catch {}
+  // the reserve follows the bands, so the chrome has to hear about the transition
+  for (const ev of ["enter-full-screen", "leave-full-screen"]) win.on(ev, broadcast);
+
+  // AND THE BANDS HAVE TO BE RE-ASSERTED, NOT JUST SET ONCE (his report again, 2026-09-12:
+  // still an empty 74px corner after the explicit position above). Probed the live chrome —
+  // the strip holds the reserve correctly, so this is native, not CSS. With a custom
+  // trafficLightPosition macOS drops the buttons out of view across a zoom/fullscreen
+  // transition, and the one-shot call at creation is long gone by then. Re-assert on every
+  // transition. Skip it IN fullscreen, where macOS hides them deliberately.
+  const assertBands = () => {
+    if (!win || win.isDestroyed() || win.isFullScreen()) return;
+    try { win.setWindowButtonVisibility(true); } catch {}
+  };
+  for (const ev of ["leave-full-screen", "maximize", "unmaximize", "restore", "show", "focus"]) {
+    win.on(ev, assertBands);
+  }
 
   // Smoke mode: one plain page, no chrome, tabs, or hub — keeps the action-lane
   // smoke deterministic about which target it drives.
@@ -282,7 +326,21 @@ app.whenReady().then(async () => {
   }
 
   const uiDist = path.join(__dirname, "ui/dist/index.html");
-  if (process.env.AUTOBOT_UI_URL) win.loadURL(process.env.AUTOBOT_UI_URL); // vite dev server
+  if (process.env.AUTOBOT_UI_URL) {
+    win.loadURL(process.env.AUTOBOT_UI_URL); // vite dev server
+    // THE HEADER THAT NEVER CAME BACK (his report): dev.js starts vite and this shell in the
+    // same breath, so this loadURL can fire before vite answers — the chrome stays a blank
+    // page forever while the native tab views paint normally ("just showing SystemView").
+    // A failed MAIN-frame load of the chrome URL retries until vite is up. -3 (ERR_ABORTED)
+    // is a superseded navigation, not a failure — retrying it would fight real reloads.
+    win.webContents.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
+      if (!isMainFrame || code === -3) return;
+      if (!url || !url.startsWith(process.env.AUTOBOT_UI_URL)) return;
+      setTimeout(() => {
+        if (win && !win.isDestroyed()) win.loadURL(process.env.AUTOBOT_UI_URL);
+      }, 700);
+    });
+  }
   else if (fs.existsSync(uiDist)) win.loadFile(uiDist);
   else win.loadFile(path.join(__dirname, "index.html")); // pre-build placeholder
 
