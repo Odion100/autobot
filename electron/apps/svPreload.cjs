@@ -61,6 +61,12 @@ contextBridge.exposeInMainWorld("systemview", {
     transcript: (projectCode, sessionId, opts) => ipcRenderer.invoke("agent:transcript", projectCode, sessionId, opts),
     killSession: (projectCode, sessionId = "agent") =>
       ipcRenderer.invoke("agent:kill", `${projectCode}:${sessionId}`),
+    // RE-INIT a running session in place: same conversation (resumed by sdk session id),
+    // freshly composed system prompt. This is how an edit to presence / the system context /
+    // an agent's own doc reaches an agent that is already running — nothing else does, because
+    // the SDK took the prompt at query time and compaction only rewrites the conversation.
+    // Returns { key, history }; the caller re-seeds its feed from history.
+    refresh: (key) => ipcRenderer.invoke("agent:refresh", key),
 
     // AGENT DEFINITIONS (RFC-003). An agent is a configured session:
     //   { id, name, def: <SDK AgentDefinition>, projectCode, cwd, permissionMode }
@@ -83,6 +89,17 @@ contextBridge.exposeInMainWorld("systemview", {
     // page-level HELP — for the humans designing agents, scoped to no agent
     help: () => ipcRenderer.invoke("agent:help"),
     saveHelp: (key, text) => ipcRenderer.invoke("agent:help-save", key, text),
+    // CONTEXT HOOKS (files in ~/.autobot/hooks). A hook is `on` (which emitted event) + `when`
+    // (a cheap declarative predicate over that event's payload) + `do` (a POINTER to a skill —
+    // never the procedure itself). hooks() also returns the event VOCABULARY, which is what the
+    // picker is built from: you can only hook a moment the system actually announces.
+    hooks: () => ipcRenderer.invoke("agent:hooks"),
+    saveHook: (rec) => ipcRenderer.invoke("agent:hook-save", rec),
+    removeHook: (name) => ipcRenderer.invoke("agent:hook-remove", name),
+    // STATISTICS — { store: { since, notes[], readers, totals }, weight: { rows[], totalTokens } }.
+    // `store` is retrieval: what is pulled, how often, by whom. `weight` is the opposite question:
+    // what every turn costs before anyone asks for anything.
+    contextStats: (agentId) => ipcRenderer.invoke("agent:context-stats", agentId),
     // per-agent run history: { [agentId]: { runs, lastActive, capabilities } }
     runs: () => ipcRenderer.invoke("agent:runs"),
 
@@ -102,7 +119,9 @@ contextBridge.exposeInMainWorld("systemview", {
           ipcRenderer.on(`agent:event:${key}`, l);
           return () => ipcRenderer.removeListener(`agent:event:${key}`, l);
         },
-        send: (text) => ipcRenderer.send("agent:send", key, text),
+        // images: [{ name, mime, data (base64, no prefix), thumb (small data URL) }] — the full
+        // bytes go to the model, the thumb is what the feed keeps. See sessions.send.
+        send: (text, images) => ipcRenderer.send("agent:send", key, text, images),
         // answer a permission-request event; allow=false may carry a reason
         answerPermission: (id, allow, message) =>
           ipcRenderer.invoke("agent:permission", key, id, allow, message),

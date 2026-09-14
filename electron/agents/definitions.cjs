@@ -48,6 +48,12 @@ function normalize(input = {}) {
   if (Array.isArray(input.tools)) def.tools = input.tools.map(String);
   if (Array.isArray(input.disallowedTools)) def.disallowedTools = input.disallowedTools.map(String);
   if (Array.isArray(input.skills)) def.skills = input.skills.map(String);
+  // WHICH HOOKS THIS AGENT CARRIES. A hook exists for everyone the moment it is written; this is
+  // the agent's opt-in, exactly like `skills` above it — and it has to be listed HERE or it does
+  // not exist, because this whitelist IS the definition. Its absence is what made the profile's
+  // enable switch a lie: the UI wrote `hooks`, save() reported success, and normalize() dropped
+  // it, so every hook came back disabled after a re-init with nothing to explain why.
+  if (Array.isArray(input.hooks)) def.hooks = input.hooks.map(String);
   if (Array.isArray(input.mcpServers)) def.mcpServers = input.mcpServers;
   if (input.model) def.model = String(input.model);
   if (input.maxTurns != null) def.maxTurns = Number(input.maxTurns) || undefined;
@@ -332,4 +338,7 @@ function adopt({ projectCode, cwd, permissionMode, model } = {}) {
   } catch { return resolve(rec.id); }
 }
 
-module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, saveDoc, skills, saveSkill, help, saveHelp };
+// docPaths is exported for the STALENESS fingerprint (sessions.compositionOf): the CLAUDE.md
+// stack is one of the things a session's context is composed from at open, so "has the
+// composition changed" cannot be answered without asking the one place that knows the stack.
+module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, help, saveHelp };

@@ -34,7 +34,7 @@ const { createSdkMcpServer, tool } = require("@anthropic-ai/claude-agent-sdk");
 const { z } = require("zod");
 
 const SERVER = "context";
-const TOOL_NAMES = ["remember", "context", "forget"].map((t) => `mcp__${SERVER}__${t}`);
+const TOOL_NAMES = ["remember", "context", "list", "forget"].map((t) => `mcp__${SERVER}__${t}`);
 const ROOT = path.join(os.homedir(), ".autobot", "context");
 
 // Near-duplicate threshold for similarity-on-write, and the search floor. The write
@@ -99,22 +99,48 @@ const usageFile = path.join(ROOT, "usage.jsonl");
 // increments, and the loss is not uniform noise: busy agents collide most, so the MOST
 // used notes undercount and decay sinks exactly the wrong ones. O_APPEND writes don't
 // interleave at these sizes; readers aggregate; LINT compacts the log when it runs.
-function bumpUsage(ids) {
+// WHO READ IT, not just that it was read. "Which notes are load-bearing" is only half the
+// question; the other half is FOR WHOM — a note every agent pulls is a system convention, a note
+// one agent pulls is that agent's lesson filed in the wrong scope. Stamped by the harness from
+// the session's own identity, never sent by the model, same rule as `by:` on a write. Older
+// lines have no reader and simply aggregate without one.
+function bumpUsage(ids, by) {
   if (!ids.length) return;
   const now = new Date().toISOString();
   try {
     fs.mkdirSync(ROOT, { recursive: true });
-    fs.appendFileSync(usageFile, ids.map((id) => JSON.stringify({ id, ts: now }) + "\n").join(""));
+    fs.appendFileSync(
+      usageFile,
+      ids.map((id) => JSON.stringify(by ? { id, ts: now, by } : { id, ts: now }) + "\n").join(""),
+    );
   } catch {}
 }
+// WHEN TRACKING STARTED. The sidecar is explicitly disposable — it gets compacted, and losing it
+// "loses nothing but tuning". That is true for ranking and FALSE for curation: a note older than
+// the log reads as "never" when it may have been pulled a hundred times, and "old and never read"
+// is the exact phrase that gets something deleted. Anything written before this instant has an
+// UNKNOWN read history, not a zero, and must say so.
+function usageSince() {
+  try {
+    const first = fs.readFileSync(usageFile, "utf8").split("\n").find(Boolean);
+    return first ? JSON.parse(first).ts || null : null;
+  } catch {
+    return null;
+  }
+}
+
 function readUsage() {
   const u = {};
   try {
     for (const line of fs.readFileSync(usageFile, "utf8").split("\n")) {
       if (!line) continue;
       try {
-        const { id, ts } = JSON.parse(line);
-        u[id] = { hits: ((u[id] && u[id].hits) || 0) + 1, last: ts };
+        const { id, ts, by } = JSON.parse(line);
+        const cur = u[id] || { hits: 0, last: null, readers: {} };
+        cur.hits += 1;
+        cur.last = ts;
+        if (by) cur.readers[by] = (cur.readers[by] || 0) + 1;
+        u[id] = cur;
       } catch {}
     }
   } catch {}
@@ -236,7 +262,7 @@ async function remember(scopes, { text, title, scope, pointer, supersedes }) {
 
 // context() — merged search across every scope this session can see, or one scope
 // when aimed. Hits carry pointers; usage is bumped so aging has a signal.
-async function search(scopes, { question, scope, k = 5 }) {
+async function search(scopes, { question, scope, k = 5, by = null }) {
   // IDENTITY ON READ, NOT JUST WRITE — autobot's find, and the third instance of the same
   // shape in two days (RunBlock's namespace, serviceUrl, now this): the guard was written
   // where the risk FELT located — writes mutate, so writes got checked — while the read
@@ -285,7 +311,7 @@ async function search(scopes, { question, scope, k = 5 }) {
     .sort((a, b) => b.score - a.score)
     .slice(0, k)
     .filter((h) => h.score >= FLOOR);
-  bumpUsage(hits.map((h) => h.id));
+  bumpUsage(hits.map((h) => h.id), by || (scopes && scopes.by) || null);
   if (failed) hits.failed = failed;
   return hits;
 }
@@ -386,6 +412,83 @@ function serverFor(identity = {}) {
         },
         { alwaysLoad: true }
       ),
+      // NAMED FOR THE OPERATION, because that is the only thing that distinguishes it. It was
+      // `recent` first — which named one of its two orderings and hid the half you actually reach
+      // for during maintenance; nobody scanning a tool list guesses that the way to find a
+      // year-old forgotten note is a method called "recent". Then `notes`, which was no better:
+      // `context` returns notes too, so the payload distinguishes nothing. The real difference is
+      // that SEARCH NEEDS A QUESTION AND LIST DOES NOT — and that is the whole reason this exists,
+      // since a question can only ever reach notes you already thought to ask about.
+      tool(
+        "list",
+        "List what is IN the store — the notes themselves, not a search. " +
+          "Use it to CURATE rather than to look something up: what you have written lately, and " +
+          "what has gone quiet. `context()` can only return notes that match a question you " +
+          "already thought to ask, which is exactly the wrong tool for finding the note you " +
+          "forgot you wrote. Each line carries age, how many times it has been read, and when it " +
+          "was last read. `order: \"stale\"` puts the oldest, least-read notes first — the " +
+          "deletion candidates. Old and unread is a signal, never a verdict: read it and decide.",
+        {
+          scope: z.string().optional().describe(`"system", "project:<code>", or "agent:<slot>"; defaults to every scope you can see`),
+          order: z.enum(["recent", "stale"]).optional().describe(`"recent" (default) = newest first. "stale" = least recently read first, never-read before read.`),
+          limit: z.number().optional().describe("how many to list (default 20)"),
+        },
+        async ({ scope, order = "recent", limit = 20 }) => {
+          try {
+            const want = scope ? [scope] : scopes.allowed;
+            for (const sc of want)
+              if (!scopes.allowed.includes(sc)) throw new Error(`scope "${sc}" not available to this session`);
+            const now = Date.now();
+            // A note older than the log has an unknown read history, never a zero. See usageSince.
+            const since = usageSince();
+            const age = (iso) => {
+              if (!iso) return "—";
+              const d = Math.floor((now - Date.parse(iso)) / 86400000);
+              if (Number.isNaN(d)) return "—";
+              return d <= 0 ? "0d" : d === 1 ? "1d" : d < 60 ? `${d}d` : `${Math.floor(d / 30)}mo`;
+            };
+            let rows = want.flatMap((sc) => listNotes(sc));
+            // STALE = LONGEST UNTOUCHED, where "touched" is read-if-ever-read, written otherwise.
+            // The obvious version — never-read first — is wrong, and the live data said so
+            // immediately: three of four never-read system notes had been written that same day.
+            // Unread-and-new is just new. Falling back to `created` sinks them correctly and
+            // floats the thing actually worth looking at: written months ago, never once pulled.
+            // Deliberately NOT ranked by hit count either — a note read once last week is doing
+            // more good than one read twice a year, and raw totals hide that.
+            const touched = (r) => r.lastHit || r.created || "";
+            // A note whose history predates the log is not evidence of neglect — it is missing
+            // evidence. Rank it by when tracking started rather than by its own age, so it sits
+            // with its peers instead of heading the deletion list on a technicality.
+            const rank = (r) => (!r.lastHit && since && r.created && r.created < since ? since : touched(r));
+            rows.sort(
+              order === "stale"
+                ? (a, b) => String(rank(a)).localeCompare(String(rank(b)))
+                : (a, b) => String(b.created || "").localeCompare(String(a.created || "")),
+            );
+            rows = rows.slice(0, Math.max(1, Math.min(100, limit)));
+            if (!rows.length) return { content: [{ type: "text", text: "Nothing in the store for that scope yet." }] };
+            const body = rows
+              .map(
+                (r) =>
+                  `• ${r.title} [${r.id}]\n  ${r.scope} · written ${age(r.created)} ago` +
+                  `${r.by ? ` by ${r.by}` : ""} · read ${r.hits}×` +
+                  `${
+                    r.lastHit
+                      ? `, last ${age(r.lastHit)} ago`
+                      : since && r.created && r.created < since
+                      ? " — none since tracking began, earlier unknown"
+                      : " — never"
+                  }` +
+                  `${r.pointer ? `\n  see: ${r.pointer}` : ""}`,
+              )
+              .join("\n");
+            return { content: [{ type: "text", text: `${rows.length} note${rows.length === 1 ? "" : "s"}, ${order === "stale" ? "quietest" : "newest"} first:\n\n${body}` }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
       tool(
         "forget",
         "Delete a note from the context store by id — use when a note is wrong or stale and should " +
@@ -410,4 +513,36 @@ function serverFor(identity = {}) {
   });
 }
 
-module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent };
+// ---------------------------------------------------------------------------------------------
+// STATISTICS. The store already answers "what exists"; nothing answered "what gets USED", and
+// usage is the only signal that says what to delete. Two numbers per note — how often it is
+// pulled, and by whom — turn curation from taste into evidence.
+//
+// The same log serves both directions, which is why there is one and not two: read FORWARD it says
+// what is load-bearing; read BACKWARD it says what has gone quiet. `since` is reported because a
+// note older than the log has an unknown read history, not a zero, and a surface that forgets that
+// will happily recommend deleting the oldest and most-used notes in the store.
+function stats(scopes = []) {
+  const want = scopes.length ? scopes : ["system"];
+  const notes = want.flatMap((sc) => listNotes(sc));
+  const readers = {};
+  for (const n of notes) {
+    const u = readUsage()[n.id];
+    n.readers = (u && u.readers) || {};
+    for (const [who, count] of Object.entries(n.readers)) readers[who] = (readers[who] || 0) + count;
+  }
+  const read = notes.filter((n) => n.hits > 0).length;
+  return {
+    since: usageSince(),
+    notes,
+    readers,
+    totals: {
+      notes: notes.length,
+      read,
+      unread: notes.length - read,
+      reads: notes.reduce((a, n) => a + (n.hits || 0), 0),
+    },
+  };
+}
+
+module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince };

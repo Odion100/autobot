@@ -9,6 +9,8 @@ const path = require("path");
 const os = require("os");
 const sessions = require("./sessions.cjs");
 const definitions = require("./definitions.cjs");
+const hooks = require("./hooks.cjs");
+const contextStore = require("./context.cjs");
 
 const PROJECTS = path.join(os.homedir(), ".autobot", "projects.json");
 function resolveCwd(projectCode, cwd) {
@@ -56,7 +58,7 @@ function register(surfaceOf) {
     try { sessions.noteUsedBy(s.key, surfaceOf?.(e.sender)); } catch {}
     return { key: s.key, history: sessions.history(s.key) };
   });
-  ipcMain.on("agent:send", (_e, key, text) => { try { sessions.send(key, text); } catch {} });
+  ipcMain.on("agent:send", (_e, key, text, images) => { try { sessions.send(key, text, images); } catch {} });
   ipcMain.handle("agent:permission", (_e, key, id, allow, message) =>
     sessions.answerPermission(key, id, allow, message));
   ipcMain.handle("agent:interrupt", (_e, key) => sessions.interrupt(key));
@@ -67,6 +69,23 @@ function register(surfaceOf) {
   // dispose detaches THIS view — the session keeps thinking (same contract as terminals)
   ipcMain.on("agent:dispose", (e, key) => unwire(key, e.sender));
   ipcMain.handle("agent:kill", (_e, key) => sessions.kill(key));
+  // RE-INIT — the only way a running agent picks up an edited presence / system context /
+  // agent doc, because the system prompt was taken by the SDK at query time (see
+  // sessions.reinit). The substrate replaces the session object, so every view that was
+  // wired to the old one has to be re-pointed at the new one or the window goes deaf while
+  // the agent carries on talking — the panel would look dead and be fine.
+  ipcMain.handle("agent:refresh", async (e, key) => {
+    const viewers = [...(wired.get(key)?.keys() || [])];
+    for (const wc of viewers) unwire(key, wc);
+    const s = await sessions.reinit(key);
+    for (const wc of viewers) if (!wc.isDestroyed()) wire(s.key, wc);
+    wire(s.key, e.sender);
+    // ONLY NOW. The receipt is emitted after the views are back on the new session — emitting it
+    // inside reinit() put it in history while the subscriber set was empty on purpose, so the one
+    // panel that needed to show it was the one panel that could not hear it.
+    sessions.announceReinit(s.key);
+    return { key: s.key, history: sessions.history(s.key) };
+  });
   ipcMain.handle("agent:list", () => sessions.list());
   // conversations already on disk for a project's directory (claude CLI transcripts) —
   // pick one and open({resume: sessionId}) continues it here; the transfer click
@@ -118,6 +137,29 @@ function register(surfaceOf) {
   ipcMain.handle("agent:help-save", (_e, key, text) => definitions.saveHelp(key, text));
   // per-agent run summary from the store — runs, last activity, last-known real
   // capabilities — so the profile can tell a dead test agent from a working one.
+  // CONTEXT HOOKS — files in ~/.autobot/hooks, listed and edited from the window like docs and
+  // skills. `events` is the PICKER's source: the vocabulary the sessions substrate actually emits,
+  // so a hook can only ever be attached to a moment that really happens.
+  ipcMain.handle("agent:hooks", () => ({ hooks: hooks.list(), events: sessions.EVENTS }));
+  ipcMain.handle("agent:hook-save", (_e, rec) => {
+    try { return { hook: hooks.save(rec) }; } catch (err) { return { error: String(err?.message || err) }; }
+  });
+  ipcMain.handle("agent:hook-remove", (_e, name) => hooks.remove(name));
+
+  // STATISTICS — the half of the context system that says what gets USED, not just what exists.
+  // Two measurements that must not share a table: RETRIEVAL (notes — is this earning its place?)
+  // and WEIGHT (the always-loaded layers — never retrieved, so size is the whole story).
+  ipcMain.handle("agent:context-stats", (_e, agentId) => {
+    const rec = agentId ? definitions.resolve(agentId) : null;
+    const scopes = ["system"];
+    if (rec && rec.projectCode) scopes.push(`project:${rec.projectCode}`);
+    if (rec) scopes.push(`agent:${rec.id}`);
+    return {
+      store: contextStore.stats(scopes),
+      weight: sessions.weights(rec ? rec.id : null, rec ? rec.cwd : null),
+    };
+  });
+
   ipcMain.handle("agent:runs", () => sessions.agentRuns());
   // save-as-agent: capture a definition from a run that already works, rather
   // than asking him to fill a blank form (RFC-003 §4)
