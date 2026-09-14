@@ -526,8 +526,12 @@ function stats(scopes = []) {
   const want = scopes.length ? scopes : ["system"];
   const notes = want.flatMap((sc) => listNotes(sc));
   const readers = {};
+  // ONE PASS OVER THE LOG. This re-read and re-parsed the whole usage sidecar once PER NOTE — the
+  // log is append-only and only grows, so the cost was notes × reads on a surface whose entire job
+  // is to be opened and looked at.
+  const usage = readUsage();
   for (const n of notes) {
-    const u = readUsage()[n.id];
+    const u = usage[n.id];
     n.readers = (u && u.readers) || {};
     for (const [who, count] of Object.entries(n.readers)) readers[who] = (readers[who] || 0) + count;
   }

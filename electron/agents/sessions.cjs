@@ -78,6 +78,7 @@ function agentRuns() {
 
 const definitions = require("./definitions.cjs");
 const hooks = require("./hooks.cjs");
+const ledger = require("./ledger.cjs");
 const worklist = require("./worklist.cjs");
 const context = require("./context.cjs");
 const discovery = require("./discovery.cjs");
@@ -351,6 +352,11 @@ function emit(s, event) {
   s.events.push(event);
   if (s.events.length > HISTORY_LIMIT) s.events.splice(0, s.events.length - HISTORY_LIMIT);
   for (const sub of s.subs) { try { sub(event); } catch {} }
+  // RFC-057 — THE SAME SEAM, A THIRD TIME. emit() is where the feed draws, where hooks fire, and now
+  // where the ledger is written: observability, hookability and accountability are one surface, so
+  // anything a future event adds is measurable for free. record() swallows its own errors — a
+  // ledger that can break a session is worse than no ledger.
+  ledger.record(s, event);
   fireHooks(s, event);
 }
 

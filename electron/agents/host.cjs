@@ -9,6 +9,7 @@ const path = require("path");
 const os = require("os");
 const sessions = require("./sessions.cjs");
 const definitions = require("./definitions.cjs");
+const ledger = require("./ledger.cjs");
 const hooks = require("./hooks.cjs");
 const contextStore = require("./context.cjs");
 
@@ -159,6 +160,19 @@ function register(surfaceOf) {
       weight: sessions.weights(rec ? rec.id : null, rec ? rec.cwd : null),
     };
   });
+
+  // RFC-057 — the call ledger, global by default with an agent/project filter. Deliberately NOT
+  // folded into agent:context-stats: one answers "is this note earning its place", the other "is
+  // this tool being used, and properly" — same dialect, different ledgers, and merging them would
+  // make a surface that can only ever be read one way.
+  ipcMain.handle("agent:call-stats", (_e, opts) => ledger.stats(opts || {}));
+
+  // A proposed agent doc, waiting on him. Read, approve (which is the write), or reject.
+  ipcMain.handle("agent:proposals", () => definitions.proposals());
+  ipcMain.handle("agent:proposal-apply", (_e, id, text) => {
+    try { return { ok: true, def: definitions.applyProposal(id, text) }; } catch (e) { return { ok: false, error: String(e.message || e) }; }
+  });
+  ipcMain.handle("agent:proposal-reject", (_e, id) => ({ ok: definitions.rejectProposal(id) }));
 
   ipcMain.handle("agent:runs", () => sessions.agentRuns());
   // save-as-agent: capture a definition from a run that already works, rather

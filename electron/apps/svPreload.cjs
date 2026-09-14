@@ -100,6 +100,12 @@ contextBridge.exposeInMainWorld("systemview", {
     // `store` is retrieval: what is pulled, how often, by whom. `weight` is the opposite question:
     // what every turn costs before anyone asks for anything.
     contextStats: (agentId) => ipcRenderer.invoke("agent:context-stats", agentId),
+    // RFC-057 — what has actually been CALLED: tools, MCP, skills, hooks. {days, agent, project}
+    callStats: (opts) => ipcRenderer.invoke("agent:call-stats", opts || {}),
+    // an agent proposing its own doc — it never writes def.prompt, the approval does
+    proposals: () => ipcRenderer.invoke("agent:proposals"),
+    applyProposal: (id, text) => ipcRenderer.invoke("agent:proposal-apply", id, text),
+    rejectProposal: (id) => ipcRenderer.invoke("agent:proposal-reject", id),
     // per-agent run history: { [agentId]: { runs, lastActive, capabilities } }
     runs: () => ipcRenderer.invoke("agent:runs"),
 
