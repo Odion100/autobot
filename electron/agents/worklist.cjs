@@ -18,6 +18,9 @@
 // a delta cannot be expressed, so a subscriber arriving mid-session can always
 // render from one event. Their argument, and it belongs one layer lower than
 // they proposed it.
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const { createSdkMcpServer, tool } = require("@anthropic-ai/claude-agent-sdk");
 const { z } = require("zod");
 
@@ -51,6 +54,74 @@ function normalize(items = []) {
       state,
     };
   }).filter((it) => it.text);
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// DURABLE WORKLISTS — RFC-005 §3. One concept, two lifetimes.
+//
+// The worklist was session state: it lived in the session store under the session's own key, and
+// nothing outside that session could read it. That is right for a conversation and wrong for a
+// JOB, where reading the plan after the run is the entire point — a job that ran at 3am is a job
+// nobody watched, so the list it left behind is the only account of what it did.
+//
+// So the worklist gains an OWNER instead of gaining a parallel structure. `session:<key>` today,
+// `job:<id>` when jobs land, `<cwd-key>` for the terminal door that already wrote here. The RFC is
+// explicit about why it must not be a second "job steps" model: two structures describing the same
+// progress drift within a month, and then the surface showing one is lying about the other.
+//
+// ONE FILE PER OWNER, and the file is the truth. Not a cache beside the session store — a copy
+// that can disagree is worse than no copy, and the session store already proved it by holding a
+// `worklist` key nobody could read from outside.
+const DIR = path.join(os.homedir(), ".autobot", "worklists");
+
+// An owner is a free-form string; it becomes a filename, so it is sanitised rather than trusted.
+// `job:abc` and `session:abc` must not collide, which is why the separator survives as a dash
+// instead of being stripped.
+const fileFor = (owner) =>
+  path.join(DIR, `${String(owner || "unowned").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(-90)}.json`);
+
+function read(owner) {
+  try {
+    const r = JSON.parse(fs.readFileSync(fileFor(owner), "utf8"));
+    return Array.isArray(r.items) ? r.items : [];
+  } catch {
+    return [];
+  }
+}
+
+function write(owner, items) {
+  try {
+    fs.mkdirSync(DIR, { recursive: true });
+    // `updatedAt` is not decoration: for a list nobody watched, "when did this last move" is the
+    // difference between a job that finished and a job that stopped.
+    fs.writeFileSync(fileFor(owner), JSON.stringify({ owner, items, updatedAt: Date.now() }, null, 2));
+  } catch {}
+  return items;
+}
+
+// Every worklist on this machine, newest first — what makes one readable AFTER the fact, by
+// something that is not the session that wrote it.
+function all() {
+  let names = [];
+  try { names = fs.readdirSync(DIR); } catch { return []; }
+  const out = [];
+  for (const n of names.filter((f) => f.endsWith(".json"))) {
+    try {
+      const r = JSON.parse(fs.readFileSync(path.join(DIR, n), "utf8"));
+      const items = normalize(r.items || []);
+      out.push({
+        owner: r.owner || n.replace(/\.json$/, ""),
+        file: path.join(DIR, n),
+        updatedAt: r.updatedAt || 0,
+        items,
+        done: items.filter((i) => i.state === "done").length,
+        total: items.length,
+        active: (items.find((i) => i.state === "active") || {}).text || "",
+      });
+    } catch {}
+  }
+  return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 // One server per session: the handler closes over that session's update callback,
@@ -128,4 +199,4 @@ function serverFor(onSet, getList = () => []) {
   });
 }
 
-module.exports = { serverFor, normalize, SERVER, TOOL, TOOL_READ, TOOL_NAME, TOOL_READ_NAME, TOOL_NAMES };
+module.exports = { serverFor, normalize, DIR, read, write, all, SERVER, TOOL, TOOL_READ, TOOL_NAME, TOOL_READ_NAME, TOOL_NAMES };

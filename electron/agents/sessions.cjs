@@ -360,6 +360,45 @@ function emit(s, event) {
   fireHooks(s, event);
 }
 
+// ---------------------------------------------------------------------------------------------
+// AMBIENT EVENTS — RFC-005 §7.1. Something happened that belongs to NO session: a value changed on
+// a page, a schedule came due, something arrived from outside. `emit()` above cannot carry these,
+// because every line of it is about one session's feed, one session's ledger, one session's
+// history — and an ambient event has no session to be about.
+//
+// IT FANS OUT TO HOOKS AND NOT TO FEEDS, and that asymmetry is the whole design. Pushing a page
+// event into every live session's event list would put a stranger's click in your chat: N copies
+// of one fact, in N places none of them belong. But every session must still get the chance to
+// MATCH it, because carrying a hook is how an agent opts in — so `fire()` runs per session, with
+// that session's own `carries` list and its own guard state, and only the ones that opted in see
+// anything at all. A session that carries nothing pays one Map lookup that misses.
+//
+// The receipt still lands in the right place: fireHooks emits `hook.fired` into the session that
+// actually received the pointer, so an unattended trigger is never silent, and it is never noisy
+// for anyone it did not reach.
+const AMBIENT_LIMIT = 500;
+const ambient = [];
+const ambientSubs = new Set();
+
+function emitAmbient(event = {}) {
+  const e = { ...event, ts: Date.now(), ambient: true };
+  ambient.push(e);
+  if (ambient.length > AMBIENT_LIMIT) ambient.splice(0, ambient.length - AMBIENT_LIMIT);
+  for (const sub of ambientSubs) { try { sub(e); } catch {} }
+  // A COPY PER SESSION. fireHooks hands the event to hooks.fire, which reads it and does not write
+  // — but emit() downstream stamps fields onto whatever it is given, and one shared object stamped
+  // by several sessions is the bug that would be invisible until two agents disagreed about which
+  // session an event came from.
+  for (const s of sessions.values()) { try { fireHooks(s, { ...e }); } catch {} }
+  return e;
+}
+
+const ambientHistory = (limit = 100) => ambient.slice(-Math.max(1, Math.min(limit, AMBIENT_LIMIT)));
+function subscribeAmbient(fn) {
+  ambientSubs.add(fn);
+  return () => ambientSubs.delete(fn);
+}
+
 // Rule 2: the summary is produced ONCE, here, from the tool schemas the host holds.
 // The label half of the label/record split, bounded once at the exit so every
 // branch — including ones added later — inherits the bound. path.basename()
@@ -455,27 +494,10 @@ function brief(content, max = 400) {
 //   grep -o 'kind: "[a-z.]*"' electron/agents/sessions.cjs | sort -u
 // — and every name it prints should appear below. A kind that is emitted but missing here is a
 // moment you cannot hook; a name here that is never emitted is a hook that can never fire.
-const EVENTS = [
-  { name: "session.started", what: "a session opened — `origin` is cold | reinit | resumed", fields: ["origin", "model"] },
-  { name: "session.reinit", what: "the session was re-initialized on current docs", fields: ["resumedFrom", "agentId"] },
-  { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"] },
-  { name: "user.prompt", what: "a turn arrived from the human (or a visiting agent)", fields: ["text"] },
-  { name: "assistant.text", what: "the agent spoke", fields: ["text", "done"] },
-  { name: "assistant.thinking", what: "the agent thought out loud", fields: ["text", "done"] },
-  { name: "tool.call", what: "the agent called a tool", fields: ["tool", "summary", "input.command", "input.file_path"] },
-  { name: "tool.result", what: "a tool answered", fields: ["tool", "ok", "output"] },
-  { name: "file.changed", what: "a file under the session's cwd changed", fields: ["path"] },
-  { name: "permission.request", what: "the agent asked before acting", fields: ["title", "detail"] },
-  { name: "usage", what: "token usage was reported — fires at the END of a turn, a safe place to hook", fields: ["pct", "contextTokens", "contextWindow", "inputTokens", "outputTokens"] },
-  { name: "compaction.after", what: "a compaction finished — the summary is in place and the reasoning behind it is gone", fields: ["trigger", "preTokens", "postTokens"] },
-  { name: "todo.updated", what: "the worklist changed", fields: [] },
-  { name: "message.landed", what: "a cross-session message arrived", fields: ["from", "text"] },
-  { name: "status", what: "the session narrated its own state", fields: ["status"] },
-  // NOT LISTED: `hook.fired`. It is emitted (the receipt every hook writes to the feed) but it is
-  // deliberately not hookable — a hook on it would deliver a pointer, which writes a receipt,
-  // which fires the hook, at input-queue speed. hooks.fire() refuses the kind; leaving it out of
-  // the picker means nobody is offered the loop in the first place.
-];
+// THE HOOKABLE VOCABULARY lives in hooks.cjs — a hook can only attach to a moment the system
+// actually announces, so the list and the matcher that reads it belong in one file. Re-exported
+// from here because the window's event picker reaches it through sessions.
+const EVENTS = hooks.EVENTS;
 
 const HARNESS_MCP = /^mcp__(context|discovery|systemlynx|systemview)__/;
 const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6000 : 400);
@@ -516,7 +538,9 @@ async function pump(s) {
             permissionMode: s.permissionMode,
             agentId: s.agentId,       // RFC-003: a run belongs to a definition, or to none
             agentName: s.agentName,
-            worklist: s.worklist,
+            // NO `worklist` KEY HERE ANY MORE. It moved to its own owner-keyed file (RFC-005 §3)
+            // and this was the only other writer — a second copy of one fact, which nothing read
+            // and which would have started disagreeing the first time a job wrote the real one.
             // persisted so the profile can show an agent's REAL lists when it is
             // not running — last session's truth beats the definition's guess
             capabilities: s.capabilities,
@@ -795,13 +819,27 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // Without this the worklist would be the one piece of session state that
   // silently didn't, and their rail would show nothing for a conversation that
   // still has a plan.
-  s.worklist = Array.isArray(loadStore()[key]?.worklist) ? loadStore()[key].worklist : [];
+  //
+  // RFC-005 §3 — THE LIST HAS AN OWNER NOW, and the owner's own file is the truth. It used to
+  // live under this session's key in the session store, which made it unreadable by anything
+  // that was not this session: fine for a conversation, wrong for a job, where reading the plan
+  // AFTER the run is the entire point. `session:<key>` today, `job:<id>` when a run belongs to
+  // one — same structure, longer life, rather than a parallel "job steps" model that would drift
+  // from the real one inside a month.
+  s.worklistOwner = `session:${key}`;
+  s.worklist = worklist.read(s.worklistOwner);
+  // CARRY-OVER, ONCE. Lists written before worklists were owned are in the session store, and a
+  // conversation mid-plan must not open blank on the day this shipped.
+  if (!s.worklist.length) {
+    const was = loadStore()[key]?.worklist;
+    if (Array.isArray(was) && was.length) s.worklist = worklist.write(s.worklistOwner, was);
+  }
   s.usedBy = Array.isArray(loadStore()[key]?.usedBy) ? loadStore()[key].usedBy : [];
   const worklistServer = worklist.serverFor((items) => {
     s.worklist = items;
     // persisted on every write, not at init — a plan written mid-session and
     // then interrupted is exactly the one worth keeping
-    saveStore((store) => { if (store[s.key]) store[s.key].worklist = items; });
+    worklist.write(s.worklistOwner, items);
     emit(s, { kind: "todo.updated", items });
   }, () => s.worklist);
 
@@ -1267,6 +1305,7 @@ module.exports = {
   // nothing left answering" shape that cost the blank-code-panel hour. Anyone
   // who needs the store takes it from here, so the rename is one edit forever.
   EVENTS,
+  emitAmbient, ambientHistory, subscribeAmbient,
   weights,
   loadSessionStore: loadStore,
   saveSessionStore: saveStore,

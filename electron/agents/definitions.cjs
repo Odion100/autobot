@@ -411,4 +411,7 @@ function rejectProposal(id) {
   try { fs.unlinkSync(proposalOf(id)); return true; } catch { return false; }
 }
 
-module.exports = { list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, help, saveHelp, proposals, applyProposal, rejectProposal };
+// `normalize` is exported so jobs.cjs can run a job's definition half through THIS whitelist
+// rather than keeping its own. RFC-003's rule is that AgentDefinition is adopted, not paralleled;
+// two whitelists is how it gets paralleled without anyone deciding to.
+module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, help, saveHelp, proposals, applyProposal, rejectProposal };

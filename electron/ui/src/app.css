@@ -119,6 +119,9 @@ body {
   cursor: pointer;
 }
 .top-strip button:hover:not(:disabled) { background: var(--sv-hover); }
+/* the theme toggle sits at the far right, after agents — a preference, but a daily one */
+.theme-btn { flex: none; font-size: 15px; color: var(--sv-text-muted); }
+.theme-btn:hover { color: var(--sv-text-strong); }
 .top-strip button:disabled { color: var(--sv-text-faint); }
 
 /* ---- THE STRIP, REDESIGNED ------------------------------------------------------

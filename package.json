@@ -25,9 +25,13 @@
     "dev:nowatch": "node electron/dev.js --no-watch",
     "smoke:worklist": "node tests/worklist.js",
     "smoke:origin": "node tests/same-origin.js",
+    "smoke:caps": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_CAPSMOKE=1 node electron/launch.js",
+    "smoke:contract": "node tests/app-contract.js",
     "smoke:context": "node tests/context.js",
     "smoke:ledger": "node tests/ledger.js",
-    "smoke:hooks": "node tests/hooks.js"
+    "smoke:hooks": "node tests/hooks.js",
+    "smoke:page-events": "node tests/page-events.js",
+    "smoke:jobs": "node tests/jobs.js"
   },
   "repository": {
     "type": "git",

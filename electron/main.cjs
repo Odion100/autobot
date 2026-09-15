@@ -15,6 +15,12 @@ const { ensureApp, isUp } = require("./apps/launcher.cjs");
 const termHost = require("./terminal/host.cjs");
 const agentHost = require("./agents/host.cjs");
 const supervisor = require("./agents/supervisor.cjs");
+// RFC-005 §7.1 — page events. The shell is the only thing that can honestly emit them: it is the
+// one looking at the page. `sessions` is already loaded through agents/host.cjs; taking it by name
+// here is the same module instance, not a second one.
+const pageEvents = require("./apps/pageEvents.cjs");
+const jobs = require("./agents/jobs.cjs");
+const sessions = require("./agents/sessions.cjs");
 
 const CDP_PORT = process.env.AUTOBOT_CDP_PORT || "9223";
 app.commandLine.appendSwitch("remote-debugging-port", CDP_PORT);
@@ -75,7 +81,10 @@ function state() {
     // appear without a restart, or "+ add app" writes a file and looks like it did nothing.
     apps: registry.current().map((a) => {
       const t = tabs.find((x) => x.appId === a.id);
-      return { id: a.id, title: a.title, tabId: t?.id ?? null, favicon: t?.favicon ?? null };
+      // `icon` is the app's OWN face, declared in its manifest and served from its own address;
+      // `favicon` is whatever its page happens to be showing right now and only exists once a tab
+      // is open. The declared icon wins, so an app in the dock looks like itself before you open it.
+      return { id: a.id, title: a.title, tabId: t?.id ?? null, favicon: t?.favicon ?? null, icon: a.icon ?? null };
     }),
   };
 }
@@ -118,6 +127,55 @@ function wireContextMenu(wc) {
     if (p.editFlags.canCopy) items.push({ role: "copy" });
     if (p.editFlags.canPaste) items.push({ role: "paste" });
     if (items.length && items[items.length - 1].type !== "separator") items.push({ type: "separator" });
+    // ----- RFC-005 §7.1 — WATCH THIS VALUE ---------------------------------------------------
+    // His ask, verbatim: *right click on the web page and be able to say listen to this event,
+    // listen for this change.* Point at a node, we record a stable locator and what it says right
+    // now, and from then on the shell announces when it stops saying that.
+    //
+    // THE MENU IS ALSO THE SURFACE, for now. A watch you cannot see is a watch you cannot stop, so
+    // the existing ones for this origin are listed right here with a way off. That is deliberately
+    // the smallest honest thing: a real panel can come later, but shipping the create without the
+    // list would leave invisible watchers running on his machine.
+    const watching = pageEvents.forUrl(wc.getURL());
+    items.push({ type: "separator" });
+    items.push({
+      label: "Watch this value",
+      click: async () => {
+        let loc = null;
+        try { loc = await wc.executeJavaScript(pageEvents.locatorScript(p.x, p.y), true); } catch {}
+        if (!loc || !loc.selector) return;
+        pageEvents.save({ label: loc.label, url: loc.url, selector: loc.selector, lastValue: loc.text });
+      },
+    });
+    if (watching.length) {
+      items.push({
+        label: `Watching on this site (${watching.length})`,
+        submenu: watching.map((w) => ({
+          label: `${w.label}${w.lastValue != null ? ` — ${String(w.lastValue).slice(0, 24)}` : ""}`,
+          submenu: [
+            { label: "Stop watching", click: () => pageEvents.remove(w.id) },
+            // POINT IT AT A JOB. This is the other half of §7.1, and it needs no new wiring: a job
+            // already carries its own trigger, and `page.value-changed` is in the vocabulary, so
+            // aiming one at a watch is one field on the job — not a hook, not a rule, not a rung.
+            ...(jobs.list().length
+              ? [{ type: "separator" }, ...jobs.list().map((j) => ({
+                  label: `Run job: ${j.name}`,
+                  type: "checkbox",
+                  checked: !!(j.trigger && j.trigger.on === "page.value-changed" &&
+                              j.trigger.when && j.trigger.when.watch &&
+                              j.trigger.when.watch.equals === w.id),
+                  click: () => {
+                    try {
+                      jobs.save({ ...j, doc: j.doc, trigger: { on: "page.value-changed", when: { watch: { equals: w.id } } } });
+                    } catch {}
+                  },
+                }))]
+              : []),
+          ],
+        })),
+      });
+    }
+    items.push({ type: "separator" });
     items.push(
       { label: "Back", enabled: history(wc).canGoBack(), click: () => history(wc).goBack() },
       { label: "Forward", enabled: history(wc).canGoForward(), click: () => history(wc).goForward() },
@@ -159,9 +217,23 @@ function addTab({ url, kind = "web", title = "", appId = null, activate = true }
   const wc = view.webContents;
   for (const ev of ["page-title-updated", "did-navigate", "did-navigate-in-page", "did-start-loading", "did-stop-loading"])
     wc.on(ev, broadcast);
+  // NAVIGATION IS AMBIENT (RFC-005 §7.1). It belongs to no session, so it fans out to hooks and
+  // not to feeds — every agent that carries a hook for it gets the chance to match, and nobody's
+  // chat fills up with someone else's browsing.
+  wc.on("did-navigate", (_e, url) => {
+    try {
+      sessions.emitAmbient({ kind: "page.navigated", url, title: wc.getTitle(), from: tab.lastUrl || "", tabId: tab.id });
+      tab.lastUrl = url;
+    } catch {}
+  });
   wc.on("page-favicon-updated", (_e, favicons) => { tab.favicon = favicons[0] ?? null; broadcast(); });
   // target=_blank and friends become tabs, never new windows
   wc.setWindowOpenHandler(({ url: u }) => { addTab({ url: u }); return { action: "deny" }; });
+  // ...and tell a freshly-loaded app which theme it is in. The preload also asks synchronously, so
+  // this is the belt to that's braces — a reload mid-toggle would otherwise land in the old theme.
+  if (kind === "app") wc.on("did-finish-load", () => {
+    try { wc.send("autobot:theme", { dark: themeDark }); } catch {}
+  });
   wireContextMenu(wc);
   wc.loadURL(url);
   if (activate) setActive(tab.id);
@@ -194,7 +266,93 @@ async function openApp(appId, { activate = true } = {}) {
   addTab({ url: a.url, kind: "app", title: a.title, appId: a.id, activate });
 }
 
+// THE GRANT RESOLVER — RFC-004 §1.1, and the answer to "how does a preload know which app it is".
+//
+// It cannot know on its own: addTab() hands every kind:"app" view the SAME svPreload.cjs path with
+// no arguments. But main already knows — the tab record carries `appId` — so the preload asks and
+// this answers. `on` + returnValue rather than `handle`, because the preload needs it synchronously:
+// contextBridge.exposeInMainWorld has to run during preload execution.
+//
+// THE ORIGIN CHECK IS THE POINT, not a detail. A preload stays attached to its WebContentsView
+// across navigation, and nothing in this file guards navigation — setWindowOpenHandler only
+// redirects popups into tabs. So a registered app that navigates, follows a redirect, or has an
+// open redirect would carry its grants to whatever it landed on: files:write, on someone else's
+// page, with our bridge attached. Binding the answer to the URL WE ARE BEING ASKED FROM closes
+// that: the grant follows the origin, not the view. This handler re-runs on every navigation
+// because the preload does.
+// THEME IS NOT A CAPABILITY, IT IS THE ENVIRONMENT (his report, 2026-09-14: "why isn't this one
+// or both apps responding to light and dark mode coming from the browser").
+//
+// The toggle in the strip themed the CHROME and nothing else, because an app tab is a separate
+// origin that nobody was telling anything. A browser that hosts applications owns the light/dark
+// decision the way it owns the mic and the filesystem — but unlike those, theme is not an ACTION,
+// so it is not gated. An app can do nothing with it except look right, and an app that must ask
+// permission to match its own window is an app that will look foreign by default.
+let themeDark = true;
+function broadcastTheme() {
+  for (const t of tabs) {
+    if (t.kind !== "app" || !t.view || t.view.webContents.isDestroyed()) continue;
+    try { t.view.webContents.send("autobot:theme", { dark: themeDark }); } catch {}
+  }
+}
+
+ipcMain.on("app:grants", (e) => {
+  // ONE ASSIGNMENT TO returnValue, AT THE END, AND THAT IS NOT STYLE. Electron sends the sync
+  // reply on the FIRST assignment — a `deny` default written at the top and refined later never
+  // reaches the preload, which receives the denial and exposes nothing. Found by building it that
+  // way: the resolver computed the right answer, logged it, and every app still came back empty.
+  let answer = { appId: null, origin: null, capabilities: [] };
+  try {
+    const tab = tabs.find((t) => t.view && !t.view.webContents.isDestroyed() && t.view.webContents === e.sender);
+    if (tab && tab.kind === "app" && tab.appId) {
+      const app = registry.current().find((a) => a.id === tab.appId);
+      if (app && app.url) {
+        // getURL() is the page this preload is being created for — the POST-navigation URL, not
+        // the one the tab was opened with. Verified: it is already correct at preload time.
+        const asking = new URL(e.sender.getURL() || "about:blank");
+        const declared = new URL(app.url);
+        if (asking.origin === declared.origin) {
+          // ABSENT = NONE (RFC-004 §2.1). A manifest entry with no `capabilities` key gets
+          // nothing, not everything. The opposite default would preserve the total-grant hole
+          // forever and nobody would notice, because everything would keep working.
+          answer = {
+            appId: app.id,
+            origin: declared.origin,
+            capabilities: Array.isArray(app.capabilities) ? app.capabilities : [],
+          };
+        }
+      }
+    }
+  } catch {
+    // An unparseable URL is not a reason to hand out the harness. `answer` stays the denial.
+  }
+  e.returnValue = answer;
+});
+
+// THE CROSS-APP COMPONENT CATALOGUE (RFC-004 §3.3). A host asks what it may mount on the surface
+// it is drawing; the registry answers with only what apps have declared for that surface. The
+// answer carries resolved own-origin URLs, so a host never builds one itself from parts.
+ipcMain.handle("apps:components", (e, surface) => {
+  // WHICH APP IS ASKING decides more than what it may see — it decides what may be an ELEMENT.
+  // Same resolution as the grant handler, and the host cannot state its own identity: a page that
+  // could name itself could name someone else and mount an element in their name.
+  try {
+    const tab = tabs.find((t) => t.view && !t.view.webContents.isDestroyed() && t.view.webContents === e.sender);
+    const hostAppId = tab && tab.kind === "app" ? tab.appId : null;
+    return registry.componentsFor(String(surface || "app"), hostAppId);
+  } catch { return []; }
+});
+
+// A preload asks for the CURRENT theme as it loads, because a tab opened later must not sit in the
+// wrong one until the next toggle.
+ipcMain.on("app:theme", (e) => { e.returnValue = { dark: themeDark }; });
+
 ipcMain.handle("tabs", (_e, action, payload = {}) => {
+  if (action === "theme") {
+    themeDark = payload.dark !== false;
+    broadcastTheme();
+    return { dark: themeDark };
+  }
   const tab = tabs.find((t) => t.id === (payload.id ?? activeId));
   switch (action) {
     case "state": return state();
@@ -371,6 +529,11 @@ app.whenReady().then(async () => {
   require("./apps/dictation.cjs").register();
   require("./apps/vectors-host.cjs").register(); // RFC-055 — local semantic retrieval, a harness capability
   require("./apps/context-host.cjs").register(); // RFC-055 — the context management surface (his curate verbs)
+  // RFC-005 §7.1 — the watch loop. Only tabs that have a watch are read, and only a value that
+  // actually MOVED is announced. It takes `tabs` as a getter rather than the array, so the module
+  // never holds a reference to shell state it does not own.
+  pageEvents.watchTabs(() => tabs, sessions.emitAmbient);
+  require("./apps/jobs-host.cjs").register(); // RFC-005 §10 — the job API an app reads jobs through
   supervisor.boot(); // hosted agent sessions from ~/.autobot/hosted.json (none by default)
 
   // Every start lands on the landing page — his call ("for now, I need to be in
@@ -438,6 +601,74 @@ app.whenReady().then(async () => {
       }
     };
     setTimeout(check, 8000);
+  }
+
+  // THE CAPABILITY GATE, AS ASSERTIONS (RFC-004 §4's checks 1 and 2). The gate's two hard parts
+  // are things you cannot verify by reading: whether sendSync resolves through event.sender for a
+  // WebContentsView at preload time, and whether the grant actually dies when the view navigates
+  // off-origin. Both are proved here against a real shell.
+  //
+  // The origin case uses 127.0.0.1 against localhost DELIBERATELY: same server, same content,
+  // different origin. If the check ever degrades to a host/port/substring comparison, this is the
+  // case that catches it — and it needs nothing running that the app does not already need.
+  if (process.env.AUTOBOT_CAPSMOKE === "1") {
+    const run = async () => {
+      const results = {};
+      const before = (() => { try { return fs.readFileSync(registry.USER_APPS, "utf8"); } catch { return null; } })();
+      try {
+        const sv = tabs.find((x) => x.appId === "systemview");
+        if (!sv) { console.log("CAPSMOKE: no systemview tab (hub down?)"); app.exit(2); return; }
+        await new Promise((r) => setTimeout(r, 3000));
+
+        const keys = (t) => t.view.webContents.executeJavaScript(
+          `(() => { const b = window.systemview; return { present: !!b, ns: b ? Object.keys(b).sort() : [],
+             files: b && b.files ? Object.keys(b.files).sort() : null }; })()`);
+
+        // SystemView declares every capability it uses, so the full surface must survive the gate.
+        results.systemview = await keys(sv);
+
+        // A NARROW APP. Same origin as SystemView so nothing extra has to be served; a different
+        // appId, so it gets its own grant.
+        registry.addApp({ title: "Capsmoke", url: "http://localhost:3000", capabilities: ["files:read"] });
+        const narrow = addTab({ url: "http://localhost:3000", kind: "app", appId: "capsmoke", activate: false });
+        await new Promise((r) => setTimeout(r, 3000));
+        results.narrow = await keys(narrow);
+
+        // OFF-ORIGIN: the same page, reached by an origin the app did not declare.
+        await narrow.view.webContents.loadURL("http://127.0.0.1:3000");
+        await new Promise((r) => setTimeout(r, 2500));
+        results.offOrigin = await keys(narrow);
+
+        // `theme` IS NOT A GRANT, so it is excluded from every count below. It is the environment
+        // an app is displayed in, not an action it may take — an app that had to ask permission to
+        // match its own window would look foreign by default. The earlier version of this check
+        // asserted `offOrigin.ns.length === 0` and went red the moment theme shipped; "everything
+        // is gone off-origin" was the wrong claim, and someone would have built on it.
+        const grants = (ns) => (ns || []).filter((n) => n !== "theme");
+
+        const ok =
+          results.systemview.present && grants(results.systemview.ns).includes("agent") &&
+          results.narrow.present &&
+          results.narrow.files && results.narrow.files.includes("readFile") &&
+          !results.narrow.files.includes("writeFile") &&
+          grants(results.narrow.ns).join() === "files" &&
+          // THE RULE: off-origin drops every GRANT. Theme survives, and must — a component that
+          // travels needs one handed to it or it looks foreign (RFC-004 §3.3's named cost).
+          grants(results.offOrigin.ns).length === 0 &&
+          results.offOrigin.ns.includes("theme");
+
+        console.log("CAPSMOKE:", JSON.stringify(results, null, 2));
+        console.log("CAPSMOKE:", ok ? "PASS" : "FAIL");
+        app.exit(ok ? 0 : 1);
+      } catch (e) {
+        console.log("CAPSMOKE error:", e.message);
+        app.exit(1);
+      } finally {
+        // Never leave a test entry in his apps.json.
+        try { if (before === null) fs.unlinkSync(registry.USER_APPS); else fs.writeFileSync(registry.USER_APPS, before); } catch {}
+      }
+    };
+    setTimeout(run, 6000);
   }
 });
 

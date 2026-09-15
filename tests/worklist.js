@@ -33,6 +33,30 @@ const sessions = require("../electron/agents/sessions.cjs");
 let pass = 0;
 const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
 
+// ---- 6. OWNERSHIP (RFC-005 §3, pure) -------------------------------------------
+// One concept, two lifetimes: the same structure, keyed by who it belongs to. The claim that
+// matters for jobs is separation — a job's list and a session's list must not be the same file,
+// because `job:x` and `session:x` are different things that happen to share a name.
+{
+  worklist.write("job:t-probe", [{ id: "1", text: "job step", state: "active" }]);
+  worklist.write("session:t-probe", [{ id: "1", text: "session step", state: "pending" }]);
+  assert.equal(worklist.read("job:t-probe")[0].text, "job step");
+  assert.equal(worklist.read("session:t-probe")[0].text, "session step");
+  ok("job:x and session:x are different worklists, not one file two names");
+
+  assert.deepEqual(worklist.read("job:never-written"), [], "an unknown owner is empty, not a throw");
+  ok("reading a worklist nobody wrote is empty, not an error");
+
+  const rows = worklist.all();
+  const row = rows.find((r) => r.owner === "job:t-probe");
+  assert.ok(row && row.active === "job step" && row.updatedAt > 0, "all() reports progress and freshness");
+  ok("all() answers what moved, and when — the only account a 3am run leaves behind");
+
+  for (const o of ["job:t-probe", "session:t-probe"]) {
+    try { fs.unlinkSync(path.join(worklist.DIR, `${o.replace(/[^a-zA-Z0-9]+/g, "-")}.json`)); } catch {}
+  }
+}
+
 // ---- 4. one active, enforced at the tool (pure, no session needed) -------------
 {
   const out = worklist.normalize([
@@ -105,11 +129,24 @@ ok("a late subscriber renders the current list from history, from ONE event");
 // outlives the turn that wrote it". That is only true if it also outlives a
 // RESTART — sessions here outlive views and restarts by design, and the worklist
 // must not be the one piece of session state that quietly doesn't.
+// RFC-005 §3 moved this OUT of the session store and into an owner-keyed file, so the assertion
+// moved with it — and the reason is the point of the change: the store copy was readable only by
+// the session that wrote it, and a job's list has to be readable by whatever reads it afterwards.
 {
+  const owner = `session:${s.key}`;
+  const items = worklist.read(owner);
+  assert.ok(items.length, "the list is persisted under its own owner");
+  assert.deepEqual(items, ev.items, "what is persisted IS the current list");
+  ok("the worklist is written to its owner's file, not only held in memory");
+
+  const seen = worklist.all().find((w) => w.owner === owner);
+  assert.ok(seen, "and something that is not this session can find it");
+  assert.equal(seen.total, ev.items.length, "with its counts readable from outside");
+  ok("a worklist is readable AFTER the fact, by an owner it does not belong to");
+
   const store = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".autobot", "sessions.json"), "utf8"));
-  assert.ok(Array.isArray(store[s.key]?.worklist), "the list is persisted in the run store");
-  assert.deepEqual(store[s.key].worklist, ev.items, "what is persisted IS the current list");
-  ok("the worklist is written to the run store, not only held in memory");
+  assert.ok(!(store[s.key] || {}).worklist, "and the old second copy in the run store is gone");
+  ok("one copy of one fact — the run store no longer holds a worklist that can disagree");
 }
 
 // simulate the restart: drop the in-memory session, reopen the same key, and

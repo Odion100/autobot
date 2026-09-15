@@ -68,6 +68,10 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("sv-dark", dark);
     localStorage.setItem("theme", dark ? "dark" : "light");
+    // THE APPS LIVE IN THIS WINDOW TOO. Each one is a separate origin in its own tab, so nothing
+    // reaches them unless the browser says so — main broadcasts to every app view, and a tab that
+    // loads later asks for the current value itself.
+    window.autobot.tabs("theme", { dark });
   }, [dark]);
 
   // the strip light: how many agents are alive, whether or not the panel is open
@@ -138,7 +142,9 @@ export default function App() {
             className={`card app ${a.tabId != null && a.tabId === state.activeId ? "active" : ""} ${a.tabId == null ? "closed" : ""}`}
             onClick={() => pick(() => window.autobot.tabs("openApp", { appId: a.id }))}
           >
-            {a.favicon ? <img className="card-logo" src={a.favicon} /> : <span className="app-dot" />}
+            {a.icon || a.favicon
+              ? <img className="card-logo" src={a.icon || a.favicon} />
+              : <span className="app-dot" />}
             <span className="card-title">{a.title}</span>
             {a.tabId == null && <span className="card-hint">open</span>}
             {a.tabId != null && (
@@ -219,6 +225,17 @@ export default function App() {
           title={agentCount ? `${agentCount} agents running` : "agents"}
           onClick={() => window.autobot.tabs("agents", { open: !state.agentsOpen })}
         ><AgentsIcon />{agentCount ? <span className="agents-count">{agentCount}</span> : null}</button>
+
+        {/* THEME, BACK IN THE CORNER (his call, 2026-09-14). The redesign cut it as "a preference,
+            not chrome" and that was wrong twice over: the state stayed (`dark`/`setDark` above),
+            so the only way to change theme became editing localStorage by hand, and a browser you
+            live in at night is not a browser where light/dark is a settings-screen decision. It
+            costs 28px at the far right, past the tabs, which is the one place nothing competes. */}
+        <button
+          className="theme-btn"
+          title={dark ? "light mode" : "dark mode"}
+          onClick={() => setDark((d) => !d)}
+        >{dark ? "☀" : "☾"}</button>
       </div>
 
       {state.agentsOpen && <AgentsPanel width={state.agentsWidth || 380} />}

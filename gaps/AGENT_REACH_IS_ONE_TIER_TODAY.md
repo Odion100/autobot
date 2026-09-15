@@ -54,3 +54,13 @@ skipped rather than declined.
 
 Related: `tests/same-origin.js` (the reach guard and its pinned policies),
 `electron/agents/services.cjs`, SystemView RFC-055.
+
+## The argument that gets worse rather than staying constant (added 2026-09-14)
+
+Every reason recorded above holds steady as the system grows: a wider blast radius, an audit trail
+nobody would accept. This one compounds — **a job calling a whitelisted service at 3am is the same
+authority with nobody watching.**
+
+Unattended work (RFC-005) turns "reach and authority are the same bit" from a policy you accept into
+one nobody is present to catch. So the upgrade is no longer gated on a non-localhost service
+arriving; it is gated on the first job that can call one.

@@ -17,6 +17,8 @@ const defs = require("../electron/agents/definitions.cjs");
 const hooks = require("../electron/agents/hooks.cjs");
 
 const ID = "smoke-hooks-agent";
+const HOOK = "smoke-hooks-authored";
+const HOOK2 = "smoke-hooks-renamed";
 let failed = 0;
 const ok = (what, cond) => { console.log(`${cond ? "  ✓" : "  ✗"} ${what}`); if (!cond) failed++; };
 const eq = (what, a, b) => ok(`${what} — got ${JSON.stringify(a)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -63,8 +65,44 @@ try {
   const agent = defs.get(ID);
   const carries = Array.isArray(agent.def && agent.def.hooks) ? agent.def.hooks : [];
   eq("carriesHooks at open", carries, ["context-retrieval"]);
+  // -------------------------------------------------------------------------------------------
+  // AUTHORING (RFC-005 §7). Hooks became writable by an agent, which makes two things testable
+  // that did not exist before: that the event vocabulary is checked at the WRITING door, and that
+  // a hook records who wrote it. The second is the one with teeth — without an author there is no
+  // way to stop one writer overwriting another's hook, and no way to tell them apart afterwards.
+  console.log("\nthe hookable vocabulary is checked where hooks are WRITTEN, not where they fire");
+  ok("a real event passes", hooks.isEvent("compaction.after"));
+  ok("a typo does not", !hooks.isEvent("compaction.finished"));
+  ok("hook.fired is not offered — it is the injection loop", !hooks.isEvent("hook.fired"));
+
+  console.log("\nauthor survives the round trip to disk");
+  hooks.save({ name: HOOK, on: "usage", do: "skill:context-maintenance", when: { pct: { gte: 70 } },
+               kind: "context", guard: "once-per-session", author: "agent:smoke", note: "throwaway" });
+  const mine = hooks.list().find((h) => h.name === HOOK);
+  eq("author read back", mine && mine.author, "agent:smoke");
+  eq("kind is written explicitly, never left to a default", mine && mine.kind, "context");
+  eq("when survives as an object", mine && mine.when, { pct: { gte: 70 } });
+
+  console.log("\nwho may overwrite whom");
+  ok("a new name is nobody's yet", hooks.mayWrite(null, "agent:smoke"));
+  ok("mine, by me", hooks.mayWrite(mine, "agent:smoke"));
+  ok("mine, NOT by another agent", !hooks.mayWrite(mine, "agent:other"));
+  ok("the operator owns everything", hooks.mayWrite(mine, "user"));
+  ok("hand-written (unattributed) reads as the operator's", !hooks.mayWrite({ author: "" }, "agent:smoke"));
+
+  console.log("\na rename is a move, not a copy — two files is a hook that fires twice");
+  hooks.save({ name: HOOK2, wasName: HOOK, on: "usage", do: "skill:context-maintenance", author: "agent:smoke" });
+  const after = hooks.list().map((h) => h.name);
+  ok("new name exists", after.includes(HOOK2));
+  ok("old name is gone", !after.includes(HOOK));
+
+  console.log("\nan authored hook is INERT — the write is the proposal, the carry is the approval");
+  const ev = { kind: "usage", pct: 90 };
+  ok("nobody carries it → silent", hooks.fire(ev, { carries: [], fired: new Map() }).length === 0);
+  ok("carried → fires", hooks.fire(ev, { carries: [HOOK2], fired: new Map() }).some((h) => h.name === HOOK2));
 } finally {
   try { fs.unlinkSync(path.join(defs.DIR, `${ID}.json`)); } catch {}
+  for (const n of [HOOK, HOOK2]) { try { hooks.remove(n); } catch {} }
 }
 
 console.log(failed ? `\n✗ ${failed} failed\n` : "\n✓ hooks smoke passed\n");

@@ -143,8 +143,14 @@ function register(surfaceOf) {
   // skills. `events` is the PICKER's source: the vocabulary the sessions substrate actually emits,
   // so a hook can only ever be attached to a moment that really happens.
   ipcMain.handle("agent:hooks", () => ({ hooks: hooks.list(), events: sessions.EVENTS }));
+  // A SAVE FROM THE WINDOW IS THE OPERATOR'S ACT, so it is stamped "user" and the record's own
+  // author field is ignored — the same rule the MCP tools follow from the other side: who wrote
+  // this is never taken from what the caller sent. It also means that when the operator edits a
+  // hook an agent proposed, they take it over: the agent can no longer overwrite it, which is the
+  // right way round.
   ipcMain.handle("agent:hook-save", (_e, rec) => {
-    try { return { hook: hooks.save(rec) }; } catch (err) { return { error: String(err?.message || err) }; }
+    try { return { hook: hooks.save({ ...(rec || {}), author: "user" }) }; }
+    catch (err) { return { error: String(err?.message || err) }; }
   });
   ipcMain.handle("agent:hook-remove", (_e, name) => hooks.remove(name));
 

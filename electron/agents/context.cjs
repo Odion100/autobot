@@ -31,6 +31,7 @@ const path = require("path");
 const os = require("os");
 const vectors = require("../apps/vectors.cjs");
 const docs = require("./docs.cjs");
+const hooks = require("./hooks.cjs");
 const { createSdkMcpServer, tool } = require("@anthropic-ai/claude-agent-sdk");
 const { z } = require("zod");
 
@@ -46,7 +47,7 @@ const SERVER = "context";
 // separation at all. So `context` answers with both halves, labelled, and takes `kind` to narrow.
 // What remains here is MANAGEMENT — listing, planning cuts, indexing, dropping — which is not
 // retrieval and has no context-store equivalent to merge with.
-const TOOL_NAMES = ["remember", "context", "list", "forget", "docsList", "docsPlan", "docsIndex", "docsDrop"]
+const TOOL_NAMES = ["remember", "context", "list", "forget", "docsList", "docsPlan", "docsIndex", "docsDrop", "hooksList", "hooksWrite", "hooksDrop"]
   .map((t) => `mcp__${SERVER}__${t}`);
 const ROOT = path.join(os.homedir(), ".autobot", "context");
 
@@ -666,6 +667,165 @@ function serverFor(identity = {}) {
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }
+        },
+        { alwaysLoad: true }
+      ),
+      // -----------------------------------------------------------------------------------------
+      // HOOKS — RFC-005 §7. The third way context reaches an agent, and until now the only one
+      // with no door: presence and the system context are LOADED, the store and the corpora are
+      // RETRIEVED, and a hook is PUSHED — but every hook in the system was hand-written into
+      // ~/.autobot/hooks, which meant the trigger half of every job was hand-written too.
+      //
+      // WHY IT LIVES ON THIS SERVER. Same argument that moved the docs tools here: an agent
+      // reaches for "context", and a server nobody opens is worse than no separation. Hooks are a
+      // context layer — the one that fires on a moment instead of on a question — so authoring one
+      // belongs beside remembering a note and indexing a corpus, not on a fourth door.
+      //
+      // WRITING A HOOK DOES NOT ARM IT, and that is the whole approval model rather than a
+      // disclaimer. A hook fires only for an agent that CARRIES it (hooks.inScope — the list lives
+      // on the agent definition, ticked in the profile). So an agent-authored hook lands on disk
+      // inert, visible in the window, and stays inert until a human puts it on somebody. The
+      // proposal is the write; the approval is the carry. Nothing had to be invented for that —
+      // it falls out of where the carry list already lives.
+      tool(
+        "hooksList",
+        "The moments this system announces, and what is already hooked to them. Read this BEFORE " +
+          "writing a hook — a hook can only attach to an event that really fires, and the event " +
+          "vocabulary is fixed. Also shows who authored each existing hook.",
+        {},
+        async () => {
+          const evs = hooks.EVENTS.map(
+            (e) => `  ${e.name}${e.fields.length ? ` (${e.fields.join(", ")})` : ""} — ${e.what}`
+          );
+          const hs = hooks.list().map(
+            (h) =>
+              `  ${h.name} · on ${h.on} · ${h.kind} · ${h.do || "(no pointer)"}` +
+              `${h.guard ? ` · ${h.guard}` : ""}${h.enabled ? "" : " · DISABLED"}` +
+              ` · by ${h.author || "hand-written (unattributed)"}` +
+              `${Object.keys(h.when || {}).length ? `\n      when ${JSON.stringify(h.when)}` : ""}`
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `EVENTS you may hook (${hooks.EVENTS.length}):\n${evs.join("\n")}\n\n` +
+                  (hs.length ? `HOOKS that exist (${hs.length}):\n${hs.join("\n")}` : "No hooks exist yet.") +
+                  `\n\nA hook only fires for an agent that CARRIES it — that tick lives on the agent's ` +
+                  `profile and is the human's. Writing one does not arm it.`,
+              },
+            ],
+          };
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "hooksWrite",
+        "Propose a context hook: when THIS moment happens, point an agent at THIS skill. Use it " +
+          "when you find a procedure that is needed rarely and urgently, and that the agent will " +
+          "not think to ask for because the moment arrives from outside. A hook holds no content " +
+          "— it carries a POINTER to a skill, so it can never drift from the procedure. Call " +
+          "hooksList first: the event must be one the system really emits. Writing a hook does " +
+          "NOT arm it — it stays inert until a human carries it on an agent.",
+        {
+          name: z.string().describe("short kebab-case name; it is the filename and the identity"),
+          on: z.string().describe("the event it fires on — must be one from hooksList"),
+          do: z
+            .string()
+            .describe('the pointer, "skill:<name>". A hook names a procedure; it never contains one'),
+          when: z
+            .record(z.any())
+            .optional()
+            .describe(
+              'declarative match on the event payload, e.g. {"pct": {"gte": 70}} or ' +
+                '{"input.command": {"contains": "git push"}}. Omit for "always, on this event". ' +
+                "Operators: equals not contains startsWith endsWith matches in gt gte lt lte exists"
+            ),
+          kind: z
+            .enum(["context", "work"])
+            .optional()
+            .describe(
+              'context = a pointer arrives and the agent decides (default, and almost always right). ' +
+                'work = something RUNS unattended. Say "work" only when you mean it — it is a ' +
+                "different level of trust and a human should be told so in the note"
+            ),
+          guard: z
+            .string()
+            .optional()
+            .describe('"once-per-session" or "cooldown:<seconds>" — a hook with no guard on a ' +
+              "frequent event fires forever, which is a context leak"),
+          note: z.string().optional().describe("one or two lines for the agent: why this moment matters"),
+          scope: z.string().optional().describe("who it is SUGGESTED for — the profile pre-fills from it"),
+          wasName: z.string().optional().describe("the old name, when renaming a hook you authored"),
+        },
+        async (args) => {
+          try {
+            const me = scopes.by ? `agent:${scopes.by}` : "agent:(anonymous)";
+            if (!hooks.isEvent(args.on))
+              return {
+                content: [{ type: "text", text:
+                  `"${args.on}" is not an event this system emits, so a hook on it would never fire. ` +
+                  `Call hooksList for the vocabulary.` }],
+                isError: true,
+              };
+            const pointer = String(args.do || "").trim();
+            if (!/^skill:.+/.test(pointer))
+              return {
+                content: [{ type: "text", text:
+                  `\`do\` must be a pointer of the form "skill:<name>". A hook names a procedure and ` +
+                  `never carries one — that is what keeps it from drifting out of date.` }],
+                isError: true,
+              };
+            // AN AGENT MAY ONLY OVERWRITE ITS OWN. Attribution exists so this is checkable rather
+            // than trusted: an unattributed hook was hand-written before authors were recorded, and
+            // is read as the operator's — the conservative side of an ambiguity.
+            const existing = hooks.list().find((h) => h.name === args.name || h.name === args.wasName);
+            if (!hooks.mayWrite(existing, me))
+              return {
+                content: [{ type: "text", text:
+                  `"${existing.name}" was written by ${existing.author || "hand (unattributed)"}, not by you. ` +
+                  `Editing someone else's hook is not yours to do — say what you would change and let ` +
+                  `them or the human change it.` }],
+                isError: true,
+              };
+            const skill = pointer.slice(6).trim();
+            const saved = hooks.save({ ...args, author: me });
+            const warn = fs.existsSync(path.join(os.homedir(), ".claude", "skills", skill))
+              ? ""
+              : `\nNOTE: no skill named "${skill}" under ~/.claude/skills — fine if it is a plugin or ` +
+                `bundled skill, but check the name if it is meant to be one of yours.`;
+            return {
+              content: [{ type: "text", text:
+                `Wrote ${saved.file}\n` +
+                `  on ${saved.on}${Object.keys(saved.when).length ? ` when ${JSON.stringify(saved.when)}` : ""}` +
+                ` → ${saved.do} (${saved.kind}${saved.guard ? `, ${saved.guard}` : ""})\n` +
+                `It is INERT. It fires for nobody until a human ticks it onto an agent in that ` +
+                `agent's profile. Tell them it is there and what it is for.${warn}` }],
+            };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "hooksDrop",
+        "Delete a hook you authored. Yours only — a hook written by the operator or by another " +
+          "agent is theirs to remove.",
+        { name: z.string() },
+        async ({ name }) => {
+          const me = scopes.by ? `agent:${scopes.by}` : "agent:(anonymous)";
+          const h = hooks.list().find((x) => x.name === name);
+          if (!h) return { content: [{ type: "text", text: `No hook named "${name}".` }], isError: true };
+          if (h.author !== me)
+            return {
+              content: [{ type: "text", text:
+                `"${name}" was written by ${h.author || "hand (unattributed)"}, not by you. ` +
+                `Deleting it is not yours to do.` }],
+              isError: true,
+            };
+          hooks.remove(name);
+          return { content: [{ type: "text", text: `Removed ${name}.` }] };
         },
         { alwaysLoad: true }
       ),

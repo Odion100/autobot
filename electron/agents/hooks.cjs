@@ -25,6 +25,37 @@ const path = require("path");
 // "who does this apply to" is in the thing you are reading.
 const DIR = path.join(os.homedir(), ".autobot", "hooks");
 
+const EVENTS = [
+  { name: "session.started", what: "a session opened — `origin` is cold | reinit | resumed", fields: ["origin", "model"] },
+  { name: "session.reinit", what: "the session was re-initialized on current docs", fields: ["resumedFrom", "agentId"] },
+  { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"] },
+  { name: "user.prompt", what: "a turn arrived from the human (or a visiting agent)", fields: ["text"] },
+  { name: "assistant.text", what: "the agent spoke", fields: ["text", "done"] },
+  { name: "assistant.thinking", what: "the agent thought out loud", fields: ["text", "done"] },
+  { name: "tool.call", what: "the agent called a tool", fields: ["tool", "summary", "input.command", "input.file_path"] },
+  { name: "tool.result", what: "a tool answered", fields: ["tool", "ok", "output"] },
+  { name: "file.changed", what: "a file under the session's cwd changed", fields: ["path"] },
+  { name: "permission.request", what: "the agent asked before acting", fields: ["title", "detail"] },
+  { name: "usage", what: "token usage was reported — fires at the END of a turn, a safe place to hook", fields: ["pct", "contextTokens", "contextWindow", "inputTokens", "outputTokens"] },
+  { name: "compaction.after", what: "a compaction finished — the summary is in place and the reasoning behind it is gone", fields: ["trigger", "preTokens", "postTokens"] },
+  { name: "todo.updated", what: "the worklist changed", fields: [] },
+  { name: "message.landed", what: "a cross-session message arrived", fields: ["from", "text"] },
+  { name: "status", what: "the session narrated its own state", fields: ["status"] },
+  // PAGE EVENTS (RFC-005 §7.1) — the browser already SEES these, so making them triggers is
+  // emitting what we already observe rather than building a second mechanism. They are AMBIENT:
+  // they belong to no session, they fan out to hooks and not to feeds (sessions.emitAmbient).
+  //
+  // THE HOST EMITS, NEVER THE PAGE. A registered app has no door that reaches emit() — if it did,
+  // an app could forge the trigger for a hook it was never granted. So the shell observes the page
+  // and announces what it saw; the page is watched, not trusted.
+  { name: "page.navigated", what: "a tab went somewhere — fires on every tab, watched or not", fields: ["url", "title", "from", "tabId"] },
+  { name: "page.value-changed", what: "a value someone asked us to watch is no longer what it was", fields: ["watch", "label", "from", "to", "url", "selector"] },
+  // NOT LISTED: `hook.fired`. It is emitted (the receipt every hook writes to the feed) but it is
+  // deliberately not hookable — a hook on it would deliver a pointer, which writes a receipt,
+  // which fires the hook, at input-queue speed. hooks.fire() refuses the kind; leaving it out of
+  // the picker means nobody is offered the loop in the first place.
+];
+
 // ---------------------------------------------------------------------------------------------
 // Front matter. Deliberately a small parser and not a YAML dependency: the fields are a fixed,
 // documented set, and a value that looks like JSON is parsed as JSON so `when` can be an object
@@ -164,6 +195,12 @@ function list() {
       kind: String(meta.kind || "context").trim(),
       guard: String(meta.guard || "").trim(),
       enabled: meta.enabled === false ? false : true,
+      // WHO WROTE IT. Added when the authoring tool was built, and deliberately BEFORE it, because
+      // every hook already on disk when a writer starts is a hook nobody can attribute afterwards.
+      // "user" = the operator, through the window. "agent:<slot>" = an agent, through its tool.
+      // An empty author means hand-written before attribution existed, and is treated as the
+      // operator's: an agent may not overwrite one, which is the conservative reading.
+      author: String(meta.author || "").trim(),
       note: body.trim(),
     });
   }
@@ -334,6 +371,7 @@ function save(rec = {}) {
     `do: ${String(rec.do || "").trim()}`,
     `kind: ${String(rec.kind || "context").trim()}`,
   ];
+  if (rec.author) lines.push(`author: ${String(rec.author).trim()}`);
   if (rec.guard) lines.push(`guard: ${String(rec.guard).trim()}`);
   if (rec.enabled === false) lines.push("enabled: false");
   lines.push("---", "", String(rec.note || "").trim(), "");
@@ -347,12 +385,33 @@ function save(rec = {}) {
   return list().find((h) => h.name === name) || null;
 }
 
+// A hook can only attach to a moment the system really emits — checked at the WRITING door
+// rather than the firing one, because a hook on an event that never happens is silent, appears
+// correct in every list, and is the worst failure this mechanism has.
+// WHO MAY OVERWRITE WHAT. This lives here and not in the tool, because there is already more than
+// one writing door — the window and an agent's tool today, an app through the bridge later — and a
+// rule that lives in one door is a rule the other doors do not have. The operator owns everything,
+// because they are the operator. Everyone else may edit only what they wrote, which is the whole
+// reason `author` exists: it makes the check evidence rather than good manners. An unattributed
+// hook was hand-written before authors were recorded and reads as the operator's — the
+// conservative side of the ambiguity, and the side that cannot lose someone's work.
+function mayWrite(existing, author) {
+  if (!existing) return true;
+  if (author === "user") return true;
+  return !!author && existing.author === author;
+}
+
+const isEvent = (name) => EVENTS.some((e) => e.name === String(name || "").trim());
+
 function remove(name) {
   try { fs.unlinkSync(path.join(DIR, `${slug(name)}.md`)); return true; } catch { return false; }
 }
 
 module.exports = {
   DIR,
+  EVENTS,
+  isEvent,
+  mayWrite,
   list,
   fire,
   pointerText,

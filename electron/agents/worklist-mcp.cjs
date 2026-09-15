@@ -11,9 +11,6 @@
 // reimplementing the rules, so "exactly one active, first wins, whole list every
 // call" cannot drift between the two doors into the same idea. Two copies of a
 // rule is two rules eventually.
-const path = require("path");
-const fs = require("fs");
-const os = require("os");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
 const { z } = require("zod");
@@ -23,19 +20,16 @@ const { normalize } = require("./worklist.cjs");
 // keyed by WORKING DIRECTORY — the same placement key agent definitions adopt by.
 // One repo, one worklist: the plan belongs to the work, not to whichever window
 // happens to be open on it.
-const DIR = path.join(os.homedir(), ".autobot", "worklists");
+//
+// SAME STORE AS EVERY OTHER DOOR, since RFC-005 §3 gave worklists an owner: this one's owner is
+// the cwd key, a hosted session's is `session:<key>`, a job's will be `job:<id>`. It used to keep
+// its own read/write/fileFor — three functions that happened to agree with the harness's, which
+// is the state right before they stop agreeing. The filename is unchanged, so nothing on disk
+// moves.
+const { read: readOwner, write: writeOwner } = require("./worklist.cjs");
 const keyFor = (cwd) => String(cwd || process.cwd()).replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(-80);
-const fileFor = (cwd) => path.join(DIR, `${keyFor(cwd)}.json`);
-
-function read(cwd) {
-  try { return JSON.parse(fs.readFileSync(fileFor(cwd), "utf8")).items || []; } catch { return []; }
-}
-function write(cwd, items) {
-  try {
-    fs.mkdirSync(DIR, { recursive: true });
-    fs.writeFileSync(fileFor(cwd), JSON.stringify({ cwd, items, ts: Date.now() }, null, 2));
-  } catch {}
-}
+const read = (cwd) => readOwner(keyFor(cwd));
+const write = (cwd, items) => writeOwner(keyFor(cwd), items);
 
 const server = new McpServer({ name: "worklist", version: "1.0.0" });
 
