@@ -102,6 +102,17 @@ contextBridge.exposeInMainWorld("systemview", {
     contextStats: (agentId) => ipcRenderer.invoke("agent:context-stats", agentId),
     // RFC-057 — what has actually been CALLED: tools, MCP, skills, hooks. {days, agent, project}
     callStats: (opts) => ipcRenderer.invoke("agent:call-stats", opts || {}),
+    // RFC-058 §8 — the document corpora: what is embedded, how it was cut, and the buttons that
+    // change it. Same functions the agent tools call, so a dry run he reads is the one they get.
+    docsList: () => ipcRenderer.invoke("agent:docs-list"),
+    docsPlan: (name, opts) => ipcRenderer.invoke("agent:docs-plan", name, opts || {}),
+    docsSearch: (opts) => ipcRenderer.invoke("agent:docs-search", opts || {}),
+    // a real picker, and a preview of what the pattern matched before anything is saved
+    pickPath: (kind) => ipcRenderer.invoke("agent:pick-path", kind || "dir"),
+    docsPreview: (spec) => ipcRenderer.invoke("agent:docs-preview", spec || {}),
+    docsIndex: (name) => ipcRenderer.invoke("agent:docs-index", name),
+    docsDrop: (name) => ipcRenderer.invoke("agent:docs-drop", name),
+    saveCorpus: (rec) => ipcRenderer.invoke("agent:docs-save-corpus", rec),
     // an agent proposing its own doc — it never writes def.prompt, the approval does
     proposals: () => ipcRenderer.invoke("agent:proposals"),
     applyProposal: (id, text) => ipcRenderer.invoke("agent:proposal-apply", id, text),

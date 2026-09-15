@@ -456,7 +456,7 @@ function brief(content, max = 400) {
 // — and every name it prints should appear below. A kind that is emitted but missing here is a
 // moment you cannot hook; a name here that is never emitted is a hook that can never fire.
 const EVENTS = [
-  { name: "session.started", what: "a session opened (or re-opened) and the SDK reported in", fields: ["model"] },
+  { name: "session.started", what: "a session opened — `origin` is cold | reinit | resumed", fields: ["origin", "model"] },
   { name: "session.reinit", what: "the session was re-initialized on current docs", fields: ["resumedFrom", "agentId"] },
   { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"] },
   { name: "user.prompt", what: "a turn arrived from the human (or a visiting agent)", fields: ["text"] },
@@ -523,9 +523,14 @@ async function pump(s) {
             lastActive: Date.now(),
           };
         });
-        logLife(s, `started: model ${m.model} sdk ${m.session_id}${s.resumedFrom ? " resumed " + s.resumedFrom : ""}`);
+        // SAY WHICH KIND OF OPEN THIS WAS. Cold and re-init both land here as `started`, so a log
+        // reading "started … started … started" left us reconstructing what happened from firing
+        // patterns and memory — two kinds of guess, no evidence. `origin` is already on the event;
+        // it belongs in the line too.
+        logLife(s, `started: ${s.origin || "cold"} model ${m.model} sdk ${m.session_id}${s.resumedFrom ? " resumed " + s.resumedFrom : ""}`);
         emit(s, {
           kind: "session.started",
+          origin: s.origin || "cold", // "cold" | "reinit" | "resumed" — hookable, so a hook can mean any of them
           model: m.model,
           contextWindow: contextWindowOf(m.model),
           sdkSessionId: m.session_id,
@@ -693,7 +698,7 @@ async function pump(s) {
   }
 }
 
-async function open({ projectCode, sessionId = "agent", cwd, model, permissionMode, resume, agentId }) {
+async function open({ projectCode, sessionId = "agent", cwd, model, permissionMode, resume, agentId, reinit = false }) {
   // RFC-003: an agent is a configured session. A definition supplies defaults —
   // never an override — so an explicit argument at open always wins. That is q1's
   // lean made concrete: placement is a default you can point somewhere else.
@@ -749,6 +754,17 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // back in would quietly pin an agent whose definition says "follow the default".
     requestedModel: model || null,
     startedAt: Date.now(),
+    // COLD MEANS COLD, AND THERE ARE THREE WAYS IN, not two. A `session.started` looks identical
+    // from the SDK whether this is a first open, a re-init, or the desktop shell being restarted
+    // under a conversation that survives it. Two states made the third one lie: he restarted the
+    // app, the transcript came back intact on the same session id, and the hook named "cold" fired
+    // at an agent that had forgotten nothing — telling it to go look up what it was already
+    // holding. `remembered` is the tell, and it is already computed above (no race: `s.reinitFrom`
+    // is stamped after open() returns, but this is not).
+    //   cold    — nothing behind it; the store is the only memory
+    //   reinit  — same process, definition reloaded, conversation intact
+    //   resumed — process went away, conversation came back with it
+    origin: reinit ? "reinit" : remembered ? "resumed" : "cold",
     // His posture: permissions-off is the personal default. NOTE (SDK fact): in
     // bypassPermissions the canUseTool callback NEVER fires — permission.request
     // events only exist for sessions opened in "default" mode. Gated-vs-open is
@@ -1025,6 +1041,7 @@ async function reinit(key) {
     projectCode, sessionId, cwd, agentId, permissionMode,
     model: requestedModel || undefined,
     resume,
+    reinit: true,
   });
   logLife(next, `reinit: resumed ${resume || "(none)"}`);
   // The receipt is NOT emitted here — see announceReinit. Nothing is listening yet at this

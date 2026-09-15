@@ -15,7 +15,7 @@ const SERVER = "systemview";
 const HUB = () => `http://localhost:${process.env.SV_PORT || 3000}/systemview/api`;
 const TOOL_NAME = (t) => `mcp__${SERVER}__${t}`;
 const TOOL_NAMES = [
-  "runTests", "projects", "logs", "stats",
+  "runTests", "probe", "projects", "logs", "stats",
   "show", "tv", "reply", "board", "comments",
   "nav", "refresh", "act", "highlight",
   "connect", "disconnect",
@@ -35,9 +35,16 @@ async function hub(moduleName, fn, arg) {
   const raw = await res.text();
   if (!raw.trimStart().startsWith("{")) {
     // an HTML 404 means the RUNNING hub predates this method — say that, not "Unexpected token <"
+    // A 404 HAS TWO CAUSES AND THEY NEED OPPOSITE FIXES. This used to name only one — "the hub is
+    // serving old code; restart the hub" — and then the agent face moved from `CLI.*` to `Agent.*`,
+    // which made every RUNNING session's tools the stale half. BUApp's agent dutifully reported a
+    // stale hub at a hub that was current, and restarting it changed nothing. Say both, and say
+    // which one is likelier: this process is older than the hub far more often than the reverse.
     throw new Error(
       res.status === 404
-        ? `${moduleName}.${fn} is not on the running hub — it is serving old code; restart the hub (systemview start)`
+        ? `${moduleName}.${fn} is not on the running hub. Either THIS SESSION's tools predate it ` +
+          `(the usual case — restart the desktop shell so the MCP server reloads), or the hub really ` +
+          `is serving old code (restart it: systemview start).`
         : `${moduleName}.${fn}: hub answered ${res.status} with non-JSON`
     );
   }
@@ -51,34 +58,78 @@ const fail = (e) => ({ content: [{ type: "text", text: e.message || String(e) }]
 
 // ---- renderers: the human-readable half of the feed contract ----
 
+// PROBE — one call, one answer. The result is the point, so it leads; the resolved namespace rides
+// above it so a fuzzy input shows what it actually hit.
+function renderProbe(r) {
+  if (!r) return "probe: no answer from the hub";
+  if (r.error && !r.serviceId) {
+    const lines = [`probe: ${r.error}`];
+    // Candidates carry WHERE each lives, so choosing is not a retype.
+    if (Array.isArray(r.candidates) && r.candidates.length)
+      lines.push("", ...r.candidates.slice(0, 8).map((c) => `• ${c.namespace}  ${c.at || ""}`.trimEnd()));
+    return lines.join("\n");
+  }
+  const ns = `${r.projectCode ? r.projectCode + ":" : ""}${r.serviceId}.${r.moduleName}.${r.methodName}`;
+  const head = `${ns}(${(r.args || []).map((a) => JSON.stringify(a)).join(", ")})`;
+  const body = r.error
+    ? `failed — ${r.error}`
+    : r.result === undefined
+    ? "(no result and no error — the service answered with nothing)"
+    : JSON.stringify(r.result, null, 2);
+
+  // THE PART A TERMINAL NEVER GAVE YOU. Where it went, whether it was authenticated and from whose
+  // store, and how long it took — one line, under the answer, so the next call is informed and a
+  // failure explains itself instead of being re-run blind.
+  const meta = [];
+  if (r.at) meta.push(r.at);
+  if (r.ms != null) meta.push(`${r.ms}ms`);
+  meta.push(r.authenticated ? `authenticated (${(r.headers || []).join(", ")})` : "anonymous");
+  if (r.headersFrom) meta.push(`headers from ${r.headersFrom}`);
+
+  const out = [head, "", body, "", meta.join("  ·  ")];
+  if (r.hint) out.push(r.hint);
+  if (r.hint2) out.push(r.hint2);
+  if (r.warning) out.push(r.warning);
+  // Siblings only when the call FAILED — on success they are noise; on a miss they are the answer.
+  if ((r.error || r.result === null) && Array.isArray(r.siblings) && r.siblings.length)
+    out.push(`other methods on ${r.moduleName}: ${r.siblings.slice(0, 20).join(", ")}`);
+  if (Array.isArray(r.notices) && r.notices.length) out.push(...r.notices);
+  return out.join("\n");
+}
+
 function renderRun(r) {
   if (r && r.error) return `${r.projectCode || "?"}: ${r.error}`;
   // DRY RUN IS THE LISTING (his call): what WOULD run, as bullets the feed tables know.
   if (r && r.dryRun) {
     const head = `${r.projectCode}: would run ${r.tests.length} test${r.tests.length === 1 ? "" : "s"}`;
-    return [head, "", ...r.tests.map((t) => `• ${t.serviceId}.${t.moduleName}.${t.methodName} — "${t.title}"`)].join("\n");
+    // the capability returns `namespace` as a string now — the three-field shape was the CLI's
+    return [head, "", ...r.tests.map((t) => `• ${t.namespace || "(unnamed)"} — "${t.title}"`)].join("\n");
   }
   const total = (r.passed || 0) + (r.failed || 0);
   const head = `${r.projectCode}: ${total} test${total === 1 ? "" : "s"} — ${r.passed} passed, ${r.failed} failed`;
+  // ONE ROW PER TEST, and the failing one carries the comparison that failed — expected vs received,
+  // at a path — instead of a transcript to read. The capability returns that structured now, so this
+  // reads `passed` and `failures` and stops guessing at section shapes.
   const lines = (r.tests || []).map((t) => {
-    const ns = `${t.serviceId}.${t.moduleName}.${t.methodName}`;
-    if (t.status !== "failed") return `✓ ${ns} — "${t.title}"`;
-    // dig the failed evaluations out of whichever section carried them
-    const details = [];
-    for (const [section, entries] of Object.entries(t)) {
-      if (!Array.isArray(entries)) continue;
-      for (const e of entries) {
-        for (const f of e.failedEvaluations || []) {
-          const v = (f.validations || []).map((x) => x.message || JSON.stringify(x)).join("; ");
-          details.push(`    ${section} "${e.title}": ${f.namespace} → ${v || "failed"}`);
-        }
-      }
-    }
-    return [`✗ ${ns} — "${t.title}"`, ...details].join("\n");
+    const ns = t.namespace || "(unnamed)";
+    const ms = t.ms != null ? ` ${t.ms}ms` : "";
+    if (t.passed) return `✓ ${ns} — "${t.title}"${ms}`;
+    const details = (t.failures || []).map((f) => {
+      const at = f.namespace || f.path || "";
+      const cmp =
+        f.expected !== undefined || f.received !== undefined
+          ? `expected ${JSON.stringify(f.expected)}, got ${JSON.stringify(f.received)}`
+          : f.message || "failed";
+      return `    ${f.phase || "?"} "${f.step || ""}": ${at} → ${cmp}`;
+    });
+    return [`✗ ${ns} — "${t.title}"${ms}`, ...details].join("\n");
   });
-  // the run's HANDLE — hub memory, no file; the chat row fetches and displays it on demand
-  const handle = r.runId ? ["", `run: ${r.runId}`] : [];
-  return [head, "", ...lines, ...handle].join("\n");
+  const foot = [];
+  if (r.ms != null) foot.push(`${r.ms}ms`);
+  if (Array.isArray(r.unreachable) && r.unreachable.length)
+    foot.push(`did not answer: ${r.unreachable.map((u) => `${u.serviceId} (${u.at})`).join(", ")}`);
+  if (r.stoppedEarly) foot.push(`stopped early — ${r.notRun} not run`);
+  return [head, "", ...lines, ...(foot.length ? ["", foot.join("  ·  ")] : [])].join("\n");
 }
 
 function renderList(r) {
@@ -155,7 +206,7 @@ function serverFor(identity = {}) {
         },
         async ({ projectCode, namespace, bail, dryRun }) => {
           try {
-            return text(renderRun(await hub("CLI", "runTests", { projectCode, namespace, bail, dryRun })));
+            return text(renderRun(await hub("Agent", "runTests", { projectCode, namespace, bail, dryRun })));
           } catch (e) { return fail(e); }
         }
       ),
@@ -164,7 +215,25 @@ function serverFor(identity = {}) {
         "List the connected projects and their services — what the hub can reach right now.",
         {},
         async () => {
-          try { return text(renderList(await hub("CLI", "listTests", {}))); } catch (e) { return fail(e); }
+          try { return text(renderList(await hub("Agent", "listTests", {}))); } catch (e) { return fail(e); }
+        }
+      ),
+      tool(
+        "probe",
+        "Call ONE method on a service SystemView has registered, and read the real response. Use " +
+          "it before asserting a shape, to check a service is alive, or to reproduce a bug by hand. " +
+          "The namespace can be fuzzy (`signIn`, `Users.signIn`, `Profiles.Users.signIn`); prefix " +
+          "`projectCode:` to scope it when the same service is connected twice. This is NOT " +
+          "mcp__systemlynx__call — that one reaches whitelisted services that publish MCP routes; " +
+          "this reaches anything registered here, no whitelist and no MCP needed.",
+        {
+          namespace: z.string().describe("ServiceId.Module.method — fuzzy, optionally `projectCode:` prefixed"),
+          args: z.any().optional().describe("one object for an object-shaped method, or an array for a positional one"),
+          projectCode: z.string().optional().describe("scope the resolution to one project"),
+          headers: z.record(z.string()).optional().describe('extra request headers, e.g. {"Origin": "http://localhost:3000"}'),
+        },
+        async (a) => {
+          try { return text(renderProbe(await hub("Agent", "probe", a))); } catch (e) { return fail(e); }
         }
       ),
       tool(
@@ -178,7 +247,7 @@ function serverFor(identity = {}) {
           namespace: z.string().optional().describe("filter entries by Service.Module.method substring"),
         },
         async (a) => {
-          try { return text(renderLogs(await hub("CLI", "getLogs", a))); } catch (e) { return fail(e); }
+          try { return text(renderLogs(await hub("Agent", "getLogs", a))); } catch (e) { return fail(e); }
         }
       ),
       tool(
@@ -191,7 +260,7 @@ function serverFor(identity = {}) {
           range: z.string().optional().describe("15m | 1h | 4h | 24h | all"),
         },
         async (a) => {
-          try { return text(renderStats(await hub("CLI", "stats", a))); } catch (e) { return fail(e); }
+          try { return text(renderStats(await hub("Agent", "stats", a))); } catch (e) { return fail(e); }
         }
       ),
       tool(
@@ -207,7 +276,7 @@ function serverFor(identity = {}) {
         },
         async ({ projectCode, text: md, reportPath, clear }) => {
           try {
-            const r = await hub("CLI", "svShow", { projectCode, text: md, reportPath, clear, as: who });
+            const r = await hub("Agent", "show", { projectCode, text: md, reportPath, clear, as: who });
             return text(r && r.ok ? (clear ? "TV cleared." : "The show is up.") : "The show did not go up.");
           } catch (e) { return fail(e); }
         }
@@ -222,7 +291,7 @@ function serverFor(identity = {}) {
         },
         async ({ projectCode, show }) => {
           try {
-            const state = await hub("CLI", "svTv", { projectCode, show });
+            const state = await hub("Agent", "tv", { projectCode, show });
             if (state && state.error) return text(state.error);
             return text(state && state.text ? state.text : "Nothing on the TV.");
           } catch (e) { return fail(e); }
@@ -240,7 +309,7 @@ function serverFor(identity = {}) {
         },
         async ({ projectCode, report, threadId, text: t }) => {
           try {
-            const r = await hub("CLI", "svReply", { projectCode, report, threadId, text: t, as: who });
+            const r = await hub("Agent", "reply", { projectCode, report, threadId, text: t, as: who });
             return text(r && r.ok ? `replied in ${threadId}` : "reply failed");
           } catch (e) { return fail(e); }
         }
@@ -258,7 +327,7 @@ function serverFor(identity = {}) {
         },
         async (a) => {
           try {
-            const r = await hub("CLI", "svBoard", { ...a, as: who });
+            const r = await hub("Agent", "board", { ...a, as: who });
             if (r && r.notes) {
               const lines = (r.notes || []).map((n, i) => `${i + 1}. ${typeof n === "string" ? n : n.text || JSON.stringify(n)}`);
               return text([`board — ${r.project}${r.board !== "board" ? ` · ${r.board}` : ""}`, ...lines].join("\n"));
@@ -278,7 +347,7 @@ function serverFor(identity = {}) {
         },
         async (a) => {
           try {
-            const r = await hub("CLI", "svComments", { ...a, as: who });
+            const r = await hub("Agent", "comments", { ...a, as: who });
             return text(typeof r === "object" ? JSON.stringify(r, null, 2) : String(r));
           } catch (e) { return fail(e); }
         }
@@ -299,9 +368,12 @@ function serverFor(identity = {}) {
         },
         async ({ projectCode, namespace, file, report, stats, agents }) => {
           try {
-            const r = await hub("CLI", "svDrive", { projectCode, verb: "nav", namespace, file, report, stats, agents, as: who });
-            const kind = namespace ? `namespace ${namespace}` : file ? `file ${file}` : report ? `report ${report}` : stats ? `stats${stats === "open" ? "" : ` ${stats}`}` : agents ? "agents" : "";
-            return text(r && r.ok ? `navigated → ${kind || "nowhere"}` : "nav failed");
+            const r = await hub("Agent", "nav", { projectCode, namespace, file, report, stats, agents, as: who });
+            // A REFUSAL SAYS WHY. The old door answered "nav failed" for a namespace that does not
+            // exist, one that is ambiguous, a bad stats tab and an unknown service alike — four
+            // different problems, one useless sentence. The hub already knows which; say it.
+            if (!r || !r.ok) return text(`nav refused — ${(r && r.error) || "no reason given"}${r && r.candidates ? `\n  ${r.candidates.slice(0, 8).join("\n  ")}` : ""}`);
+            return text(`navigated → ${r.label}`);
           } catch (e) { return fail(e); }
         }
       ),
@@ -311,8 +383,8 @@ function serverFor(identity = {}) {
         { projectCode: z.string(), pane: z.string() },
         async ({ projectCode, pane }) => {
           try {
-            const r = await hub("CLI", "svDrive", { projectCode, verb: "refresh", a: pane, as: who });
-            return text(r && r.ok ? `refreshed ${pane}` : "refresh failed");
+            const r = await hub("Agent", "refresh", { projectCode, scope: pane, as: who });
+            return text(r && r.ok ? r.label : `refresh refused — ${(r && r.error) || "no reason given"}`);
           } catch (e) { return fail(e); }
         }
       ),
@@ -324,19 +396,25 @@ function serverFor(identity = {}) {
         { projectCode: z.string(), kind: z.enum(["test", "run"]), target: z.string(), say: z.string().optional() },
         async ({ projectCode, kind, target, say }) => {
           try {
-            const r = await hub("CLI", "svDrive", { projectCode, verb: "act", a: kind, b: target, as: who, say });
-            return text(r && r.ok ? `pressed ${kind}: ${target}` : "act failed");
+            const r = await hub("Agent", "act", { projectCode, [kind]: target, as: who, say });
+            return text(r && r.ok ? r.label : `act refused — ${(r && r.error) || "no reason given"}`);
           } catch (e) { return fail(e); }
         }
       ),
       tool(
         "highlight",
         "Point at something in the open window — a row, a region — without navigating.",
-        { projectCode: z.string(), target: z.string(), say: z.string().optional() },
-        async ({ projectCode, target, say }) => {
+        {
+          projectCode: z.string(),
+          target: z.string().optional().describe("Service.Module.method — fuzzy, resolved against the live tree"),
+          file: z.string().optional().describe("a repo-relative file path, instead of a namespace"),
+          say: z.string().optional(),
+        },
+        async ({ projectCode, target, file, say }) => {
           try {
-            const r = await hub("CLI", "svDrive", { projectCode, verb: "highlight", a: target, as: who, say });
-            return text(r && r.ok ? `highlighted ${target}` : "highlight failed");
+            const r = await hub("Agent", "highlight", { projectCode, ...(file ? { file } : { namespace: target }), as: who, say });
+            if (!r || !r.ok) return text(`highlight refused — ${(r && r.error) || "no reason given"}${r && r.candidates ? `\n  ${r.candidates.slice(0, 8).join("\n  ")}` : ""}`);
+            return text(r.label);
           } catch (e) { return fail(e); }
         }
       ),
@@ -348,7 +426,7 @@ function serverFor(identity = {}) {
         { url: z.string().describe("the service's connection URL, e.g. http://localhost:4100/bu/api/profiles") },
         async ({ url }) => {
           try {
-            const r = await hub("CLI", "svConnect", { url });
+            const r = await hub("Agent", "connect", { url });
             const got = (r && r.connected) || [];
             return text(got.length ? `connected: ${got.map((s) => `${s.projectCode}/${s.serviceId}`).join(", ")}` : `nothing registered from ${url} — is it running?`);
           } catch (e) { return fail(e); }
@@ -360,7 +438,7 @@ function serverFor(identity = {}) {
         { projectCode: z.string(), serviceId: z.string().optional() },
         async (a) => {
           try {
-            const r = await hub("CLI", "svDisconnect", a);
+            const r = await hub("Agent", "disconnect", a);
             return text(r && r.ok ? `disconnected ${a.projectCode}${a.serviceId ? `/${a.serviceId}` : ""}` : `disconnect failed${r && r.error ? ` — ${r.error}` : ""}`);
           } catch (e) { return fail(e); }
         }

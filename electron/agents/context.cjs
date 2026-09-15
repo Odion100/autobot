@@ -30,11 +30,24 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const vectors = require("../apps/vectors.cjs");
+const docs = require("./docs.cjs");
 const { createSdkMcpServer, tool } = require("@anthropic-ai/claude-agent-sdk");
 const { z } = require("zod");
 
 const SERVER = "context";
-const TOOL_NAMES = ["remember", "context", "list", "forget"].map((t) => `mcp__${SERVER}__${t}`);
+// RFC-058 §7 — the docs tools live HERE rather than on a new server: it is where agents already
+// look, and discovery already indexes it.
+//
+// RETRIEVAL IS ONE DOOR. There was a `docs` search tool beside `context` for exactly one day, on
+// the theory that notes and chunks have different truth conditions and should not be confused. The
+// truth conditions are real — a note is true because someone learned it, a chunk only while its
+// file has not changed — but that is an argument for LABELLING a result, not for a second tool.
+// Measured: the word an agent reaches for is "context", and a tool nobody opens is worse than no
+// separation at all. So `context` answers with both halves, labelled, and takes `kind` to narrow.
+// What remains here is MANAGEMENT — listing, planning cuts, indexing, dropping — which is not
+// retrieval and has no context-store equivalent to merge with.
+const TOOL_NAMES = ["remember", "context", "list", "forget", "docsList", "docsPlan", "docsIndex", "docsDrop"]
+  .map((t) => `mcp__${SERVER}__${t}`);
 const ROOT = path.join(os.homedir(), ".autobot", "context");
 
 // Near-duplicate threshold for similarity-on-write, and the search floor. The write
@@ -377,22 +390,52 @@ function serverFor(identity = {}) {
       ),
       tool(
         "context",
-        "Search the shared context store — conventions, corrections, project facts, lessons — " +
-          "before guessing or re-deriving. Searches every scope you can see (system, this project, " +
-          "your agent slot) and returns ranked notes with pointers. An empty answer means nothing " +
-          "recorded matches: proceed, and remember() what you learn.",
+        "Search everything this system knows — NOTES (conventions, corrections, project facts, " +
+          "lessons someone learned) and DOCUMENTATION (the embedded reference, chunked by heading) " +
+          "— before guessing or re-deriving. Both come back in one answer, labelled, so you never " +
+          "have to know which half held it. An empty answer means nothing recorded matches: " +
+          "proceed, and remember() what you learn.",
         {
           question: z.string().describe("what you want to know, in plain language"),
-          scope: z.string().optional().describe("narrow to one scope; omit to search all"),
-          limit: z.number().optional().describe("max notes (default 5)"),
+          scope: z.string().optional().describe("narrow to one note scope; omit to search all"),
+          kind: z
+            .enum(["notes", "docs"])
+            .optional()
+            .describe("narrow to one half — omit for both. Use \"notes\" when curating the store, so documentation cannot be mistaken for a duplicate note"),
+          corpus: z.string().optional().describe("narrow the documentation half to one corpus"),
+          source: z.string().optional().describe("narrow the documentation half to one document"),
+          limit: z.number().optional().describe("max results per half (default 5)"),
         },
-        async ({ question, scope, limit }) => {
+        async ({ question, scope, kind, corpus, source, limit }) => {
           try {
-            const hits = await search(scopes, { question, scope, k: Math.min(Math.max(limit || 5, 1), 12) });
+            const k = Math.min(Math.max(limit || 5, 1), 12);
+            // ONE DOOR, TWO HALVES — and they are fetched SEPARATELY on purpose.
+            //
+            // Measured on myself: the word an agent reaches for is "context", every time. I built
+            // the documentation tool and then mined the note store twice in the same hour without
+            // ever calling it. A second door is a door nobody opens.
+            //
+            // But the rankings are NOT merged. A doc explains a subject across several long,
+            // strongly-matching sections; a note is one sentence. Blend the scores and a one-line
+            // correction loses to the three paragraphs it is correcting — which is exactly the
+            // moment the correction mattered. Each half gets its own slice, so neither can be shut
+            // out by the other's volume.
+            const wantNotes = kind !== "docs";
+            const wantDocs = kind !== "notes";
+            const hits = wantNotes ? await search(scopes, { question, scope, k }) : [];
+            let sections = [];
+            if (wantDocs) {
+              try {
+                const r = await docs.search({ q: question, corpus, source, limit: k });
+                sections = (r && r.results) || [];
+              } catch {
+                /* a corpus that was never indexed is an empty half, not a failure */
+              }
+            }
             const blind = hits.failed ? `\n(warning: ${hits.failed} scope(s) could not be searched — this answer may be incomplete)` : "";
-            if (!hits.length)
+            if (!hits.length && !sections.length)
               return {
-                content: [{ type: "text", text: `Nothing recorded scores above ${FLOOR} for that. If you learn the answer, remember() it.` }],
+                content: [{ type: "text", text: `Nothing recorded scores above ${FLOOR} for that${wantDocs ? ", and no documentation section matches it" : ""}. Empty means nothing matched THAT question — try another angle before concluding it is unrecorded. If you learn the answer, remember() it.` }],
               };
             // WRITTEN FOR A READER — his rule: these are OUR logs, and they come out human. The
             // same words serve the model and the chat; nothing downstream reformats them.
@@ -404,8 +447,20 @@ function serverFor(identity = {}) {
               // the exact note it just read, not only its own recent writes.
               return `• ${h.meta.title} — from ${where}, match ${h.score.toFixed(2)} [${h.id}]\n  ${body}${h.meta.pointer ? `\n  see: ${h.meta.pointer}` : ""}`;
             });
-            const head = `${hits.length === 1 ? "One note matches" : hits.length + " notes match"}:`;
-            return { content: [{ type: "text", text: head + "\n\n" + lines.join("\n\n") + blind }] };
+            // THE TWO HALVES READ DIFFERENTLY ON PURPOSE. A note is true because someone learned
+            // it; a chunk is true only while its file has not changed. Saying which is which — and
+            // saying STALE out loud — is what stops a drifted paragraph answering with the
+            // authority of a human correction.
+            const docLines = sections.map((h) => {
+              const where = [h.source, h.headingPath && h.headingPath.length ? h.headingPath.join(" › ") : null].filter(Boolean).join("  ›  ");
+              return `▸ ${where}${h.part ? ` (${h.part})` : ""} — ${h.corpus} [${h.corpus}:${h.source}#]${h.stale ? "\n  ⚠ the file has CHANGED since this was indexed" : ""}\n  ${String(h.text).replace(/\n+/g, " ").slice(0, 400)}`;
+            });
+            const parts = [];
+            if (hits.length)
+              parts.push(`${hits.length === 1 ? "One note matches" : hits.length + " notes match"} — learned, and editable with remember(id=) / forget():\n\n` + lines.join("\n\n"));
+            if (sections.length)
+              parts.push(`${sections.length} documentation section(s) — derived from files; to change one, fix the file and re-index:\n\n` + docLines.join("\n\n"));
+            return { content: [{ type: "text", text: parts.join("\n\n") + blind }] };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }
@@ -499,10 +554,115 @@ function serverFor(identity = {}) {
         },
         async ({ id, scope }) => {
           try {
+            // A CHUNK ID IS NOT A NOTE ID, and the refusal has to TEACH — `context` now hands back
+            // both kinds in one answer, so the first thing an agent will try is forgetting the
+            // wrong one. `corpus:path#n` is the shape. Saying "no" alone would leave it believing
+            // the chunk is un-removable; the fix is a different verb on a different thing.
+            if (/^[a-zA-Z0-9._-]+:.+#\d*$/.test(String(id)))
+              return {
+                content: [{ type: "text", text:
+                  `"${id}" is a DOCUMENTATION chunk, not a note — there is nothing to forget. A chunk is derived from a file, ` +
+                  `so an edit or a deletion here is overwritten on the next index. Fix the source document and re-index the corpus ` +
+                  `(docsIndex), or drop the corpus entirely (docsDrop). If the chunk is wrong, the FILE is wrong.` }],
+                isError: true,
+              };
             const p = place(scope || scopes.default);
             if (!p || !scopes.allowed.includes(p.scope)) throw new Error(`scope not available to this session`);
             await deleteNote(p.scope, id);
             return { content: [{ type: "text", text: `Forgot ${id} from ${p.scope}.` }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "docsList",
+        "What documentation corpora exist — name, kind, how many files and chunks, when each was " +
+          "last indexed, and how many chunks have drifted from the file on disk.",
+        {},
+        async () => {
+          try {
+            const rows = docs.listCorpora();
+            if (!rows.length) return { content: [{ type: "text", text: "No corpora configured yet (~/.autobot/corpora.json)." }] };
+            const body = rows
+              .map((c) => `${c.name}  [${c.kind}]  ${c.files} files · ${c.chunks} chunks${c.stale ? ` · ${c.stale} STALE` : ""}${c.lastIndexed ? ` · indexed ${c.lastIndexed}` : " · never indexed"}\n    ${c.root}  ${c.glob}`)
+              .join("\n");
+            return { content: [{ type: "text", text: body }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "docsPlan",
+        "The DRY RUN: every chunk a corpus would produce, with its heading path and size — and " +
+          "nothing embedded. Read the cuts before indexing, and after editing a document, to check " +
+          "each subject still lands in one chunk of its own. Chunking is normally invisible, which " +
+          "is exactly why it rots.",
+        {
+          name: z.string().describe("the corpus name"),
+          maxChars: z.number().optional().describe("override the split threshold to compare cuts"),
+          source: z.string().optional().describe("one document, instead of the whole corpus"),
+        },
+        async ({ name, maxChars, source }) => {
+          try {
+            const p = docs.plan(name, maxChars ? { maxChars } : {});
+            const files = source ? p.files.filter((f) => f.source === source) : p.files;
+            if (source && !files.length)
+              return { content: [{ type: "text", text: `no "${source}" in ${name} — files: ${p.files.map((f) => f.source).join(", ")}` }] };
+            const t = p.totals;
+            const head = `${p.corpus} [${p.kind}]  ${p.root}  ${p.glob}\n${t.files} files · ${t.chunks} chunks · biggest ${t.biggest} · split ${t.split} · over max ${t.overMax} · empty files ${t.empty}`;
+            const body = files
+              .map((f) => `\n${f.source}  (${f.chunks.length} chunks, ${f.bytes}b, ${f.hash})\n` +
+                f.chunks.map((c) => `   ${String(c.chars).padStart(5)}  ${c.part ? c.part + "  " : ""}${c.headingPath.join(" › ") || "(preamble)"}`).join("\n"))
+              .join("\n");
+            return { content: [{ type: "text", text: head + body }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "docsIndex",
+        "Embed a corpus, or refresh it. Unchanged files cost nothing — re-indexing is by file hash, " +
+          "so only what changed is embedded. INDEXING PUBLISHES: a wrong document that is indexed " +
+          "answers confidently, so run docsPlan and read the document first.",
+        {
+          name: z.string().describe("the corpus name, from docsList"),
+        },
+        async ({ name }) => {
+          try {
+            const r = await docs.index(name);
+            return {
+              content: [{ type: "text", text:
+                `${r.corpus} [${r.kind}] → ${r.collection}\n` +
+                `${r.files} files · ${r.indexed} chunks embedded · ${r.skipped} unchanged (skipped)` +
+                `${r.changedFiles ? ` · ${r.changedFiles} files changed` : ""}${r.removed ? ` · ${r.removed} removed` : ""}` }],
+            };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "docsDrop",
+        "Remove a corpus's whole collection from the vector store. The files are untouched — this " +
+          "deletes what was embedded, not what was written.",
+        { name: z.string() },
+        async ({ name }) => {
+          try {
+            const c = docs.corpusNamed(name);
+            // A permanent corpus is the human's, configured by hand; dropping one is not an agent's
+            // call. A working corpus is the agent's own scratch and it should clean up after itself.
+            if (c && (c.kind || "permanent") === "permanent")
+              return { content: [{ type: "text", text: `"${name}" is a permanent corpus — dropping it is the human's call. Working corpora are yours to drop.` }], isError: true };
+            const r = await docs.drop(name);
+            if (r.error) return { content: [{ type: "text", text: r.error }], isError: true };
+            return { content: [{ type: "text", text: `Dropped ${r.corpus} (${r.dropped} chunks).` }] };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }

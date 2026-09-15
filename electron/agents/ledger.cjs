@@ -91,7 +91,17 @@ function record(s, event) {
       case "session.started":
       case "session.ended":
       case "session.reinit":
-        append({ ts: event.ts || Date.now(), ...who, kind: "session", name: event.kind.slice(8), ok: true });
+        // ORIGIN RIDES ALONG, because it is the field that decides behaviour. A hook keys on
+        // `origin === "cold"`, and without it here the log could show THAT the hook fired and never
+        // what it matched — which is exactly the question asked the first time it misfired.
+        append({
+          ts: event.ts || Date.now(),
+          ...who,
+          kind: "session",
+          name: event.kind.slice(8),
+          ok: true,
+          ...(event.origin ? { origin: event.origin } : {}),
+        });
         return;
       case "compaction.after":
         append({ ts: event.ts || Date.now(), ...who, kind: "compaction", name: "after", ok: true });

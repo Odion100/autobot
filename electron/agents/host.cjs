@@ -3,7 +3,7 @@
 // outlive any view; this layer routes event channels per (webContents, session) and
 // cleans up when a view lets go. cwd resolution is the host's job — the browser side
 // never learns a project's absolute root.
-const { ipcMain } = require("electron");
+const { ipcMain, dialog } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -12,6 +12,7 @@ const definitions = require("./definitions.cjs");
 const ledger = require("./ledger.cjs");
 const hooks = require("./hooks.cjs");
 const contextStore = require("./context.cjs");
+const docs = require("./docs.cjs");
 
 const PROJECTS = path.join(os.homedir(), ".autobot", "projects.json");
 function resolveCwd(projectCode, cwd) {
@@ -159,6 +160,73 @@ function register(surfaceOf) {
       store: contextStore.stats(scopes),
       weight: sessions.weights(rec ? rec.id : null, rec ? rec.cwd : null),
     };
+  });
+
+  // RFC-058 §8 — THE CORPORA SURFACE. His index, on his screen: what is embedded, how it was cut,
+  // and the buttons that change it. The agent tools and these handlers call the SAME functions in
+  // docs.cjs — one implementation, two doors — so a dry run he reads is the dry run an agent gets.
+  //
+  // The reason this exists at all: chunking is invisible, which is exactly why RAG rots. A pipeline
+  // whose cuts nobody has ever looked at is a pipeline nobody can correct.
+  ipcMain.handle("agent:docs-list", () => {
+    try { return { corpora: docs.listCorpora() }; } catch (e) { return { error: String(e.message || e) }; }
+  });
+  ipcMain.handle("agent:docs-plan", (_e, name, opts) => {
+    try { return { plan: docs.plan(name, opts || {}) }; } catch (e) { return { error: String(e.message || e) }; }
+  });
+  // The same door `docs()` gives an agent. One box on the surface, two answers underneath — which
+  // one it reaches is whichever scope is open, exactly as it is for an agent.
+  // A PATH IS PICKED, NOT TYPED. This is a desktop app; making him type a root and then a glob
+  // pattern made him the editor of a config file. A typo in a glob matches nothing and the corpus
+  // is simply empty — silent, and indistinguishable from "there was nothing there".
+  ipcMain.handle("agent:pick-path", async (_e, kind) => {
+    const r = await dialog.showOpenDialog({
+      properties: kind === "file" ? ["openFile"] : ["openDirectory"],
+      ...(kind === "file" ? { filters: [{ name: "Markdown", extensions: ["md", "markdown"] }] } : {}),
+      message: kind === "file" ? "Pick a document to embed" : "Pick a folder to embed",
+    });
+    if (r.canceled || !r.filePaths.length) return { canceled: true };
+    return { path: r.filePaths[0] };
+  });
+
+  // WHAT THE PATTERN ACTUALLY MATCHED, before anything is saved. The same `filesOf` the indexer
+  // uses, so the list he ticks through is the list that gets embedded.
+  ipcMain.handle("agent:docs-preview", (_e, spec) => {
+    try {
+      return { files: docs.filesOf({ root: spec.root, glob: spec.glob || "**/*.md", exclude: spec.exclude || [] }) };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
+  });
+
+  ipcMain.handle("agent:docs-search", async (_e, opts) => {
+    try { return await docs.search(opts || {}); } catch (e) { return { error: String(e.message || e) }; }
+  });
+  ipcMain.handle("agent:docs-index", async (_e, name) => {
+    try { return { result: await docs.index(name) }; } catch (e) { return { error: String(e.message || e) }; }
+  });
+  ipcMain.handle("agent:docs-drop", async (_e, name) => {
+    try { return await docs.drop(name); } catch (e) { return { error: String(e.message || e) }; }
+  });
+  // The config is a file he owns; this writes it for him rather than making him find the JSON.
+  ipcMain.handle("agent:docs-save-corpus", (_e, rec) => {
+    try {
+      const all = docs.corpora().filter((c) => c.name !== rec.name);
+      if (rec.remove) {
+        docs.saveCorpora(all);
+        return { corpora: docs.listCorpora(), removed: rec.name };
+      }
+      docs.saveCorpora(all.concat([{
+        name: rec.name,
+        kind: rec.kind === "working" ? "working" : "permanent",
+        root: rec.root,
+        glob: rec.glob || "**/*.md",
+        ...(Array.isArray(rec.exclude) && rec.exclude.length ? { exclude: rec.exclude } : {}),
+      }]));
+      return { corpora: docs.listCorpora() };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
   });
 
   // RFC-057 — the call ledger, global by default with an agent/project filter. Deliberately NOT

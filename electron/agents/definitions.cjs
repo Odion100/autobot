@@ -142,13 +142,18 @@ function docPaths(rec) {
 // agent's doc stack (his catch: a thing that applies to everybody must not wear one agent's
 // clothes). Two SIDES:
 //   agent — context that LOADS INTO every agent (the system context, injected beside presence)
-//   human — help for whoever DESIGNS agents (the defining-agents walkthrough), read by us, never
-//           sent to an agent
+//   human — help for whoever DESIGNS agents, read by us, never sent to an agent
+//
+// "Defining agents" USED TO BE A SECOND COPY. There was a human walkthrough here and an
+// `agent-authoring` skill that pointed at it — two artifacts saying the same six things, which is
+// the exact drift the one-definition rule exists to prevent, built by the person quoting the rule.
+// His call: one artifact, written well enough that both read it. So this row now opens the SKILL
+// file itself. Editing it here edits what every agent runs.
 // A file each; add or drop one without touching code beyond this map.
 const PAGE_DOCS = {
   presence: { label: "Presence", side: "agent", path: path.join(os.homedir(), ".autobot", "presence.md") },
   "system-context": { label: "System context", side: "agent", path: path.join(os.homedir(), ".autobot", "system-context.md") },
-  "defining-agents": { label: "Defining agents", side: "human", path: path.join(os.homedir(), ".autobot", "defining-agents.md") },
+  "defining-agents": { label: "Defining an agent", side: "human", path: path.join(os.homedir(), ".claude", "skills", "agent-authoring", "SKILL.md") },
 };
 // `help` is the historical channel name; it now carries every page-level doc, tagged by side so
 // the surface renders the agent-side and human-side chips distinctly.

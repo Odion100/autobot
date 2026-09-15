@@ -51,9 +51,18 @@ try {
 
   console.log("\nhooks and sessions are their own kinds");
   ledger.record(s, { kind: "hook.fired", name: "context-retrieval", on: "compaction.after", ts: t0 });
-  ledger.record(s, { kind: "session.started", ts: t0 });
+  ledger.record(s, { kind: "session.started", origin: "resumed", ts: t0 });
   st = ledger.stats({});
   eq("byKind", st.byKind, { tool: 1, mcp: 1, hook: 1, session: 1 });
+  // ORIGIN SURVIVES THE ROW. A hook keys on it, so a log that drops it can show that the hook fired
+  // and never what it matched — which is the question asked the first time one misfired.
+  const sessionRows = fs
+    .readFileSync(path.join(dir, `calls-${new Date(t0).toISOString().slice(0, 10)}.jsonl`), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.kind === "session");
+  eq("origin is on the session row", sessionRows[0] && sessionRows[0].origin, "resumed");
 
   console.log("\nnarration is not a call — deltas would be the highest-frequency rows in the system");
   ledger.record(s, { kind: "assistant.text", text: "hello", ts: t0 });
