@@ -53,11 +53,24 @@ const tabs = []; // { id, kind: "web" | "app", appId?, title, favicon, view }
 let activeId = null;
 let nextId = 1;
 
+// ---- SPLIT VIEW (his ask, 2026-09-17: drag a tab out, see two things side by side, resize) ----
+// One split, two panes: the ACTIVE tab is always pane A; `split.other` is pane B. side "right"
+// puts B beside A, "bottom" puts B under A. `ratio` is A's share of the axis. The 6px gutter
+// between them is deliberately UNCOVERED chrome — that gap is where the chrome page shows
+// through, which is what makes the divider draggable at all (native views swallow the mouse).
+const GUTTER = 6;
+let split = null; // { side: "right"|"bottom", ratio, other: tabId }
+// While a chip is being dragged, every view hides so the whole window is chrome — the only way
+// drop zones over the content area can receive the pointer, because a WebContentsView takes
+// OS-level input in its bounds and the chrome page underneath never hears it.
+let dragMode = false;
+
 const history = (wc) => wc.navigationHistory ?? wc;
 
 function state() {
   return {
     activeId,
+    split: split ? { side: split.side, ratio: split.ratio, other: split.other } : null,
     agentsOpen,
     agentsWidth: agentsW,
     // THE 74px CORNER IS THE WINDOW BANDS' SPACE — and in macOS fullscreen the bands are GONE
@@ -93,6 +106,24 @@ function broadcast() {
   if (win && !win.isDestroyed()) win.webContents.send("autobot:state", state());
 }
 
+// Exported shape so a smoke can assert the math without a window: given the content box and the
+// split, where do the panes land?
+function paneRects(box, sp) {
+  if (!sp) return { a: box, b: null };
+  if (sp.side === "right") {
+    const aw = Math.round((box.width - GUTTER) * sp.ratio);
+    return {
+      a: { x: box.x, y: box.y, width: aw, height: box.height },
+      b: { x: box.x + aw + GUTTER, y: box.y, width: box.width - aw - GUTTER, height: box.height },
+    };
+  }
+  const ah = Math.round((box.height - GUTTER) * sp.ratio);
+  return {
+    a: { x: box.x, y: box.y, width: box.width, height: ah },
+    b: { x: box.x, y: box.y + ah + GUTTER, width: box.width, height: box.height - ah - GUTTER },
+  };
+}
+
 function layout() {
   if (!win) return;
   const [w, h] = win.getContentSize();
@@ -101,14 +132,21 @@ function layout() {
   // so the panel gets reserved space the same way the dock does. (The floating
   // bubble version was invisible behind every page; Odion caught it.)
   const agentsInset = agentsOpen ? agentsW : 0;
+  const box = { x: dockW, y: STRIP_H, width: w - dockW - agentsInset, height: h - STRIP_H };
+  // A split whose other tab died is no split; drag mode blanks everything (see dragMode above).
+  if (split && (split.other === activeId || !tabs.some((t) => t.id === split.other))) split = null;
+  const { a, b } = paneRects(box, split);
   for (const t of tabs) {
-    t.view.setVisible(t.id === activeId);
-    if (t.id === activeId)
-      t.view.setBounds({ x: dockW, y: STRIP_H, width: w - dockW - agentsInset, height: h - STRIP_H });
+    const pane = dragMode ? null : t.id === activeId ? a : split && t.id === split.other ? b : null;
+    t.view.setVisible(!!pane);
+    if (pane) t.view.setBounds(pane);
   }
 }
 
 function setActive(id) {
+  // In a split, clicking pane B's tab PROMOTES it to A and demotes the old A to B — both stay on
+  // screen. Activating a third tab replaces pane A and leaves B standing.
+  if (split && id === split.other) split = { ...split, other: activeId };
   activeId = id;
   layout();
   broadcast();
@@ -348,6 +386,29 @@ ipcMain.handle("apps:components", (e, surface) => {
 ipcMain.on("app:theme", (e) => { e.returnValue = { dark: themeDark }; });
 
 ipcMain.handle("tabs", (_e, action, payload = {}) => {
+  // ---- split verbs ----------------------------------------------------------------------------
+  if (action === "split") {
+    const id = Number(payload.id);
+    const side = payload.side === "bottom" ? "bottom" : "right";
+    if (!tabs.some((t) => t.id === id)) return state();
+    if (id === activeId) {
+      // dragging the ACTIVE tab out: it becomes pane B, and the most recent other tab takes A —
+      // the gesture means "put this one over there", not "clone it".
+      const other = tabs.find((t) => t.id !== id);
+      if (!other) return state();
+      activeId = other.id;
+    }
+    split = { side, ratio: 0.5, other: id };
+    layout(); broadcast();
+    return state();
+  }
+  if (action === "unsplit") { split = null; layout(); broadcast(); return state(); }
+  if (action === "splitRatio") {
+    if (split) split.ratio = Math.min(0.85, Math.max(0.15, Number(payload.ratio) || 0.5));
+    layout(); broadcast();
+    return state();
+  }
+  if (action === "dragMode") { dragMode = payload.on === true; layout(); return state(); }
   if (action === "theme") {
     themeDark = payload.dark !== false;
     broadcastTheme();
@@ -669,6 +730,75 @@ app.whenReady().then(async () => {
       }
     };
     setTimeout(run, 6000);
+  }
+
+  if (process.env.AUTOBOT_SPLITSMOKE === "1") {
+    const run = async () => {
+      try {
+        const a = addTab({ url: "http://localhost:3200", kind: "app", appId: "blink", activate: true });
+        const b = addTab({ url: "http://localhost:3300", kind: "app", appId: "workers", activate: false });
+        await new Promise((r) => setTimeout(r, 2500));
+        // the same call the chrome makes
+        const { webContents } = require("electron");
+        split = { side: "right", ratio: 0.5, other: b.id };
+        setActive(a.id);
+        await new Promise((r) => setTimeout(r, 400));
+        const av = a.view.getBounds(), bv = b.view.getBounds();
+        const out = {
+          bothVisible: a.view.getVisible() && b.view.getVisible(),
+          sideBySide: av.x < bv.x && Math.abs(av.y - bv.y) < 2,
+          gutter: bv.x - (av.x + av.width),
+          stateCarries: !!state().split && state().split.other === b.id,
+        };
+        split.ratio = 0.25; layout();
+        const av2 = a.view.getBounds();
+        out.ratioMoves = av2.width < av.width;
+        split = null; layout();
+        out.unsplitHides = a.view.getVisible() && !b.view.getVisible();
+        const ok = out.bothVisible && out.sideBySide && out.gutter === 6 && out.stateCarries && out.ratioMoves && out.unsplitHides;
+        console.log("SPLITSMOKE:", JSON.stringify(out));
+        console.log("SPLITSMOKE:", ok ? "PASS" : "FAIL");
+        app.exit(ok ? 0 : 1);
+      } catch (e) { console.log("SPLITSMOKE error:", e.message); app.exit(1); }
+    };
+    setTimeout(run, 4000);
+  }
+
+  // THE LYNX CAPABILITY, AS ASSERTIONS. Proves the whole chain in a real shell: the gate hands
+  // `lynx` only to apps that declared it, the bridge crosses the contextBridge with its nested
+  // functions intact, a page loads its own SystemLynx service, and a module EVENT reaches a
+  // page-side callback. Needs the blink service up on 3200 (it is the app under test).
+  if (process.env.AUTOBOT_LYNXSMOKE === "1") {
+    const run = async () => {
+      try {
+        const tab = addTab({ url: "http://localhost:3200", kind: "app", appId: "blink", activate: false });
+        await new Promise((r) => setTimeout(r, 3500));
+        const result = await tab.view.webContents.executeJavaScript(`(async () => {
+          const out = { hasLynx: !!window.systemlynx?.Client, notUnderSystemview: !window.systemview?.systemlynx,
+                        libraryShape: !!(window.systemlynx?.createClient && window.systemlynx?.HttpClient) };
+          if (!out.hasLynx) return out;
+          const { Client } = window.systemlynx;               // the package's own convention
+          const svc = await Client.loadService("http://localhost:3200/blink/api");
+          out.modules = Object.keys(svc).filter((k) => svc[k] && typeof svc[k] === "object" && typeof svc[k].on === "function").sort();
+          const events = [];
+          svc.Tables.on("changed", (d) => events.push(d));
+          await new Promise((r) => setTimeout(r, 1500)); // the room-join handshake
+          const state = await svc.Tables.setCell({ table: "clients", row: "r2", col: "rate", value: "10%" });
+          out.stateReturned = Array.isArray(state.cells);
+          await new Promise((r) => setTimeout(r, 900));
+          out.eventHeard = events.length > 0 ? events[0] : null;
+          return out;
+        })()`);
+        const ok = result.hasLynx && result.libraryShape && result.notUnderSystemview && result.modules?.includes("Tables") && result.stateReturned && !!result.eventHeard;
+        console.log("LYNXSMOKE:", JSON.stringify(result));
+        console.log("LYNXSMOKE:", ok ? "PASS" : "FAIL");
+        app.exit(ok ? 0 : 1);
+      } catch (e) {
+        console.log("LYNXSMOKE error:", e.message);
+        app.exit(1);
+      }
+    };
+    setTimeout(run, 5000);
   }
 });
 

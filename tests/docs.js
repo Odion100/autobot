@@ -160,6 +160,38 @@ try {
   const after = await docs.search({ q: "readme body" });
   ok("an edited file makes its chunks STALE, visibly", after.results[0].stale === true);
 
+  // RFC-058 §7's four-line flow died on its second line: `index` could refresh a corpus and not
+  // create one, so an agent could query a working corpus it had no way to make.
+  console.log("\nindex CREATES a corpus when given a root — the working-corpus flow, end to end");
+  fs.mkdirSync(path.join(root, "research"), { recursive: true });
+  fs.writeFileSync(path.join(root, "research", "vendor-api.md"), "# Vendor auth\n\ntheir refresh token rotates on every use, which is the part that breaks naive clients.\n");
+  const made = await docs.index("vendor-api", { root: path.join(root, "research"), glob: "vendor-api.md" });
+  eq("it defaulted to a WORKING corpus — a permanent one is the human's act", made.kind, "working");
+  ok("it embedded the file", made.indexed > 0);
+  ok("it is in the config now", docs.corpora().some((c) => c.name === "vendor-api"));
+  const q = await docs.search({ q: "refresh token rotates", corpus: "vendor-api" });
+  ok("and it answers when named", q.results.length > 0);
+  const blind = await docs.search({ q: "refresh token rotates" });
+  ok("but stays out of an unnamed search — research must not answer someone else's question", !blind.searched.includes("vendor-api"));
+
+  console.log("\nthe two ways create can go wrong both fail where the typo is");
+  let threw = "";
+  try { await docs.index("no-such-corpus"); } catch (e) { threw = e.message; }
+  ok("no root, no corpus — still an error, not an empty corpus", /pass a root to create one/.test(threw));
+  threw = "";
+  try { await docs.index("bad-root", { root: path.join(root, "nope") }); } catch (e) { threw = e.message; }
+  // A missing root walks zero files and reports success, which reads as "my research is embedded".
+  ok("a root that does not exist is refused", /root does not exist/.test(threw));
+
+  console.log("\nrefreshing by name alone never rewrites the shape");
+  const shapeBefore = JSON.stringify(docs.corpusNamed("vendor-api"));
+  await docs.index("vendor-api");
+  eq("same root, same glob, same kind", JSON.stringify(docs.corpusNamed("vendor-api")), shapeBefore);
+  await docs.index("vendor-api", { glob: "*.md" });
+  eq("but passing one updates it", docs.corpusNamed("vendor-api").glob, "*.md");
+  eq("and leaves the root alone", docs.corpusNamed("vendor-api").root, path.join(root, "research"));
+  await docs.drop("vendor-api");
+
   console.log("\ndrop removes what was embedded, never what was written");
   const d = await docs.drop("scratch");
   ok("the collection is gone", !store.has("docs-scratch"));

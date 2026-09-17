@@ -251,6 +251,74 @@ function saveSkill(id, name, where, text) {
   }
 }
 
+// CREATING A SKILL. saveSkill deliberately refuses a name the scan does not already know — "editing
+// is not creating, a typo must not mint a file" — and that was right, but it left the system with
+// no create verb at all. So every skill that has ever existed got here by an agent hand-writing a
+// file into a dotfolder, and the only door the system offered was editing one that was already
+// there. That is precisely how six copies of a dead CLI skill happened: creation outside the
+// system is creation nobody can see.
+//
+// SO THE TWO ACTS STAY SEPARATE AND BOTH EXIST. `saveSkill` still refuses unknown names; this one
+// refuses KNOWN ones. A create that silently overwrites is the accident the old refusal was
+// guarding against, and this keeps the guard while opening the door.
+function createSkill(id, name, where = "user", text = "") {
+  const clean = String(name || "").trim().toLowerCase();
+  // The name is the directory and the identity. A skill called "../x" or "My Skill" is a file we
+  // cannot find again from its own front matter.
+  if (!/^[a-z0-9][a-z0-9-]{1,48}$/.test(clean))
+    return { ok: false, error: `a skill name is lowercase letters, digits and dashes: "${name}"` };
+  const rec = get(id);
+  const target = skillDirs(rec).find((d) => d.where === where);
+  if (!target) return { ok: false, error: `unknown location: ${where}` };
+  if (where === "project" && !(rec && rec.cwd))
+    return { ok: false, error: "a project skill needs an agent with a cwd" };
+  if (skills(id).some((sk) => sk.name === clean && sk.where === where))
+    return { ok: false, error: `"${clean}" already exists at ${where} level — edit it instead` };
+  const dir = path.join(target.dir, clean);
+  const file = path.join(dir, "SKILL.md");
+  // THE FRONT MATTER IS THE WHOLE TRIGGER, so a new skill is born with it rather than with an empty
+  // file somebody fills in badly. A description is what decides whether a skill is ever chosen;
+  // starting from a blank page is how one ships without one.
+  const body = String(text || "").trim() || [
+    "---",
+    `name: ${clean}`,
+    "description: WHAT this does and WHEN to use it — be pushy, models under-trigger. End with a" +
+      " `Do NOT use it to…` clause naming the near-miss skills, or this will steal their turns.",
+    "---",
+    "",
+    `# ${clean}`,
+    "",
+    "A router, not a document: only what the model could not already know, and every instruction",
+    "naming a real command, path or verb.",
+    "",
+  ].join("\n");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, body.endsWith("\n") ? body : `${body}\n`);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  return { ok: true, skill: skills(id).find((sk) => sk.name === clean && sk.where === where) || null };
+}
+
+// Retiring one. The other half the system could not do: a skill's name and description load in
+// EVERY session forever, so one that never fires is a permanent tax, and "delete it" has to be a
+// verb or nobody ever will.
+function removeSkill(id, name, where = "user") {
+  const target = skills(id).find((sk) => sk.name === name && sk.where === where);
+  if (!target) return { ok: false, error: `unknown skill: ${name} (${where})` };
+  try {
+    const dir = path.dirname(target.path);
+    // A flat <name>.md has no directory of its own — removing its parent would take the whole
+    // skills folder with it.
+    if (path.basename(target.path) === "SKILL.md") fs.rmSync(dir, { recursive: true, force: true });
+    else fs.rmSync(target.path, { force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 // A project rename must carry its agents, or they point at a code that no longer
 // resolves and fail at open with "unknown project" (files-host calls this).
 function renameProject(code, next) {
@@ -414,4 +482,4 @@ function rejectProposal(id) {
 // `normalize` is exported so jobs.cjs can run a job's definition half through THIS whitelist
 // rather than keeping its own. RFC-003's rule is that AgentDefinition is adopted, not paralleled;
 // two whitelists is how it gets paralleled without anyone deciding to.
-module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, help, saveHelp, proposals, applyProposal, rejectProposal };
+module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, createSkill, removeSkill, help, saveHelp, proposals, applyProposal, rejectProposal };

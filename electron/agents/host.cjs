@@ -64,6 +64,8 @@ function register(surfaceOf) {
   ipcMain.handle("agent:permission", (_e, key, id, allow, message) =>
     sessions.answerPermission(key, id, allow, message));
   ipcMain.handle("agent:interrupt", (_e, key) => sessions.interrupt(key));
+  // the whiteboard is a shared surface: the user's wipe is as real as the agent's
+  ipcMain.handle("agent:whiteboard-wipe", (_e, key) => sessions.wipeWhiteboard(key));
   // model switching — setModel is a request; truth arrives on the next re-init
   ipcMain.handle("agent:models", (_e, key) => sessions.models(key));
   ipcMain.handle("agent:setModel", (_e, key, model) => sessions.setModel(key, model));
@@ -133,6 +135,11 @@ function register(surfaceOf) {
   // skills are docs that load ON DEMAND — shared files (user / project), editable like the rest
   ipcMain.handle("agent:skills", (_e, id) => definitions.skills(id));
   ipcMain.handle("agent:skill-save", (_e, id, name, where, text) => definitions.saveSkill(id, name, where, text));
+  // CREATE and REMOVE are separate verbs from save, deliberately: save refuses a name it does not
+  // know, create refuses one it does. Without these two the system could list and edit skills but
+  // never make one, so every skill entered through a dotfolder by hand and nothing could see it.
+  ipcMain.handle("agent:skill-create", (_e, id, name, where, text) => definitions.createSkill(id, name, where, text));
+  ipcMain.handle("agent:skill-remove", (_e, id, name, where) => definitions.removeSkill(id, name, where));
   // PAGE-LEVEL HELP — for the humans designing agents, scoped to no agent (so NOT agent:docs).
   // Lives by the agent list; the defining-agents template/walkthrough is the first one.
   ipcMain.handle("agent:help", () => definitions.help());

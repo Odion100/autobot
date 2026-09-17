@@ -183,6 +183,8 @@ const STAMP =
   `- \`${worklist.TOOL_NAME}\` — your plan for multi-step work; send the whole list every time.\n` +
   `- \`${worklist.TOOL_READ_NAME}\` — read that plan back. It is harness state, so it survives a ` +
   "compaction the conversation does not: after one, this is where you left off.\n" +
+  `- \`${worklist.TOOL_BOARD_NAME}\` — the whiteboard beside that list: freeform markdown for the ` +
+  "conversation's working state, rendered live for the user. Whole board each call; empty wipes.\n" +
   `- \`${discovery.TOOL_NAME}\` — find a tool by describing what you need, instead of assuming none exists.`;
 
 // WHAT AN AGENT PAYS EVERY TURN. The store's numbers answer "is this note earning its place";
@@ -431,6 +433,7 @@ function toolLabel(name, input = {}) {
     case "TodoWrite": return "updating the plan";
     case worklist.TOOL_NAME: return "updating the worklist";
     case worklist.TOOL_READ_NAME: return "reading the worklist";
+    case worklist.TOOL_BOARD_NAME: return "updating the whiteboard";
     case "Task": case "Agent": return `delegating: ${String(input.description || "").slice(0, 50)}`;
     default: return name;
   }
@@ -499,7 +502,9 @@ function brief(content, max = 400) {
 // from here because the window's event picker reaches it through sessions.
 const EVENTS = hooks.EVENTS;
 
-const HARNESS_MCP = /^mcp__(context|discovery|systemlynx|systemview)__/;
+// `worklist` was missing here, so `get`'s result clipped at 400 chars — the list survived and
+// the whiteboard under it was amputated, invisibly. His catch, watching the logs for it.
+const HARNESS_MCP = /^mcp__(context|discovery|systemlynx|systemview|worklist)__/;
 const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6000 : 400);
 
 // Lifecycle breadcrumbs — when a session dies on its own, this file says why.
@@ -566,7 +571,10 @@ async function pump(s) {
         // without this the rail stays empty until the model happens to write
         // again, which may be never. Same full-list shape; nothing distinguishes
         // a replayed list from a fresh one, because nothing should.
-        if (s.worklist.length) emit(s, { kind: "todo.updated", items: s.worklist });
+        if (s.worklist.length) emit(s, { kind: "todo.updated", items: s.worklist, replay: true });
+        // replay: true — this fires on every query open, and an unmarked replay wears a fresh
+        // clock stamp, so the view read it as a live write and opened the board on every send
+        if (s.whiteboard) emit(s, { kind: "whiteboard.updated", text: s.whiteboard, replay: true });
       } else if (m.type === "system" && m.subtype === "compact_boundary") {
         // compaction is an EVENT the user watches finish, not a silent gap — the
         // harness reports exactly what it freed (his ask: "see that it's working
@@ -835,13 +843,59 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     if (Array.isArray(was) && was.length) s.worklist = worklist.write(s.worklistOwner, was);
   }
   s.usedBy = Array.isArray(loadStore()[key]?.usedBy) ? loadStore()[key].usedBy : [];
-  const worklistServer = worklist.serverFor((items) => {
+  // The whiteboard shares the list's file and its lifetimes — read it back the same way, so a
+  // resumed session still holds what the conversation was holding.
+  s.whiteboard = worklist.readBoard(s.worklistOwner);
+  // AN EXECUTION OWNS ITS LIST (runs — his design). `set` WITH a source writes the run for that
+  // procedure: same source continues the open run, a new source opens a new one (the old run's
+  // file stays exactly where it stopped — where a procedure dies is the record). `set` WITHOUT a
+  // source is the session's own plan, untouched by any run. Completion is observed: the write
+  // that marks every item done closes the run.
+  s.currentRun = null; // { id, source }
+  const worklistServer = worklist.serverFor((items, source) => {
+    if (source) {
+      if (!s.currentRun || s.currentRun.source !== source) {
+        // resume the unfinished run this session already started on this source — a harness
+        // restart mid-run must not mint a corpse that reads as died-at-step-3
+        const back = worklist.openRunFor(s.worklistOwner, source);
+        s.currentRun = { id: back || worklist.newRunId(), source };
+        if (!back) emit(s, { kind: "run.started", id: s.currentRun.id, source });
+      }
+      worklist.writeRun(s.currentRun.id, s.worklistOwner, items, source);
+      s.worklistSource = source;
+      emit(s, { kind: "todo.updated", items, source, run: s.currentRun.id });
+      if (worklist.allDone(items)) {
+        emit(s, { kind: "run.finished", id: s.currentRun.id, source });
+        s.currentRun = null;
+      }
+      return;
+    }
     s.worklist = items;
+    s.worklistSource = "";
     // persisted on every write, not at init — a plan written mid-session and
     // then interrupted is exactly the one worth keeping
     worklist.write(s.worklistOwner, items);
-    emit(s, { kind: "todo.updated", items });
-  }, () => s.worklist);
+    emit(s, { kind: "todo.updated", items, source: "" });
+  }, () => s.worklist, (text) => {
+    s.whiteboard = text;
+    worklist.writeBoard(s.worklistOwner, text);
+    emit(s, { kind: "whiteboard.updated", text });
+  }, () => s.whiteboard, () => {
+    if (!s.currentRun) return null;
+    return { id: s.currentRun.id, source: s.currentRun.source, items: worklist.read(worklist.runOwner(s.currentRun.id)) };
+  }, (src) => {
+    // the mild reminder: an unknown skill/job source is EITHER a typo pointing a run record at
+    // nothing, or a namespace made up on purpose — only the agent knows which, so say it and move on
+    const m = /^(skill|job):(.+)$/.exec(src);
+    if (!m) return "";
+    if (m[1] === "skill") {
+      const known = definitions.skills(agent ? agent.id : null).some((sk) => sk.name === m[2]);
+      return known ? "" : `note: no skill named "${m[2]}" exists — fine if this is a namespace of your own.`;
+    }
+    const jobs = require("./jobs.cjs");
+    const known = jobs.list().some((j) => j.id === m[2] || j.name === m[2]);
+    return known ? "" : `note: no job "${m[2]}" exists — fine if this is a namespace of your own.`;
+  });
 
   // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
   // definition's OWN mcpServers record, so it can never describe a server this agent is
@@ -1008,6 +1062,17 @@ function answerPermission(key, id, allow, message) {
 }
 
 const interrupt = (key) => get(key).query.interrupt();
+
+// THE USER'S WIPE — the whiteboard is a shared surface, so either side may erase it. No
+// notification ceremony on the agent side: its next `get` shows the board empty, which is how
+// anyone finds out a whiteboard got erased — by looking at it.
+function wipeWhiteboard(key) {
+  const s = get(key);
+  s.whiteboard = "";
+  worklist.writeBoard(s.worklistOwner, "");
+  emit(s, { kind: "whiteboard.updated", text: "" });
+  return true;
+}
 
 // Model switching — a real SDK primitive (verified by experiment 2026-08-24), not
 // a slash command. supportedModels() is the menu: the SDK owns the list, so no
@@ -1297,7 +1362,7 @@ function transcriptsFor(cwd, projectCode) {
 
 module.exports = {
   purgeAgent, agentRuns,
-  open, send, answerPermission, interrupt, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
+  open, send, answerPermission, interrupt, wipeWhiteboard, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
   // file by path; with the name changing, a missed caller reads an empty object

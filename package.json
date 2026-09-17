@@ -27,11 +27,14 @@
     "smoke:origin": "node tests/same-origin.js",
     "smoke:caps": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_CAPSMOKE=1 node electron/launch.js",
     "smoke:contract": "node tests/app-contract.js",
+    "smoke:lynx": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_LYNXSMOKE=1 node electron/launch.js",
     "smoke:context": "node tests/context.js",
     "smoke:ledger": "node tests/ledger.js",
     "smoke:hooks": "node tests/hooks.js",
     "smoke:page-events": "node tests/page-events.js",
-    "smoke:jobs": "node tests/jobs.js"
+    "smoke:jobs": "node tests/jobs.js",
+    "build:systemlynx": "esbuild electron/apps/systemlynx.browser.entry.js --bundle --platform=browser --alias:form-data=./electron/apps/shims/form-data.js --alias:fs=./electron/apps/shims/node-empty.js --alias:path=./electron/apps/shims/node-empty.js --alias:stream=./electron/apps/shims/node-empty.js --outfile=electron/apps/systemlynx.browser.js --minify",
+    "smoke:split": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_SPLITSMOKE=1 node electron/launch.js"
   },
   "repository": {
     "type": "git",
@@ -71,6 +74,7 @@
     "@vitejs/plugin-react": "^6.1.0",
     "cz-conventional-changelog": "^3.3.0",
     "electron": "^43.4.1",
+    "esbuild": "^0.28.2",
     "marked": "^18.0.10",
     "nodemon": "^3.1.14",
     "systemlynx": "^3.3.2",

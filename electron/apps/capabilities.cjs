@@ -29,6 +29,11 @@ const GRANTS = {
   // app that merely publishes them does not. Nothing here is secret — names and own-origin URLs —
   // but a grant that is free to hand out is still a grant that was asked for.
   components: { components: "*" },
+  // window.systemlynx IS systemlynx: the library's client side, INJECTED into the page world
+  // (svPreload) rather than bridged — so it maps no systemview namespace here. Still a grant,
+  // not ambient: a page holding the library can call every method any reachable service
+  // publishes (the one-tier reach flag applies).
+  systemlynx: {},
 
   "context:read": {
     context: ["notes"],

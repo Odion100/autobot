@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import sendIcon from "./assets/send.png";
 import { marked } from "marked";
 
@@ -65,6 +65,69 @@ export default function App() {
 
   // theme — SystemView's convention: sv-dark stamped on the root, one override block
   const [dark, setDark] = useState(() => localStorage.getItem("theme") !== "light");
+  // SPLIT VIEW. Dragging a chip hides every native view (main's dragMode) so the window is pure
+  // chrome — the only way drop zones over the content area can hear the pointer, because a
+  // WebContentsView takes OS input inside its bounds. Zones: right half / bottom half.
+  const [dragTab, setDragTab] = useState(null);   // tab id being dragged
+  const [dropSide, setDropSide] = useState(null); // "right" | "bottom" | null
+  const dragArm = useRef(null);                   // {id, x, y} armed on pointerdown
+
+  const beginChipDrag = (id, e) => { dragArm.current = { id, x: e.clientX, y: e.clientY }; };
+  useEffect(() => {
+    const move = (e) => {
+      const arm = dragArm.current;
+      if (arm && dragTab === null && Math.hypot(e.clientX - arm.x, e.clientY - arm.y) > 10) {
+        setDragTab(arm.id);
+        window.autobot.tabs("dragMode", { on: true });
+      }
+      if (dragTab !== null || (arm && Math.hypot(e.clientX - arm.x, e.clientY - arm.y) > 10)) {
+        const w = window.innerWidth, h = window.innerHeight;
+        // bottom third wins when the pointer is low; otherwise the right half
+        setDropSide(e.clientY > h * 0.66 ? "bottom" : e.clientX > w * 0.5 ? "right" : null);
+      }
+    };
+    const up = () => {
+      const arm = dragArm.current;
+      if (dragTab !== null && dropSide) window.autobot.tabs("split", { id: dragTab, side: dropSide });
+      if (dragTab !== null) window.autobot.tabs("dragMode", { on: false });
+      dragArm.current = null;
+      setDragTab(null); setDropSide(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+  }, [dragTab, dropSide]);
+
+  // The divider lives in the 6px gutter the panes leave uncovered. Dragging it also hides the
+  // views (same reason), shows a ghost preview, and applies the ratio on release.
+  const [divDrag, setDivDrag] = useState(null); // live ratio while dragging
+  const startDivider = (e) => {
+    e.preventDefault();
+    window.autobot.tabs("dragMode", { on: true });
+    const sp = state.split;
+    const move = (ev) => {
+      const dockW = dockOpen ? 188 : 0;
+      const rightInset = state.agentsOpen ? (state.agentsWidth || 380) : 0;
+      const ratio = sp.side === "right"
+        ? (ev.clientX - dockW) / (window.innerWidth - dockW - rightInset)
+        : (ev.clientY - 44) / (window.innerHeight - 44);
+      setDivDrag(Math.min(0.85, Math.max(0.15, ratio)));
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const dockW = dockOpen ? 188 : 0;
+      const rightInset = state.agentsOpen ? (state.agentsWidth || 380) : 0;
+      const ratio = sp.side === "right"
+        ? (ev.clientX - dockW) / (window.innerWidth - dockW - rightInset)
+        : (ev.clientY - 44) / (window.innerHeight - 44);
+      window.autobot.tabs("splitRatio", { ratio });
+      window.autobot.tabs("dragMode", { on: false });
+      setDivDrag(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   useEffect(() => {
     document.documentElement.classList.toggle("sv-dark", dark);
     localStorage.setItem("theme", dark ? "dark" : "light");
@@ -128,8 +191,40 @@ export default function App() {
     else toggleDock(true);
   };
 
+  const dividerStyle = (() => {
+    const sp = state.split;
+    if (!sp) return null;
+    const ratio = divDrag ?? sp.ratio;
+    const dockW = dockOpen ? 188 : 0;
+    const rightInset = state.agentsOpen ? (state.agentsWidth || 380) : 0;
+    if (sp.side === "right") {
+      const x = dockW + Math.round((window.innerWidth - dockW - rightInset - 6) * ratio);
+      return { left: x, top: 44, width: 6, bottom: 0, cursor: "col-resize" };
+    }
+    const y = 44 + Math.round((window.innerHeight - 44 - 6) * ratio);
+    return { left: dockW, right: rightInset, top: y, height: 6, cursor: "row-resize" };
+  })();
+
   return (
     <div className={`chrome ${dockOpen ? "" : "dock-closed"} ${state.fullScreen ? "fullscreen" : ""}`}>
+      {dragTab !== null && (
+        <div className="split-overlay">
+          <div className={`drop-zone right ${dropSide === "right" ? "hot" : ""}`}>◨ side by side</div>
+          <div className={`drop-zone bottom ${dropSide === "bottom" ? "hot" : ""}`}>⬓ stacked</div>
+          <div className="drop-hint">drop to split · release anywhere else to cancel</div>
+        </div>
+      )}
+      {dividerStyle && (
+        <div className="split-divider" style={dividerStyle}
+             onPointerDown={startDivider}
+             onDoubleClick={() => window.autobot.tabs("unsplit", {})}
+             title="drag to resize · double-click to unsplit" />
+      )}
+      {divDrag !== null && <div className="split-ghost" style={
+        state.split.side === "right"
+          ? { left: (dockOpen ? 188 : 0), top: 44, width: dividerStyle.left - (dockOpen ? 188 : 0), bottom: 0 }
+          : { left: (dockOpen ? 188 : 0), right: (state.agentsOpen ? (state.agentsWidth || 380) : 0), top: 44, height: dividerStyle.top - 44 }
+      } />}
       {/* THE DOCK IS APPS NOW, NOT TABS. Tabs lived here AND in the strip — and the copy
           with close buttons was the one behind a toggle, so the crowded copy was the one you
           couldn't act on. Tabs belong in the strip (his call: you shouldn't open a sidebar to
@@ -199,7 +294,8 @@ export default function App() {
           {state.tabs.map((t) => (
             <span
               key={t.id}
-              className={`strip-tab ${t.id === state.activeId ? "active" : ""}`}
+              className={`strip-tab ${t.id === state.activeId ? "active" : ""} ${state.split?.other === t.id ? "paneb" : ""}`}
+              onPointerDown={(e) => beginChipDrag(t.id, e)}
               onClick={() => { setUrlDraft(null); window.autobot.tabs("switch", { id: t.id }); }}
               title={t.url}
             >

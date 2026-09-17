@@ -38,7 +38,9 @@ const EVENTS = [
   { name: "permission.request", what: "the agent asked before acting", fields: ["title", "detail"] },
   { name: "usage", what: "token usage was reported — fires at the END of a turn, a safe place to hook", fields: ["pct", "contextTokens", "contextWindow", "inputTokens", "outputTokens"] },
   { name: "compaction.after", what: "a compaction finished — the summary is in place and the reasoning behind it is gone", fields: ["trigger", "preTokens", "postTokens"] },
-  { name: "todo.updated", what: "the worklist changed", fields: [] },
+  { name: "todo.updated", what: "the worklist changed — `source` says which skill or job these steps are the execution of, `run` which execution", fields: ["source", "run"] },
+  { name: "run.started", what: "a procedure's execution opened its own worklist — a skill fired with steps, or a job began", fields: ["source", "id"] },
+  { name: "run.finished", what: "an execution's list went all-done — the only thing that marks a procedure complete", fields: ["source", "id"] },
   { name: "message.landed", what: "a cross-session message arrived", fields: ["from", "text"] },
   { name: "status", what: "the session narrated its own state", fields: ["status"] },
   // PAGE EVENTS (RFC-005 §7.1) — the browser already SEES these, so making them triggers is

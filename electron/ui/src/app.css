@@ -796,3 +796,20 @@ body {
 .chat-bar-fill.due { background: #c0392b; }
 .chat-bar-pct { text-align: right; font-weight: 600; font-size: 10.5px; color: var(--sv-text-strong); }
 .chat-bar-note { grid-column: 2 / 4; margin-top: -4px; font-size: 10px; color: var(--sv-text-faint); }
+
+/* ---- SPLIT VIEW (drag a tab out; two panes; the divider lives in the pane gutter) ---------- */
+.split-overlay { position:fixed; inset:44px 0 0 0; z-index:60; background:var(--sv-surface); }
+.drop-zone { position:absolute; display:flex; align-items:center; justify-content:center;
+  border:2px dashed var(--sv-border); border-radius:14px; color:var(--sv-text-faint);
+  font-size:15px; font-weight:600; transition:all .12s; }
+.drop-zone.right { top:16px; bottom:16px; right:16px; width:44%; }
+.drop-zone.bottom { left:16px; right:16px; bottom:16px; height:38%; }
+.drop-zone.hot { border-color:var(--sv-blue); color:var(--sv-text-strong); background:var(--sv-hover); }
+.drop-hint { position:absolute; top:18px; left:50%; transform:translateX(-50%);
+  color:var(--sv-text-faint); font-size:12px; }
+.split-divider { position:fixed; z-index:55; background:transparent; }
+.split-divider:hover { background:var(--sv-blue); opacity:.5; }
+.split-ghost { position:fixed; z-index:54; background:var(--sv-hover); opacity:.6;
+  border-right:2px solid var(--sv-blue); pointer-events:none; }
+/* the strip shows which chip is the second pane */
+.strip-tab.paneb { border-style:dashed; }

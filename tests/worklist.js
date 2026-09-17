@@ -47,6 +47,62 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   assert.deepEqual(worklist.read("job:never-written"), [], "an unknown owner is empty, not a throw");
   ok("reading a worklist nobody wrote is empty, not an error");
 
+  // ---- THE WHITEBOARD — same file, its own half ----------------------------------
+  // The one claim that makes the two features friends instead of enemies: each write
+  // patches its own half and preserves the other.
+  worklist.writeBoard("session:t-probe", "## held\n- the *draft* under discussion");
+  assert.equal(worklist.readBoard("session:t-probe"), "## held\n- the *draft* under discussion");
+  ok("the whiteboard writes and reads back, markdown intact");
+
+  worklist.write("session:t-probe", [{ id: "1", text: "changed step", state: "active" }]);
+  assert.equal(worklist.readBoard("session:t-probe"), "## held\n- the *draft* under discussion",
+    "a list write must not clobber the board");
+  ok("writing the list preserves the whiteboard");
+
+  worklist.writeBoard("session:t-probe", "replaced wholesale");
+  assert.equal(worklist.readBoard("session:t-probe"), "replaced wholesale");
+  assert.equal(worklist.read("session:t-probe")[0].text, "changed step",
+    "a board write must not clobber the list");
+  ok("writing the board preserves the list, and replaces — never appends");
+
+  worklist.writeBoard("session:t-probe", "");
+  assert.equal(worklist.readBoard("session:t-probe"), "");
+  ok("an empty write is the wipe");
+
+  assert.equal(worklist.readBoard("job:never-written"), "", "an unknown owner's board is empty, not a throw");
+  ok("reading a board nobody wrote is empty, not an error");
+
+  // ---- RUNS — an execution owns its list --------------------------------------
+  // The claim that motivated the whole feature: a skill firing mid-skill must not
+  // destroy the outer skill's half-done list.
+  const rid = worklist.newRunId();
+  worklist.writeRun(rid, "session:t-probe", [{ id: "1", text: "step one", state: "active" }], "skill:study");
+  assert.equal(worklist.read(worklist.runOwner(rid))[0].text, "step one");
+  assert.equal(worklist.read("session:t-probe")[0].text, "changed step",
+    "a run's write must not touch the session's own plan");
+  ok("a run owns its list — the session plan is untouched by it");
+
+  const found = worklist.openRunFor("session:t-probe", "skill:study");
+  assert.equal(found, rid, "the unfinished run is found by source+session");
+  ok("an unfinished run is resumable — same source, same session, same id");
+
+  worklist.writeRun(rid, "session:t-probe", [{ id: "1", text: "step one", state: "done" }], "skill:study");
+  assert.equal(worklist.openRunFor("session:t-probe", "skill:study"), null,
+    "an all-done run is finished, not resumable");
+  ok("completion is observed — every item done closes the run, no flag to lie with");
+
+  const rec = worklist.all().find((r) => r.owner === worklist.runOwner(rid));
+  assert.equal(rec.source, "skill:study");
+  assert.equal(rec.session, "session:t-probe");
+  ok("the run persists after the fact — source and session on the record");
+
+  const withBoard = worklist.all().find((r) => r.owner === "job:t-probe");
+  worklist.writeBoard("job:t-probe", "survives the after-the-fact read");
+  const rowsAfter = worklist.all().find((r) => r.owner === "job:t-probe");
+  assert.equal(rowsAfter.whiteboard, "survives the after-the-fact read");
+  worklist.writeBoard("job:t-probe", "");
+  ok("all() carries the board — readable after the fact, like the list");
+
   const rows = worklist.all();
   const row = rows.find((r) => r.owner === "job:t-probe");
   assert.ok(row && row.active === "job step" && row.updatedAt > 0, "all() reports progress and freshness");

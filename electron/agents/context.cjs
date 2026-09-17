@@ -454,7 +454,10 @@ function serverFor(identity = {}) {
             // authority of a human correction.
             const docLines = sections.map((h) => {
               const where = [h.source, h.headingPath && h.headingPath.length ? h.headingPath.join(" › ") : null].filter(Boolean).join("  ›  ");
-              return `▸ ${where}${h.part ? ` (${h.part})` : ""} — ${h.corpus} [${h.corpus}:${h.source}#]${h.stale ? "\n  ⚠ the file has CHANGED since this was indexed" : ""}\n  ${String(h.text).replace(/\n+/g, " ").slice(0, 400)}`;
+              // the score rides here too — the notes half always had one, and a shelf without it
+              // reads as unranked (his catch, the moment the log finally showed both halves)
+              const sc = typeof h.score === "number" ? `, match ${h.score.toFixed(2)}` : "";
+              return `▸ ${where}${h.part ? ` (${h.part})` : ""} — ${h.corpus}${sc} [${h.corpus}:${h.source}#]${h.stale ? "\n  ⚠ the file has CHANGED since this was indexed" : ""}\n  ${String(h.text).replace(/\n+/g, " ").slice(0, 400)}`;
             });
             const parts = [];
             if (hits.length)
@@ -629,14 +632,31 @@ function serverFor(identity = {}) {
       tool(
         "docsIndex",
         "Embed a corpus, or refresh it. Unchanged files cost nothing — re-indexing is by file hash, " +
-          "so only what changed is embedded. INDEXING PUBLISHES: a wrong document that is indexed " +
-          "answers confidently, so run docsPlan and read the document first.",
+          "so only what changed is embedded. Pass a `root` with a NEW name to create your own WORKING " +
+          "corpus: write research to a file, embed it, then query it with context() instead of ever " +
+          "reading the whole thing back. A working corpus is yours — it never surfaces in anyone " +
+          "else's search unless they name it, and docsDrop retires it when you are done. " +
+          "INDEXING PUBLISHES: a wrong document that is indexed answers confidently, so run docsPlan " +
+          "and read the document first.",
         {
-          name: z.string().describe("the corpus name, from docsList"),
+          name: z.string().describe("an existing corpus from docsList to refresh, or a new name to create one"),
+          root: z.string().optional().describe("absolute path to the folder holding the files — required to CREATE a corpus"),
+          glob: z.string().optional().describe("which files under root, e.g. `**/*.md` (the default) or `vendor-api.md`"),
+          exclude: z.array(z.string()).optional().describe("globs to leave out — a corpus is defined as much by what it omits"),
+          kind: z.enum(["working"]).optional().describe("working (the default for a corpus you create): your own research, yours to drop. Permanent corpora are the human's to create, on the context surface"),
         },
-        async ({ name }) => {
+        async ({ name, root, glob, exclude, kind }) => {
           try {
-            const r = await docs.index(name);
+            // A PERMANENT CORPUS IS THE HUMAN'S SHAPE. Limiting `kind` to "working" stops an agent
+            // minting one; it does not stop an agent REPOINTING an existing one — docsIndex({name:
+            // "systemlynx", root: "/tmp/whatever"}) would otherwise rewrite the framework corpus out
+            // from under everybody. Same rule as docsDrop, one line lower down.
+            if (root || glob || exclude || kind) {
+              const c = docs.corpusNamed(name);
+              if (c && (c.kind || "permanent") === "permanent")
+                return { content: [{ type: "text", text: `"${name}" is a permanent corpus — its root and glob are the human's to change, on the context surface. Refresh it by name alone, or pick a new name for your own working corpus.` }], isError: true };
+            }
+            const r = await docs.index(name, { root, glob, exclude, kind });
             return {
               content: [{ type: "text", text:
                 `${r.corpus} [${r.kind}] → ${r.collection}\n` +

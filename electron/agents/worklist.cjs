@@ -31,15 +31,34 @@ const TOOL_READ = "get";
 // `tools` must include this name or the agent silently loses its worklist.
 const TOOL_NAME = `mcp__${SERVER}__${TOOL}`;
 const TOOL_READ_NAME = `mcp__${SERVER}__${TOOL_READ}`;
-// Both names, for the allow-list: pinning `tools` without the reader leaves an
+// THE WHITEBOARD — the worklist's sibling, same store, same lifetimes (his design, 2026-09-16).
+// The list is the state of the WORK; the board is the state of the CONVERSATION — drafts under
+// discussion, values being worked out, the things that otherwise float up the chat and have to be
+// re-said. One tool is the whole API: markdown in replaces the board, nothing in wipes it.
+const TOOL_BOARD = "whiteboard";
+const TOOL_BOARD_NAME = `mcp__${SERVER}__${TOOL_BOARD}`;
+// All names, for the allow-list: pinning `tools` without the reader leaves an
 // agent able to write a plan it can never read back.
-const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME];
+const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME];
 
 // ONE ACTIVE ITEM, enforced rather than requested (their §3 left it to me).
 // "What is it doing right now" has to be unambiguous or the rendering is a guess;
 // a rule the tool applies can't drift, a convention the model remembers will.
 // Extra actives are demoted to pending in order, so the FIRST one wins — the
 // model's own ordering is the intent, and we don't reorder its plan.
+// WHERE THE STEPS CAME FROM. A skill is a procedure — an ordered list of steps someone follows —
+// so when one fires, its steps ARE a worklist. Recording which skill they came from is what turns
+// "the skill fired" into "the skill was executed, and it got to step 3."
+//
+// That gap is real and it is the one thing we could never measure about a skill: the Skill tool
+// tells us it was CHOSEN, and nothing at all tells us it was FOLLOWED. An agent can read seven
+// steps, do two, and the system sees a success.
+//
+// `source` is provenance, `owner` is ownership, and they are orthogonal on purpose: a job's list is
+// owned by `job:<id>` and may carry steps sourced from several skills. One structure, two questions
+// — whose plan is this, and where did these steps come from.
+const sourceOf = (v) => String(v || "").trim().slice(0, 60);
+
 function normalize(items = []) {
   let seenActive = false;
   return items.slice(0, 50).map((it, i) => {
@@ -81,22 +100,73 @@ const DIR = path.join(os.homedir(), ".autobot", "worklists");
 const fileFor = (owner) =>
   path.join(DIR, `${String(owner || "unowned").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(-90)}.json`);
 
-function read(owner) {
+function readFile(owner) {
   try {
-    const r = JSON.parse(fs.readFileSync(fileFor(owner), "utf8"));
-    return Array.isArray(r.items) ? r.items : [];
+    return JSON.parse(fs.readFileSync(fileFor(owner), "utf8")) || {};
   } catch {
-    return [];
+    return {};
   }
 }
 
-function write(owner, items) {
+function read(owner) {
+  const r = readFile(owner);
+  return Array.isArray(r.items) ? r.items : [];
+}
+
+const readBoard = (owner) => String(readFile(owner).whiteboard || "");
+
+function save(owner, patch) {
   try {
     fs.mkdirSync(DIR, { recursive: true });
+    const cur = readFile(owner);
     // `updatedAt` is not decoration: for a list nobody watched, "when did this last move" is the
     // difference between a job that finished and a job that stopped.
-    fs.writeFileSync(fileFor(owner), JSON.stringify({ owner, items, updatedAt: Date.now() }, null, 2));
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, ...patch, updatedAt: Date.now() };
+    if (!next.source) delete next.source;
+    if (!next.whiteboard) delete next.whiteboard;
+    if (!next.session) delete next.session;
+    fs.writeFileSync(fileFor(owner), JSON.stringify(next, null, 2));
   } catch {}
+}
+
+// The list and the board share one file, so each write patches its own half and PRESERVES the
+// other — a set() that clobbered the whiteboard would make the two features enemies.
+function write(owner, items, source = "") {
+  save(owner, { items, source: source || undefined });
+  return items;
+}
+
+function writeBoard(owner, text) {
+  const t = String(text || "").slice(0, 20000);
+  save(owner, { whiteboard: t || undefined });
+  return t;
+}
+
+// ---------------------------------------------------------------------------------------------
+// RUNS — an EXECUTION owns its list (his design, 2026-09-17). One flat list per session broke the
+// moment skills chain: "a skill replaces what's on the list" meant replace = destroyed evidence,
+// and the half-done list of the outer skill was exactly the artifact worth keeping. So a skill
+// firing is a RUN, the run owns its list under `run:<id>`, and the session's own plan stays its
+// own file. Completion is OBSERVED, not declared: a run with every item done is finished; one
+// left mid-flight is the record of where it died. No state flag to lie with.
+// ---------------------------------------------------------------------------------------------
+let runSeq = 0;
+const newRunId = () => `r${Date.now().toString(36)}${(runSeq++ % 1296).toString(36).padStart(2, "0")}`;
+const runOwner = (id) => `run:${id}`;
+const allDone = (items) => items.length > 0 && items.every((i) => i.state === "done");
+
+// The comeback: a harness restart mid-run must not orphan the run. The newest unfinished run
+// with this source, started by this session, is still THE run — resume it instead of minting a
+// second id and leaving a corpse that reads as died-at-step-3.
+function openRunFor(session, source) {
+  const hit = all().find(
+    (r) => r.owner.startsWith("run:") && r.source === source && r.session === session && !allDone(r.items)
+  );
+  return hit ? hit.owner.slice(4) : null;
+}
+
+function writeRun(id, session, items, source) {
+  save(runOwner(id), { items, source: source || undefined, session });
   return items;
 }
 
@@ -112,9 +182,14 @@ function all() {
       const items = normalize(r.items || []);
       out.push({
         owner: r.owner || n.replace(/\.json$/, ""),
+        // WHAT THIS LIST IS THE EXECUTION OF, when it is not somebody's own plan. This is the only
+        // record that a procedure was actually followed rather than merely chosen.
+        source: r.source || "",
+        session: r.session || "",
         file: path.join(DIR, n),
         updatedAt: r.updatedAt || 0,
         items,
+        whiteboard: String(r.whiteboard || ""),
         done: items.filter((i) => i.state === "done").length,
         total: items.length,
         active: (items.find((i) => i.state === "active") || {}).text || "",
@@ -133,7 +208,12 @@ function all() {
 // and "update your worklist before compaction" was advice that could not pay off. `get`
 // closes it: system context survives the boundary and tells the agent to read; the worklist
 // holds the state. Two harness layers covering each other.
-function serverFor(onSet, getList = () => []) {
+// AN UNKNOWN SOURCE GETS A REMINDER, NEVER AN ERROR (his design). `skill:x` / `job:y` may
+// reference a real registry entry — or be a namespace the agent made up on purpose, which is
+// legitimate. So the check appends one ignorable line: the agent that typo'd a real job reacts;
+// the agent that named its own lane reads past it. `checkSource` is injected by sessions.cjs so
+// this module stays free of the registries.
+function serverFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null) {
   return createSdkMcpServer({
     name: SERVER,
     version: "1.0.0",
@@ -155,16 +235,33 @@ function serverFor(onSet, getList = () => []) {
               })
             )
             .describe("the whole list, in order — not a delta"),
+          source: z
+            .string()
+            .optional()
+            .describe(
+              'where these steps came from, when they are not your own plan: "skill:<name>" when ' +
+                'you are following a skill\'s procedure, "job:<id>" when running a job — or any ' +
+                "name you choose, when you just want a separate list for a lane of work. A source " +
+                "opens a RUN — a separate list owned by that execution; your session plan is " +
+                "untouched, and marking every item done is what completes the run. It is how the " +
+                "system knows a procedure was FOLLOWED and not just chosen — leave it off for " +
+                "your own working plan"
+            ),
         },
-        async ({ items }) => {
+        async ({ items, source }) => {
           const list = normalize(items);
-          onSet(list);
+          const src = sourceOf(source);
+          onSet(list, src);
           const done = list.filter((i) => i.state === "done").length;
           const active = list.find((i) => i.state === "active");
+          let note = "";
+          if (src && checkSource) {
+            try { note = checkSource(src) || ""; } catch {}
+          }
           return {
             content: [{
               type: "text",
-              text: `worklist: ${done}/${list.length} done${active ? ` · now: ${active.text}` : ""}`,
+              text: `worklist: ${done}/${list.length} done${active ? ` · now: ${active.text}` : ""}${note ? `\n${note}` : ""}`,
             }],
           };
         },
@@ -175,28 +272,64 @@ function serverFor(onSet, getList = () => []) {
       ),
       tool(
         TOOL_READ,
-        "Read your worklist — the plan you recorded for this session. It is harness state, " +
-          "so it survives a compaction that summarized the conversation away. Call it after a " +
-          "compaction, and any time you need to know where you left off.",
+        "Read your worklist — the plan you recorded for this session, plus the open run's list " +
+          "if a procedure is in flight, and the whiteboard. It is harness state, so it survives a " +
+          "compaction that summarized the conversation away. One call restores all of it — call " +
+          "it after a compaction, and any time you need to know where you left off.",
         {},
         async () => {
+          const mark = (st) => (st === "done" ? "\u2713" : st === "active" ? "\u25b8" : "\u00b7");
+          const render = (items) => items.map((i) => `${mark(i.state)} ${i.text}`).join("\n");
           const list = normalize(getList() || []);
+          // ONE CALL, THE WHOLE SESSION STATE: the session plan, the open run's list when a
+          // procedure is in flight, and the whiteboard. Anything `get` leaves out is the one
+          // piece of held state a compaction still eats.
+          const run = getRun ? getRun() : null;
+          const runTail = run && run.items && run.items.length
+            ? `\n\nrun ${run.id} (${run.source}): ${run.items.filter((i) => i.state === "done").length}/${run.items.length} done\n${render(normalize(run.items))}`
+            : "";
+          const board = String(getBoard() || "");
+          const boardTail = board ? `\n\nwhiteboard:\n${board}` : "";
           if (!list.length) {
-            return { content: [{ type: "text", text: "worklist: empty — nothing recorded for this session." }] };
+            return { content: [{ type: "text", text: `worklist: empty — nothing recorded for this session.${runTail}${boardTail}` }] };
           }
           const done = list.filter((i) => i.state === "done").length;
-          const mark = (st) => (st === "done" ? "\u2713" : st === "active" ? "\u25b8" : "\u00b7");
-          const body = list.map((i) => `${mark(i.state)} ${i.text}`).join("\n");
           return {
-            content: [{ type: "text", text: `worklist: ${done}/${list.length} done\n${body}` }],
+            content: [{ type: "text", text: `worklist: ${done}/${list.length} done\n${render(list)}${runTail}${boardTail}` }],
           };
         },
         // same reasoning as set: a reader the model has to hunt for is a reader it
         // will not reach for in the one moment it matters — straight after a compaction.
         { alwaysLoad: true }
       ),
+      tool(
+        TOOL_BOARD,
+        "Your whiteboard — the freeform markdown surface beside the worklist, for the CONVERSATION'S " +
+          "working state: drafts being refined, values under discussion, open threads — the things " +
+          "that otherwise float up the chat and have to be re-said. Send the WHOLE board each time; " +
+          "it replaces what was there. Send nothing to wipe it. It renders live for the user (who " +
+          "can also wipe it at any time), and it survives compaction — `get` returns it with the " +
+          "list. Worklist items are tasks; this is prose. Long artifacts belong in files, not here.",
+        {
+          markdown: z
+            .string()
+            .optional()
+            .describe("the whole board, as markdown — replaces what was there; omit (or empty) to wipe"),
+        },
+        async ({ markdown }) => {
+          const text = String(markdown || "");
+          if (onBoard) onBoard(text);
+          return {
+            content: [{
+              type: "text",
+              text: text ? `whiteboard: ${text.length} chars held` : "whiteboard: wiped",
+            }],
+          };
+        },
+        { alwaysLoad: true }
+      ),
     ],
   });
 }
 
-module.exports = { serverFor, normalize, DIR, read, write, all, SERVER, TOOL, TOOL_READ, TOOL_NAME, TOOL_READ_NAME, TOOL_NAMES };
+module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

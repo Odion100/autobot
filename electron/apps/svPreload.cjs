@@ -14,6 +14,7 @@ const FULL = {
   // RFC-055 — semantic retrieval belongs to the HARNESS, so every app gets it;
   // SystemView supplies the corpus and the node types, never the runtime.
   vectors: require("./vectorsBridge.cjs")(ipcRenderer),
+
   // RFC-055 — the context store's management half: list/edit/delete notes. Reading and
   // querying ride on `vectors` above; these are the curate verbs his surface needs.
   context: {
@@ -125,6 +126,10 @@ const FULL = {
     // skills: shared on-demand docs (user + project scan), editable by name
     skills: (id) => ipcRenderer.invoke("agent:skills", id),
     saveSkill: (id, name, where, text) => ipcRenderer.invoke("agent:skill-save", id, name, where, text),
+    // Creating and retiring are their own verbs — save edits a skill that exists, create refuses
+    // one that does. Until these existed the system could read and edit skills but never make one.
+    createSkill: (id, name, where, text) => ipcRenderer.invoke("agent:skill-create", id, name, where, text),
+    removeSkill: (id, name, where) => ipcRenderer.invoke("agent:skill-remove", id, name, where),
     // page-level HELP — for the humans designing agents, scoped to no agent
     help: () => ipcRenderer.invoke("agent:help"),
     saveHelp: (key, text) => ipcRenderer.invoke("agent:help-save", key, text),
@@ -182,6 +187,7 @@ const FULL = {
         answerPermission: (id, allow, message) =>
           ipcRenderer.invoke("agent:permission", key, id, allow, message),
         interrupt: () => ipcRenderer.invoke("agent:interrupt", key),
+        wipeWhiteboard: () => ipcRenderer.invoke("agent:whiteboard-wipe", key),
         // model switching — SDK menu + a request whose truth is the next re-init
         models: () => ipcRenderer.invoke("agent:models", key),
         setModel: (model) => ipcRenderer.invoke("agent:setModel", key, model),
@@ -276,4 +282,20 @@ const theme = {
   },
 };
 
-contextBridge.exposeInMainWorld("systemview", { ...build(FULL, granted), theme });
+const EXPOSED = build(FULL, granted);
+contextBridge.exposeInMainWorld("systemview", { ...EXPOSED, theme });
+
+// window.systemlynx IS systemlynx — the library, injected into the PAGE world for apps holding
+// the `systemlynx` grant. The real bundle runs in the page (real sockets, real axios), so
+// `const { Client } = systemlynx; Client.loadService(url)` is exactly the package's own
+// convention — nothing proxied, nothing invented. webFrame.executeJavaScript targets the main
+// world, and the preload runs before page scripts, so the global is there when an app looks.
+if (granted.includes("systemlynx")) {
+  try {
+    const { webFrame } = require("electron");
+    const fs = require("fs");
+    const path = require("path");
+    webFrame.executeJavaScript(fs.readFileSync(path.join(__dirname, "systemlynx.browser.js"), "utf8"))
+      .catch((e) => console.error("[systemlynx inject]", e.message));
+  } catch (e) { console.error("[systemlynx inject]", e.message); }
+}

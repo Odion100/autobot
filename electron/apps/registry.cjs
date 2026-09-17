@@ -31,7 +31,7 @@ const BUILTINS = [
     capabilities: [
       "context:read", "context:write",
       "files:read", "files:write",
-      "projects", "auth", "agents", "dictation", "terminal", "components",
+      "projects", "auth", "agents", "dictation", "terminal", "components", "systemlynx",
     ],
   },
 ];

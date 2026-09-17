@@ -281,9 +281,34 @@ function indexedState(collection) {
   return byFile;
 }
 
-async function index(name, { maxChars = MAX_CHARS } = {}) {
-  const corpus = corpusNamed(name);
-  if (!corpus) throw new Error(`no corpus "${name}" — add it to ${CONFIG}`);
+// CREATE-OR-REFRESH — RFC-058 §7. The working-corpus flow (write research to a file, embed it,
+// query it without ever reading it whole) needs `index` to be able to bring a corpus into being,
+// because there is no other create door: `corpora.json` is hand-written and the `+ corpus` form is
+// a human surface. Shipped for a while with only the refresh half, which left the RFC's own
+// four-line example dead on its second line.
+//
+// The shape arguments are the ENGINE's, not a permission model — the same call backs the human's
+// form, which must be able to create a `permanent` corpus. Who may create what is decided at the
+// agent-facing door (context.cjs), where an agent's `kind` is limited to `working`.
+async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind } = {}) {
+  let corpus = corpusNamed(name);
+
+  if (!corpus || root || glob || exclude || kind) {
+    const next = {
+      name,
+      kind: kind || (corpus && corpus.kind) || "working",
+      root: root ? path.resolve(root) : corpus && corpus.root,
+      glob: glob || (corpus && corpus.glob) || "**/*.md",
+      ...(exclude ? { exclude } : corpus && corpus.exclude ? { exclude: corpus.exclude } : {}),
+    };
+    if (!next.root) throw new Error(`no corpus "${name}" — pass a root to create one, or add it to ${CONFIG}`);
+    // A root that does not exist indexes zero files and reports success, which reads as "my research
+    // is embedded" and answers nothing forever after. Fail where the typo is.
+    if (!fs.existsSync(next.root)) throw new Error(`root does not exist: ${next.root}`);
+    saveCorpora(corpus ? corpora().map((c) => (c.name === name ? next : c)) : [...corpora(), next]);
+    corpus = next;
+  }
+
   const collection = collectionOf(corpus);
   const before = indexedState(collection);
   const present = new Set();
