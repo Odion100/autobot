@@ -644,13 +644,18 @@ async function pump(s) {
             });
           }
         }
+        // WHOSE HANDS DID THIS — a subagent's messages carry parent_tool_use_id (the Agent call
+        // that spawned it). Stamping it on the emitted events is what lets the feed route a lane's
+        // log to its lane instead of interleaving it, unlabeled, with the owner's own work — which
+        // is what it did until RFC-059's panel needed the distinction.
+        const lane = m.parent_tool_use_id || undefined;
         for (const b of m.message.content || []) {
-          if (b.type === "text") emit(s, { kind: "assistant.text", delta: "", done: true, text: b.text });
-          else if (b.type === "thinking") emit(s, { kind: "assistant.thinking", delta: "", done: true, text: b.thinking });
+          if (b.type === "text") emit(s, { kind: "assistant.text", delta: "", done: true, text: b.text, ...(lane ? { parent: lane } : {}) });
+          else if (b.type === "thinking") emit(s, { kind: "assistant.thinking", delta: "", done: true, text: b.thinking, ...(lane ? { parent: lane } : {}) });
           else if (b.type === "tool_use") {
             s.toolCalls.set(b.id, { name: b.name, input: b.input });
             s.toolsInFlight++;
-            emit(s, { kind: "tool.call", id: b.id, name: b.name, summary: toolSummary(b.name, b.input), input: b.input });
+            emit(s, { kind: "tool.call", id: b.id, name: b.name, summary: toolSummary(b.name, b.input), input: b.input, ...(lane ? { parent: lane } : {}) });
           }
         }
       } else if (m.type === "user") {
@@ -679,6 +684,7 @@ async function pump(s) {
               emit(s, {
                 kind: "tool.result",
                 id: b.tool_use_id,
+                ...(m.parent_tool_use_id ? { parent: m.parent_tool_use_id } : {}),
                 ok,
                 summary: `${toolSummary(call.name, call.input)} — ${ok ? "done" : "failed"}`,
                 detail: brief(b.content, resultBudget(call.name)),

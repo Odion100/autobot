@@ -150,6 +150,30 @@ function writeBoard(owner, text) {
 // own file. Completion is OBSERVED, not declared: a run with every item done is finished; one
 // left mid-flight is the record of where it died. No state flag to lie with.
 // ---------------------------------------------------------------------------------------------
+// RETENTION — his rule: no stale logs piling up. A CLOSED run (every item done) older than two
+// weeks is a record nobody will read again; the sweep runs once per process start, quietly. A run
+// that DIED mid-list is never swept — where a procedure died is the record, and it stays until
+// someone acts on it.
+const RUN_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+function pruneRuns(now = Date.now()) {
+  let names = [];
+  try { names = fs.readdirSync(DIR); } catch { return 0; }
+  let swept = 0;
+  for (const n of names) {
+    if (!n.startsWith("run-") || !n.endsWith(".json")) continue;
+    try {
+      const r = JSON.parse(fs.readFileSync(path.join(DIR, n), "utf8"));
+      const items = Array.isArray(r.items) ? r.items : [];
+      if (items.length && items.every((i) => i.state === "done") && now - (r.updatedAt || 0) > RUN_KEEP_MS) {
+        fs.unlinkSync(path.join(DIR, n));
+        swept++;
+      }
+    } catch {}
+  }
+  return swept;
+}
+try { pruneRuns(); } catch {}
+
 let runSeq = 0;
 const newRunId = () => `r${Date.now().toString(36)}${(runSeq++ % 1296).toString(36).padStart(2, "0")}`;
 const runOwner = (id) => `run:${id}`;
@@ -332,4 +356,4 @@ function serverFor(onSet, getList = () => [], onBoard = null, getBoard = () => "
   });
 }
 
-module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

@@ -96,6 +96,22 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   assert.equal(rec.session, "session:t-probe");
   ok("the run persists after the fact — source and session on the record");
 
+  // ---- RETENTION — closed runs age out, died runs never do -----------------------
+  {
+    const oldRun = worklist.newRunId();
+    const deadRun = worklist.newRunId();
+    worklist.writeRun(oldRun, "session:t-probe", [{ id: "1", text: "done long ago", state: "done" }], "skill:old");
+    worklist.writeRun(deadRun, "session:t-probe", [{ id: "1", text: "died here", state: "active" }], "skill:dead");
+    const future = Date.now() + 15 * 24 * 60 * 60 * 1000;
+    const swept = worklist.pruneRuns(future);
+    assert.ok(swept >= 1, "the old closed run was swept");
+    assert.deepEqual(worklist.read(worklist.runOwner(oldRun)), [], "closed + old = gone");
+    assert.equal(worklist.read(worklist.runOwner(deadRun))[0].text, "died here",
+      "a run that died mid-list is NEVER swept — where it died is the record");
+    ok("retention: closed runs age out after two weeks; died runs stay until someone acts");
+    fs.unlinkSync(worklist.DIR + "/run-" + deadRun + ".json");
+  }
+
   const withBoard = worklist.all().find((r) => r.owner === "job:t-probe");
   worklist.writeBoard("job:t-probe", "survives the after-the-fact read");
   const rowsAfter = worklist.all().find((r) => r.owner === "job:t-probe");
