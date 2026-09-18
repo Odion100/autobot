@@ -27,6 +27,13 @@ const require = createRequire(import.meta.url);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-worklist-"));
 fs.mkdirSync(path.join(scratch, "work"), { recursive: true });
 
+// THE STORE IS SCRATCH TOO — set before the require, because DIR is read at module load. The
+// retention claim runs pruneRuns(now + 15 days); against the real store that swept every closed
+// run on the machine — the user's live lane rows vanished mid-demo (2026-09-17). A test that
+// exercises a janitor never gets the keys to the real house.
+process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
+fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
+
 const worklist = require("../electron/agents/worklist.cjs");
 const sessions = require("../electron/agents/sessions.cjs");
 
@@ -95,6 +102,27 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   assert.equal(rec.source, "skill:study");
   assert.equal(rec.session, "session:t-probe");
   ok("the run persists after the fact — source and session on the record");
+
+  // ---- STANDING LANES (RFC-059 slice 2) — rows read run files, scoped by project --
+  // A lane row is born from a spawn and dies at cleanup; a refresh must not kill it.
+  // That only holds if the query is by PROJECT, not by the session that spawned it.
+  {
+    const lane = worklist.newRunId();
+    worklist.writeRun(lane, "session:proj-a:old-session-id", [{ id: "1", text: "build", state: "done" }], "lane:test/a");
+    const mine = worklist.laneRuns("proj-a");
+    assert.equal(mine.length, 1, "the lane run is found by project alone");
+    assert.equal(mine[0].source, "lane:test/a");
+    assert.deepEqual(worklist.laneRuns("proj-b"), [], "another project sees none of it");
+    // the skill run written above is proj-agnostic noise: never a lane
+    assert.ok(!worklist.laneRuns("t-probe").some((r) => !r.source.startsWith("lane:")),
+      "only lane: sources are lanes — a skill run never becomes a row");
+    ok("laneRuns: project-scoped, source-gated — a refresh (new session id) cannot hide a lane");
+
+    assert.equal(worklist.deleteRun(lane), true, "the user's confirmed delete removes the record");
+    assert.deepEqual(worklist.laneRuns("proj-a"), [], "and the row's source of truth is gone");
+    assert.equal(worklist.deleteRun(lane), false, "deleting what is already gone says so");
+    ok("deleteRun: the record dies once, honestly — verification is absence");
+  }
 
   // ---- RETENTION — closed runs age out, died runs never do -----------------------
   {

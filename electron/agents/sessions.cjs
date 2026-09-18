@@ -1080,6 +1080,14 @@ function wipeWhiteboard(key) {
   return true;
 }
 
+// STANDING LANES (RFC-059 slice 2) — the rows read run files + git, not session events, so they
+// outlive refreshes. Keyed by PROJECT, not by this session: the lanes an earlier life of this
+// chat spawned still belong on its strip. Delete is the user's press, after the row's confirm.
+function laneRuns(key) {
+  return worklist.laneRuns(String(key || "").split(":")[0]);
+}
+const deleteLaneRun = (_key, id) => worklist.deleteRun(id);
+
 // Model switching — a real SDK primitive (verified by experiment 2026-08-24), not
 // a slash command. supportedModels() is the menu: the SDK owns the list, so no
 // panel hardcodes one. setModel is a REQUEST — truth arrives on the next turn's
@@ -1368,7 +1376,7 @@ function transcriptsFor(cwd, projectCode) {
 
 module.exports = {
   purgeAgent, agentRuns,
-  open, send, answerPermission, interrupt, wipeWhiteboard, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
+  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
   // file by path; with the name changing, a missed caller reads an empty object

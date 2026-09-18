@@ -66,6 +66,9 @@ function register(surfaceOf) {
   ipcMain.handle("agent:interrupt", (_e, key) => sessions.interrupt(key));
   // the whiteboard is a shared surface: the user's wipe is as real as the agent's
   ipcMain.handle("agent:whiteboard-wipe", (_e, key) => sessions.wipeWhiteboard(key));
+  // standing lanes: run files by project, and the user's confirmed delete of one
+  ipcMain.handle("agent:lane-runs", (_e, key) => sessions.laneRuns(key));
+  ipcMain.handle("agent:lane-run-delete", (_e, key, id) => sessions.deleteLaneRun(key, id));
   // model switching — setModel is a request; truth arrives on the next re-init
   ipcMain.handle("agent:models", (_e, key) => sessions.models(key));
   ipcMain.handle("agent:setModel", (_e, key, model) => sessions.setModel(key, model));

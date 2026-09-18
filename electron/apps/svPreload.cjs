@@ -188,6 +188,10 @@ const FULL = {
           ipcRenderer.invoke("agent:permission", key, id, allow, message),
         interrupt: () => ipcRenderer.invoke("agent:interrupt", key),
         wipeWhiteboard: () => ipcRenderer.invoke("agent:whiteboard-wipe", key),
+        // standing lanes (RFC-059): every lane run for this PROJECT — refresh-proof, read from
+        // disk — and the user's confirmed delete of one
+        laneRuns: () => ipcRenderer.invoke("agent:lane-runs", key),
+        deleteLaneRun: (id) => ipcRenderer.invoke("agent:lane-run-delete", key, id),
         // model switching — SDK menu + a request whose truth is the next re-init
         models: () => ipcRenderer.invoke("agent:models", key),
         setModel: (model) => ipcRenderer.invoke("agent:setModel", key, model),

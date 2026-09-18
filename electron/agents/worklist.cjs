@@ -92,7 +92,10 @@ function normalize(items = []) {
 // ONE FILE PER OWNER, and the file is the truth. Not a cache beside the session store — a copy
 // that can disagree is worse than no copy, and the session store already proved it by holding a
 // `worklist` key nobody could read from outside.
-const DIR = path.join(os.homedir(), ".autobot", "worklists");
+// Overridable for TESTS ONLY. The retention test calls pruneRuns(now + 15 days) — run against
+// the real store, that swept every closed run on the machine, including the user's live lane
+// records (2026-09-17, his rows vanished). A test that exercises a janitor gets a scratch house.
+const DIR = process.env.AUTOBOT_WORKLISTS_DIR || path.join(os.homedir(), ".autobot", "worklists");
 
 // An owner is a free-form string; it becomes a filename, so it is sanitised rather than trusted.
 // `job:abc` and `session:abc` must not collide, which is why the separator survives as a dash
@@ -192,6 +195,29 @@ function openRunFor(session, source) {
 function writeRun(id, session, items, source) {
   save(runOwner(id), { items, source: source || undefined, session });
   return items;
+}
+
+// STANDING LANES (RFC-059 slice 2, his design) — a lane row is born from a spawn and dies at
+// cleanup; nothing in between kills it. The rows read THIS, not session events, so a refresh
+// cannot eat a row whose debris is still on disk. Project-scoped: a run's session field is
+// `session:<project>:<id>`, and the lane rows belong to the project's chat, whichever session
+// of it is open now.
+function laneRuns(projectCode) {
+  const pre = `session:${projectCode}:`;
+  return all().filter(
+    (r) => r.owner.startsWith("run:") && r.source.startsWith("lane:") && r.session.startsWith(pre)
+  );
+}
+
+// The delete is the USER'S, pressed on the row after a confirm — never an agent tidying quietly.
+// Scoped to run files by construction: the owner is minted from the id, so no path escapes DIR.
+function deleteRun(id) {
+  try {
+    fs.unlinkSync(fileFor(runOwner(String(id || ""))));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Every worklist on this machine, newest first — what makes one readable AFTER the fact, by
@@ -356,4 +382,4 @@ function serverFor(onSet, getList = () => [], onBoard = null, getBoard = () => "
   });
 }
 
-module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, deleteRun, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
