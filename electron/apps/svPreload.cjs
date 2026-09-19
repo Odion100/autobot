@@ -157,10 +157,6 @@ const FULL = {
     docsIndex: (name) => ipcRenderer.invoke("agent:docs-index", name),
     docsDrop: (name) => ipcRenderer.invoke("agent:docs-drop", name),
     saveCorpus: (rec) => ipcRenderer.invoke("agent:docs-save-corpus", rec),
-    // an agent proposing its own doc — it never writes def.prompt, the approval does
-    proposals: () => ipcRenderer.invoke("agent:proposals"),
-    applyProposal: (id, text) => ipcRenderer.invoke("agent:proposal-apply", id, text),
-    rejectProposal: (id) => ipcRenderer.invoke("agent:proposal-reject", id),
     // per-agent run history: { [agentId]: { runs, lastActive, capabilities } }
     runs: () => ipcRenderer.invoke("agent:runs"),
 

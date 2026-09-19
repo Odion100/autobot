@@ -16,6 +16,16 @@ const HISTORY_LIMIT = 2000;
 
 const sessions = new Map(); // key -> session record
 
+// THE LAST QUOTA REPORT the API gave anyone — {status, type, resetsAt(sec)} — cached so ambient
+// stamping (fireHooks) can say what the account can afford. Absent until a limit event arrives;
+// the API only speaks at limit moments, and inventing a number would be worse than saying nothing.
+let lastQuota = null;
+function noteQuota(m) {
+  const q = m && m.quotaLimits;
+  if (!q) return;
+  lastQuota = { status: q.status || "", type: q.rateLimitType || "", resetsAt: q.resetsAt || 0 };
+}
+
 // Sticky across shell restarts: the SDK's session id is enough to resume a
 // conversation, so it lives in ~/.autobot/sessions.json (the visible shell-state
 // home). open() auto-resumes from here; kill() is the deliberate forget.
@@ -246,6 +256,12 @@ function sdkOptionsOf(def = {}) {
   if (def.tools?.length)
     o.allowedTools = [...def.tools, ...worklist.TOOL_NAMES, discovery.TOOL_NAME, ...services.TOOL_NAMES, ...context.TOOL_NAMES];
   if (def.disallowedTools?.length) o.disallowedTools = def.disallowedTools;
+  // PER-AGENT SKILL CARRY (his design — the profile's toggle writes def.skills). The SDK's own
+  // context filter: a listed set enables exactly those; absent/empty forwards nothing, which is
+  // the SDK's "no override" = all discovered — the same back-compat the UI promises. This line
+  // was MISSING while the comment above claimed skills were forwarded — the toggle would have
+  // been a control writing a field nothing read.
+  if (Array.isArray(def.skills) && def.skills.length) o.skills = def.skills;
   // FORWARDED NOW — the "real server to wire" arrived (SystemLynx's MCP workbench,
   // the first SystemLynx service exposing tools over MCP). The shape mismatch this
   // comment warned about is the whole job: a definition stores an ARRAY of specs
@@ -313,9 +329,25 @@ function fireHooks(s, event) {
   // A token at a time is not a moment. Deltas are the highest-frequency events in the system and
   // nothing meaningful can key off half a sentence — the settled event carries the same text.
   if ((event.kind === "assistant.text" || event.kind === "assistant.thinking") && event.done !== true) return;
+  // AMBIENT FIELDS (his design, hooks.AMBIENT is the declaration): every event carries what the
+  // world can afford alongside what happened, so a `when` can say {"ctxPct":{"lte":40}} on any
+  // kind. Stamped on a copy — the emitted event that feeds/history see stays exactly what
+  // happened. Absent means unknown: the quota trio exists only after the API reported a limit.
+  const win = contextWindowOf(s.model);
+  const ev = {
+    ...event,
+    ...(win && s.lastCtxSnapshot ? { ctxPct: Math.round((s.lastCtxSnapshot / win) * 100) } : {}),
+    ...(lastQuota
+      ? {
+          quotaStatus: lastQuota.status,
+          quotaType: lastQuota.type,
+          ...(lastQuota.resetsAt ? { quotaResetsInMin: Math.max(0, Math.round((lastQuota.resetsAt * 1000 - Date.now()) / 60000)) } : {}),
+        }
+      : {}),
+  };
   let hits = [];
   try {
-    hits = hooks.fire(event, {
+    hits = hooks.fire(ev, {
       agentId: s.agentId,
       projectCode: s.projectCode,
       // `every-agent` is conservative by default (see hooks.inScope): an agent carries a shared
@@ -519,6 +551,8 @@ function logLife(s, what) {
 async function pump(s) {
   try {
     for await (const m of s.query) {
+      // quota reports ride message envelopes only at limit moments — cache every sighting
+      noteQuota(m);
       if (m.type === "system" && m.subtype === "init") {
         s.sdkSessionId = m.session_id;
         s.model = m.model; // rides usage events so the meter knows its real window

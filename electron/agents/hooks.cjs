@@ -25,19 +25,23 @@ const path = require("path");
 // "who does this apply to" is in the thing you are reading.
 const DIR = path.join(os.homedir(), ".autobot", "hooks");
 
+// A `when` condition is only as good as the vocabulary the event declares (his rule). Fields
+// with a FIXED set of values carry them in `values` — machine-readable, so a surface can OFFER
+// them (the jobs pattern: offer a trigger, don't ask someone to type one) and an agent authoring
+// a hook copies instead of guessing.
 const EVENTS = [
-  { name: "session.started", what: "a session opened — `origin` is cold | reinit | resumed", fields: ["origin", "model"] },
+  { name: "session.started", what: "a session opened — `origin` is cold | reinit | resumed", fields: ["origin", "model"], values: { origin: ["cold", "reinit", "resumed"] } },
   { name: "session.reinit", what: "the session was re-initialized on current docs", fields: ["resumedFrom", "agentId"] },
-  { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"] },
+  { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"], values: { reason: ["finished", "interrupted", "error"] } },
   { name: "user.prompt", what: "a turn arrived from the human (or a visiting agent)", fields: ["text"] },
   { name: "assistant.text", what: "the agent spoke", fields: ["text", "done"] },
   { name: "assistant.thinking", what: "the agent thought out loud", fields: ["text", "done"] },
   { name: "tool.call", what: "the agent called a tool", fields: ["tool", "summary", "input.command", "input.file_path"] },
-  { name: "tool.result", what: "a tool answered", fields: ["tool", "ok", "output"] },
+  { name: "tool.result", what: "a tool answered", fields: ["tool", "ok", "output"], values: { ok: [true, false] } },
   { name: "file.changed", what: "a file under the session's cwd changed", fields: ["path"] },
   { name: "permission.request", what: "the agent asked before acting", fields: ["title", "detail"] },
   { name: "usage", what: "token usage was reported — fires at the END of a turn, a safe place to hook", fields: ["pct", "contextTokens", "contextWindow", "inputTokens", "outputTokens"] },
-  { name: "compaction.after", what: "a compaction finished — the summary is in place and the reasoning behind it is gone", fields: ["trigger", "preTokens", "postTokens"] },
+  { name: "compaction.after", what: "a compaction finished — the summary is in place and the reasoning behind it is gone", fields: ["trigger", "preTokens", "postTokens"], values: { trigger: ["auto", "manual"] } },
   { name: "todo.updated", what: "the worklist changed — `source` says which skill or job these steps are the execution of, `run` which execution", fields: ["source", "run"] },
   { name: "run.started", what: "a procedure's execution opened its own worklist — a skill fired with steps, or a job began", fields: ["source", "id"] },
   { name: "run.finished", what: "an execution's list went all-done — the only thing that marks a procedure complete", fields: ["source", "id"] },
@@ -56,6 +60,18 @@ const EVENTS = [
   // deliberately not hookable — a hook on it would deliver a pointer, which writes a receipt,
   // which fires the hook, at input-queue speed. hooks.fire() refuses the kind; leaving it out of
   // the picker means nobody is offered the loop in the first place.
+];
+
+// AMBIENT FIELDS — stamped onto EVERY session event at the fire choke point (sessions.fireHooks),
+// so any hook's `when` can mix "what happened" with "what the world can afford" (his design): a
+// study hook on a cold start can add {"ctxPct": {"lte": 40}}; a quota-aware one can back off when
+// the account is throttled. Absent means honestly unknown — the quota fields exist only after the
+// API has reported a limit event; nothing here is invented.
+const AMBIENT = [
+  { name: "ctxPct", what: "context window fill % of the session the event belongs to" },
+  { name: "quotaStatus", what: "last account quota status the API reported (e.g. rejected) — absent until one arrives" },
+  { name: "quotaType", what: "which limit that report named — five_hour | weekly — absent until one arrives" },
+  { name: "quotaResetsInMin", what: "minutes until that limit resets, at fire time — absent until one arrives" },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -412,6 +428,7 @@ function remove(name) {
 module.exports = {
   DIR,
   EVENTS,
+  AMBIENT,
   isEvent,
   mayWrite,
   list,

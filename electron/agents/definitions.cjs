@@ -414,72 +414,8 @@ function adopt({ projectCode, cwd, permissionMode, model } = {}) {
 // docPaths is exported for the STALENESS fingerprint (sessions.compositionOf): the CLAUDE.md
 // stack is one of the things a session's context is composed from at open, so "has the
 // composition changed" cannot be answered without asking the one place that knows the stack.
-// RFC-057 follow-on — AN AGENT PROPOSES ITS OWN DOC, IT DOES NOT WRITE IT. The `agent-authoring`
-// skill drafts into `<id>.proposed.md` beside the definition and stops. Approving is a human act,
-// and it is the approval that writes `def.prompt` — an agent rewriting its own identity is the one
-// edit that must never land quietly.
-//
-// The sidecar is markdown with front matter: `by`, `cut`, `added`. `cut` is required in spirit
-// (the doc only ever grows; a pass that removes nothing did nothing) but not enforced here —
-// refusing to show a proposal because its front matter is thin would hide the work, not improve it.
-const proposalOf = (id) => path.join(DIR, `${String(id).replace(/[^a-zA-Z0-9._-]/g, "")}.proposed.md`);
-
-function parseProposal(raw) {
-  const m = /^---\n([\s\S]*?)\n---\n?/.exec(raw);
-  const front = {};
-  if (m)
-    m[1].split("\n").forEach((line) => {
-      const i = line.indexOf(":");
-      if (i > 0) front[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-    });
-  return { ...front, text: (m ? raw.slice(m[0].length) : raw).trim() };
-}
-
-function proposals() {
-  ensureDir();
-  const out = [];
-  let files = [];
-  try { files = fs.readdirSync(DIR).filter((f) => f.endsWith(".proposed.md")); } catch { return out; }
-  for (const f of files) {
-    const id = f.replace(/\.proposed\.md$/, "");
-    try {
-      const raw = fs.readFileSync(path.join(DIR, f), "utf8");
-      const p = parseProposal(raw);
-      const rec = get(id);
-      out.push({
-        id,
-        name: (rec && rec.name) || id,
-        by: p.by || id,
-        cut: p.cut || "",
-        added: p.added || "",
-        text: p.text,
-        // THE LIVE DOC RIDES ALONG. A proposal with nothing to compare against is a wall of prose;
-        // the panel needs both sides to show what actually changed.
-        current: (rec && rec.def && rec.def.prompt) || "",
-        at: (() => { try { return fs.statSync(path.join(DIR, f)).mtime.toISOString(); } catch { return null; } })(),
-      });
-    } catch {}
-  }
-  return out;
-}
-
-// APPROVE IS THE WRITE. `text` is passed back from the panel so an edit he made while reading is
-// what lands — reading a proposal and fixing a line in it is approving, not a separate act.
-function applyProposal(id, text) {
-  const rec = get(id);
-  if (!rec) throw new Error(`no agent ${id}`);
-  const prompt = String(text != null ? text : (parseProposal(fs.readFileSync(proposalOf(id), "utf8")).text || ""));
-  if (!prompt.trim()) throw new Error("an empty agent doc is not an approval — reject it instead");
-  const saved = save({ id, prompt });
-  try { fs.unlinkSync(proposalOf(id)); } catch {}
-  return saved;
-}
-
-function rejectProposal(id) {
-  try { fs.unlinkSync(proposalOf(id)); return true; } catch { return false; }
-}
 
 // `normalize` is exported so jobs.cjs can run a job's definition half through THIS whitelist
 // rather than keeping its own. RFC-003's rule is that AgentDefinition is adopted, not paralleled;
 // two whitelists is how it gets paralleled without anyone deciding to.
-module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, createSkill, removeSkill, help, saveHelp, proposals, applyProposal, rejectProposal };
+module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, createSkill, removeSkill, help, saveHelp };

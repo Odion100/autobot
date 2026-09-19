@@ -714,9 +714,14 @@ function serverFor(identity = {}) {
           "vocabulary is fixed. Also shows who authored each existing hook.",
         {},
         async () => {
-          const evs = hooks.EVENTS.map(
-            (e) => `  ${e.name}${e.fields.length ? ` (${e.fields.join(", ")})` : ""} — ${e.what}`
-          );
+          // fields with a declared value set print it inline — the vocabulary is offered, not guessed
+          const evs = hooks.EVENTS.map((e) => {
+            const fs = e.fields.map((f) =>
+              e.values && e.values[f] ? `${f}=${e.values[f].join("|")}` : f
+            );
+            return `  ${e.name}${fs.length ? ` (${fs.join(", ")})` : ""} — ${e.what}`;
+          });
+          const amb = hooks.AMBIENT.map((a) => `  ${a.name} — ${a.what}`);
           const hs = hooks.list().map(
             (h) =>
               `  ${h.name} · on ${h.on} · ${h.kind} · ${h.do || "(no pointer)"}` +
@@ -730,6 +735,7 @@ function serverFor(identity = {}) {
                 type: "text",
                 text:
                   `EVENTS you may hook (${hooks.EVENTS.length}):\n${evs.join("\n")}\n\n` +
+                  `AMBIENT fields — stamped on every session event, usable in any \`when\` alongside the event's own:\n${amb.join("\n")}\n\n` +
                   (hs.length ? `HOOKS that exist (${hs.length}):\n${hs.join("\n")}` : "No hooks exist yet.") +
                   `\n\nA hook only fires for an agent that CARRIES it — that tick lives on the agent's ` +
                   `profile and is the human's. Writing one does not arm it.`,
