@@ -632,10 +632,13 @@ function serverFor(identity = {}) {
       tool(
         "docsIndex",
         "Embed a corpus, or refresh it. Unchanged files cost nothing — re-indexing is by file hash, " +
-          "so only what changed is embedded. Pass a `root` with a NEW name to create your own WORKING " +
-          "corpus: write research to a file, embed it, then query it with context() instead of ever " +
-          "reading the whole thing back. A working corpus is yours — it never surfaces in anyone " +
-          "else's search unless they name it, and docsDrop retires it when you are done. " +
+          "so only what changed is embedded. Pass a `root` with a NEW name to create one. " +
+          "ASK YOURSELF WHICH YOU ARE DOING: using the vector store as a mechanism for YOURSELF — " +
+          "research you wrote to a file, embedded so you can query it back instead of re-reading the " +
+          "whole thing (`working`, the default) — or producing CONTEXT THE SYSTEM KEEPS, retrievable " +
+          "by anyone, outliving the task that produced it (`permanent`). That is the `kind` " +
+          "distinction, and only you can know which it is; a search that names no corpus reads " +
+          "permanent ones and only those. " +
           "INDEXING PUBLISHES: a wrong document that is indexed answers confidently, so run docsPlan " +
           "and read the document first.",
         {
@@ -643,18 +646,30 @@ function serverFor(identity = {}) {
           root: z.string().optional().describe("absolute path to the folder holding the files — required to CREATE a corpus"),
           glob: z.string().optional().describe("which files under root, e.g. `**/*.md` (the default) or `vendor-api.md`"),
           exclude: z.array(z.string()).optional().describe("globs to leave out — a corpus is defined as much by what it omits"),
-          kind: z.enum(["working"]).optional().describe("working (the default for a corpus you create): your own research, yours to drop. Permanent corpora are the human's to create, on the context surface"),
+          kind: z.enum(["working", "permanent"]).optional().describe("PURPOSE, not permission. `working` = the vector store used as a mechanism for yourself: your own research, never surfacing in anyone else's search unless they name it, yours to drop with docsDrop when the job is done. Permanent = context the system keeps for whoever comes next. Producing durable context is your job, not something to bring to the human. `working` is the DEFAULT, so saying nothing still gets you a private scratch corpus; pass `permanent` when you mean other agents to find it, and passing it on an existing working corpus PROMOTES that corpus — same files, nothing re-embedded."),
         },
         async ({ name, root, glob, exclude, kind }) => {
           try {
-            // A PERMANENT CORPUS IS THE HUMAN'S SHAPE. Limiting `kind` to "working" stops an agent
-            // minting one; it does not stop an agent REPOINTING an existing one — docsIndex({name:
-            // "systemlynx", root: "/tmp/whatever"}) would otherwise rewrite the framework corpus out
-            // from under everybody. Same rule as docsDrop, one line lower down.
+            // TWO DIFFERENT GUARDS LIVED HERE UNDER ONE RATIONALE, AND ONLY ONE OF THEM IS REAL.
+            //
+            // The real one is THIS: repointing an existing corpus — docsIndex({name: "systemlynx",
+            // root: "/tmp/whatever"}) — rewrites it out from under everyone who retrieves from it.
+            // That is a clobber guard, and it would be just as right if a human were doing it.
+            //
+            // The other was the `kind` enum limited to "working", justified as "a permanent corpus
+            // is the human's shape". That rationale was wrong: the human MONITORS retrieval rather
+            // than reading what gets indexed, so gating permanence on approval gates it on someone
+            // who is not reading. Producing durable context is the agent's job — and the enum is now
+            // lifted, so the tool says so. What it cost while it stood: BUApp's finished nine-file
+            // handbook sat in the private tier with no way out and no way for its author to promote
+            // it. `working` stays the DEFAULT, which is what keeps it a tool rather than a tier.
+            //
+            // THE GUARD BELOW STILL PROTECTS SHAPE, NOT TIER, and promotion walks past it because
+            // the corpus being promoted is still `working` at the moment of the call.
             if (root || glob || exclude || kind) {
               const c = docs.corpusNamed(name);
               if (c && (c.kind || "permanent") === "permanent")
-                return { content: [{ type: "text", text: `"${name}" is a permanent corpus — its root and glob are the human's to change, on the context surface. Refresh it by name alone, or pick a new name for your own working corpus.` }], isError: true };
+                return { content: [{ type: "text", text: `"${name}" is a permanent corpus and others retrieve from it — repointing its root or glob rewrites it out from under them. Refresh it by name alone, or pick a new name for a corpus of your own.` }], isError: true };
             }
             const r = await docs.index(name, { root, glob, exclude, kind });
             return {
@@ -677,10 +692,11 @@ function serverFor(identity = {}) {
         async ({ name }) => {
           try {
             const c = docs.corpusNamed(name);
-            // A permanent corpus is the human's, configured by hand; dropping one is not an agent's
-            // call. A working corpus is the agent's own scratch and it should clean up after itself.
+            // Not about authorship — about blast radius. A permanent corpus is something others
+            // retrieve from, so dropping one deletes a source out from under them. A working corpus
+            // is the agent's own mechanism and it should clean up after itself.
             if (c && (c.kind || "permanent") === "permanent")
-              return { content: [{ type: "text", text: `"${name}" is a permanent corpus — dropping it is the human's call. Working corpora are yours to drop.` }], isError: true };
+              return { content: [{ type: "text", text: `"${name}" is a permanent corpus — others retrieve from it, so dropping it removes a source they depend on. Working corpora are yours to drop.` }], isError: true };
             const r = await docs.drop(name);
             if (r.error) return { content: [{ type: "text", text: r.error }], isError: true };
             return { content: [{ type: "text", text: `Dropped ${r.corpus} (${r.dropped} chunks).` }] };

@@ -29,6 +29,7 @@
     "smoke:contract": "node tests/app-contract.js",
     "smoke:lynx": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_LYNXSMOKE=1 node electron/launch.js",
     "smoke:context": "node tests/context.js",
+    "smoke:docs": "node tests/docs.js",
     "smoke:ledger": "node tests/ledger.js",
     "smoke:hooks": "node tests/hooks.js",
     "smoke:page-events": "node tests/page-events.js",

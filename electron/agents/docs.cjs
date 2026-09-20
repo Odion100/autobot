@@ -138,10 +138,13 @@ function splitLong(sec, maxChars = MAX_CHARS, minChars = MIN_CHARS) {
 // Corpora — configured, never hardcoded. That is the difference between a pipeline for two repos
 // and a feature someone else can point at their own docs.
 //
-// `kind` decides who may write it:
-//   permanent — the indexer writes, agents read. Wrong chunk? Fix the FILE and re-index.
-//   working   — an agent made it (research written to a file, embedded, queried without ever
-//               reading the whole thing) and the same agent drops it when done.
+// `kind` decides who can FIND it. It is a VISIBILITY choice, never an approval tier:
+//   permanent — published reference: a search that names no corpus reads these, and only these.
+//               Wrong chunk? Fix the FILE and re-index.
+//   working   — private research: written to a file, embedded, and queried instead of being read
+//               back whole. Invisible unless someone names the corpus; its author drops it.
+// Either kind is an agent's to create (the door is context.cjs, and `working` is its default).
+// Promotion is just a re-index with the other kind — same collection, nothing re-embedded.
 // ---------------------------------------------------------------------------------------------
 function corpora() {
   try {
@@ -288,8 +291,14 @@ function indexedState(collection) {
 // four-line example dead on its second line.
 //
 // The shape arguments are the ENGINE's, not a permission model — the same call backs the human's
-// form, which must be able to create a `permanent` corpus. Who may create what is decided at the
-// agent-facing door (context.cjs), where an agent's `kind` is limited to `working`.
+// form. Who may do what is decided at the agent-facing door (context.cjs): an agent picks either
+// kind (`working` by default), and what the door still refuses is RESHAPING or dropping a corpus
+// that is already permanent.
+//
+// `kind` is in the rewrite condition below on purpose: passing it alone, with no root or glob,
+// changes an existing corpus's kind and keeps everything else. That is PROMOTION — finished
+// research becoming documentation other agents can find — and it costs no embeddings, because the
+// collection is named after the corpus, not after its kind.
 async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind } = {}) {
   let corpus = corpusNamed(name);
 

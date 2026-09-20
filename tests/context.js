@@ -15,7 +15,14 @@ import os from "node:os";
 // context.cjs is CJS by repo rule (every harness file is .cjs); an ESM test reaches it via
 // createRequire — same bridge same-origin.js uses to read shipped source.
 const require = createRequire(import.meta.url);
+// A TEMP CORPUS CONFIG, set before context.cjs pulls in docs.cjs — which reads AUTOBOT_CORPORA at
+// load time, once. The corpus claims at the bottom of this file CREATE and PROMOTE corpora; against
+// the live ~/.autobot/corpora.json that would repoint the human's handbooks and publish a test
+// fixture into everybody's unnamed search. Same lesson as the throwaway scopes above.
+const CORPORA = path.join(os.tmpdir(), "corpora-smoke-" + process.pid + ".json");
+process.env.AUTOBOT_CORPORA = CORPORA;
 const ctx = require("../electron/agents/context.cjs");
+const docs = require("../electron/agents/docs.cjs");
 const vectors = require("../electron/apps/vectors.cjs");
 const scopes = { allowed: ["project:smoketest-sys", "project:smoketest-b", "agent:smoketest"], default: "agent:smoketest" };
 let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what); process.exit(1); } console.log("ok ", what); };
@@ -122,6 +129,59 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     ok(fmv("---nope") === "nope", "a value that opens with --- cannot start a new frontmatter block");
     ok(fmv("a\r\nid: X").indexOf("\n") === -1, "CRLF is sanitised too, not just \\n");
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // ---- CORPUS KIND IS THE AGENT'S CHOICE ---------------------------------------
+  // Exercised through the DOOR — the registered docsIndex handler out of serverFor() — because the
+  // thing that was wrong was never the engine. docs.cjs has always taken either kind; a single
+  // `z.enum(["working"])` at the agent-facing tool was the whole restriction, and a test that calls
+  // docs.index() directly would have passed on the day the clamp shipped.
+  {
+    const tools = ctx.serverFor({ slot: "smoketest", projectCode: "smoketest-sys" }).instance._registeredTools;
+    const docsIndex = (args) => tools.docsIndex.handler(args, {});
+    const said = (r) => (r.content || []).map((c) => c.text).join("");
+    const WORK = "smoketest-research", PERM = "smoketest-handbook";
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "corpus-kind-"));
+    fs.writeFileSync(path.join(dir, "note.md"),
+      "# Vendor auth\n\ntheir refresh token rotates on every single use, which is the part that breaks naive clients.\n");
+
+    // A capability nobody can SAY is not a capability: the schema is half the change.
+    ok(tools.docsIndex.inputSchema.safeParse({ name: "x", kind: "permanent" }).success, "the door's schema accepts kind: permanent");
+    ok(/permanent/.test(tools.docsIndex.description) && /working/.test(tools.docsIndex.description),
+      "...and the description tells an agent both kinds exist");
+
+    // THE TOOL STAYS A TOOL — say nothing, get a private corpus, exactly as before.
+    const made = await docsIndex({ name: WORK, root: dir });
+    ok(!made.isError && docs.corpusNamed(WORK).kind === "working", "a corpus an agent creates is still WORKING by default");
+    ok(/\[working\]/.test(said(made)), "...and the door says so back: " + said(made).split("\n")[0]);
+
+    // What the clamp used to forbid outright.
+    const perm = await docsIndex({ name: PERM, root: dir, kind: "permanent" });
+    ok(!perm.isError && docs.corpusNamed(PERM).kind === "permanent", "an agent can create a PERMANENT corpus");
+
+    // The property worth keeping: private-by-default is enforced at SEARCH, not by the clamp.
+    const blind = await docs.search({ q: "refresh token rotates" });
+    ok(blind.searched.includes(PERM) && !blind.searched.includes(WORK),
+      "a search that names no corpus reads permanent only: " + JSON.stringify(blind.searched));
+
+    // PROMOTION — the harm this change exists to fix. buapp-docs was finished documentation stuck
+    // in the private tier with no door out of it.
+    const promoted = await docsIndex({ name: WORK, kind: "permanent" });
+    ok(!promoted.isError && docs.corpusNamed(WORK).kind === "permanent", "an agent can promote its own working corpus");
+    ok(/0 chunks embedded/.test(said(promoted)), "promotion re-embeds nothing — the collection is named for the corpus, not its kind");
+    ok(docs.corpusNamed(WORK).root === dir, "...and leaves the shape it was promoting alone");
+    const after = await docs.search({ q: "refresh token rotates" });
+    ok(after.searched.includes(WORK), "the promoted corpus now answers an unnamed question");
+
+    // The guard that survives is about SHAPE, not tier — a permanent corpus is not an agent's to
+    // repoint. This is the line that stops docsIndex({name:"systemlynx", root:"/tmp/whatever"}).
+    const repoint = await docsIndex({ name: PERM, root: os.tmpdir() });
+    ok(repoint.isError && docs.corpusNamed(PERM).root === dir, "an existing permanent corpus is still not an agent's to repoint");
+
+    for (const c of [WORK, PERM]) await vectors.drop("docs-" + c);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(CORPORA, { force: true });
   }
 
   console.log("\nALL " + n + " CLAIMS PASS");
