@@ -19,6 +19,7 @@ const TOOL_NAMES = [
   "show", "tv", "reply", "board", "comments",
   "nav", "refresh", "act", "highlight",
   "connect", "disconnect",
+  "terminal", "terminals",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -55,6 +56,22 @@ async function hub(moduleName, fn, arg) {
 
 const text = (s) => ({ content: [{ type: "text", text: String(s).slice(0, 40000) }] });
 const fail = (e) => ({ content: [{ type: "text", text: e.message || String(e) }], isError: true });
+
+// THE TERMINAL'S ANSWER ARRIVES WRAPPED, the way a cross-session message does — his ask, and the
+// reason is the same one: this text came from somewhere else and the boundary has to be visible, or
+// a shell's output reads as something the agent itself said. The tag carries the facts that decide
+// what to do next: which terminal, and the exit code.
+const renderTerminal = (r) => {
+  if (!r || r.ok === false) return `the terminal refused: ${(r && r.error) || "no answer"}`;
+  const head = r.running
+    ? `<terminal session="${r.session}" running="true">`
+    : `<terminal session="${r.session}" exit="${r.exit == null ? "?" : r.exit}">`;
+  const body = String(r.output || "").trim();
+  const tail = r.running
+    ? `\n</terminal>\nstill running — no exit marker yet. It is working, or waiting for an answer typed into the terminal.`
+    : `\n</terminal>`;
+  return `${head}\n${body || "(no output)"}${tail}`;
+};
 
 // ---- renderers: the human-readable half of the feed contract ----
 
@@ -207,6 +224,47 @@ function serverFor(identity = {}) {
         async ({ projectCode, namespace, bail, dryRun }) => {
           try {
             return text(renderRun(await hub("Agent", "runTests", { projectCode, namespace, bail, dryRun })));
+          } catch (e) { return fail(e); }
+        }
+      ),
+      tool(
+        "terminal",
+        "Run a command in a terminal the human has handed you, and get its output and exit code back " +
+          "— the same contract as any shell: one call in, stdout and the real $? out. It is HIS " +
+          "terminal, already open and already authenticated, which is the point: if it is SSH'd into " +
+          "a remote box, you are on that box. So the state is shared — a `cd` moves his prompt too, " +
+          "and anything you export outlives your command. Use `terminals` to see which ones you hold; " +
+          "a terminal you were not granted refuses and says so. Long jobs: prefer firing them " +
+          "detached to a log file over sitting on them, the same as you would over SSH.",
+        {
+          session: z.string().describe("the terminal's id, e.g. systemview-test-2 — from `terminals`"),
+          command: z.string().describe("the command, exactly as you would type it"),
+          timeoutMs: z.number().optional().describe("how long to wait for it to finish (default 120000)"),
+        },
+        async ({ session, command, timeoutMs }) => {
+          try {
+            return text(renderTerminal(await hub("Agent", "terminalRun", { session, command, timeoutMs, agent: who })));
+          } catch (e) { return fail(e); }
+        }
+      ),
+      tool(
+        "terminals",
+        "Which terminals you may type in right now, and where each one's log is. Granted by the " +
+          "human, per terminal, and revocable at any time — so read this rather than remembering.",
+        {},
+        async () => {
+          try {
+            const r = await hub("Agent", "terminalGrants", {});
+            const all = (r && r.grants) || {};
+            const mine = Object.entries(all).filter(([, g]) => g && g.agent === who);
+            if (!mine.length) return text("no terminals are granted to you right now.");
+            const os = require("os");
+            const path = require("path");
+            return text(
+              mine
+                .map(([s]) => `${s}   log: ${path.join(os.homedir(), ".autobot", "terminals")}/*_${s}.log`)
+                .join("\n")
+            );
           } catch (e) { return fail(e); }
         }
       ),
