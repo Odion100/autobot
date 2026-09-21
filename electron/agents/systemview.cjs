@@ -63,9 +63,14 @@ const fail = (e) => ({ content: [{ type: "text", text: e.message || String(e) }]
 // what to do next: which terminal, and the exit code.
 const renderTerminal = (r) => {
   if (!r || r.ok === false) return `the terminal refused: ${(r && r.error) || "no answer"}`;
+  // WHERE IT RAN RIDES IN THE TAG. An agent holding two terminals — one local, one SSH'd into a
+  // droplet — cannot tell them apart from output alone, and guessing wrong means reading the wrong
+  // machine's logs and reporting them as the other's. The shell answers for itself, so on an SSH'd
+  // session these are the REMOTE host and cwd.
+  const where = `${r.host ? ` host="${r.host}"` : ""}${r.cwd ? ` cwd="${r.cwd}"` : ""}`;
   const head = r.running
-    ? `<terminal session="${r.session}" running="true">`
-    : `<terminal session="${r.session}" exit="${r.exit == null ? "?" : r.exit}">`;
+    ? `<terminal session="${r.session}"${where} running="true">`
+    : `<terminal session="${r.session}"${where} exit="${r.exit == null ? "?" : r.exit}">`;
   const body = String(r.output || "").trim();
   const tail = r.running
     ? `\n</terminal>\nstill running — no exit marker yet. It is working, or waiting for an answer typed into the terminal.`
