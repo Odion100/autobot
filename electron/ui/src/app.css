@@ -47,7 +47,7 @@ body {
 .stellar-mark { filter: drop-shadow(0 0 5px rgba(124, 196, 255, 0.45)); flex: none; }
 
 /* the app you're IN — left corner, click to open the switcher */
-.card-logo { width: 15px; height: 15px; border-radius: 4px; flex: none; }
+.card-logo { width: 15px; height: 15px; border-radius: 4px; flex: none; object-fit: contain; }
 .card-hint { font-size: 9.5px; color: var(--sv-text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
 .card.closed { opacity: 0.6; }
 .card.closed:hover { opacity: 1; }

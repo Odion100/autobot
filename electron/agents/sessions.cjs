@@ -239,6 +239,22 @@ function weights(agentId, cwd) {
 // forwarded as-is; `prompt` becomes systemPrompt (the assignment IS the system
 // prompt), and undefined fields are omitted entirely rather than sent as
 // undefined, which the SDK would treat as "set to nothing" for some of them.
+// RFC-013 test seams — the identity mapping and wrapping for the two prompt-side moments,
+// extracted so the boundaries are provable without a live model.
+function startInjection(def = {}) {
+  try {
+    const t = context.injectedFor({ projectCode: def.projectCode, slot: def.id }, "session-start");
+    return t ? t + "\n\n" : "";
+  } catch { return ""; }
+}
+function postCompactionInjection(identity = {}) {
+  try {
+    const t = context.injectedFor(identity, "post-compaction");
+    if (!t) return null;
+    return { type: "user", message: { role: "user", content: [{ type: "text", text: t }] }, parent_tool_use_id: null, session_id: "" };
+  } catch { return null; }
+}
+
 function sdkOptionsOf(def = {}) {
   const o = {};
   // A CUSTOM systemPrompt REPLACES the preset — and per the SDK, `append` has no
@@ -246,7 +262,10 @@ function sdkOptionsOf(def = {}) {
   // each case rather than set once: appended to the agent's own assignment when it
   // has one, appended to the claude_code preset when it does not. Either way it is
   // present, and neither way costs a turn.
-  const stamped = presence() + systemContext() + STAMP;
+  // RFC-013 — the session-start shelf rides the same composition as presence: not part of the
+  // conversation, costs no turn, and survives compaction by construction. Read at open — a fresh
+  // mark reaches the NEXT session, which is what "session-start" means.
+  const stamped = presence() + systemContext() + startInjection(def) + STAMP;
   o.systemPrompt = def.prompt
     ? `${def.prompt}\n\n${stamped}`
     : { type: "preset", preset: "claude_code", append: stamped };
@@ -632,6 +651,18 @@ async function pump(s) {
           preTokens: cm.preTokens ?? cm.pre_tokens,
           postTokens: cm.postTokens ?? cm.post_tokens,
         });
+        // RFC-013 — the post-compaction shelf. This is the moment the agent holds a summary
+        // instead of its reasoning — most confident, most wrong — and these are notes an author
+        // CHOSE to meet itself with on the far side. Same input-queue ride as a hook pointer:
+        // a turn from outside, never words the human typed. Read live; delivery is receipted so
+        // it is never silent.
+        try {
+          const inj = postCompactionInjection({ projectCode: s.projectCode, slot: s.agentId });
+          if (inj) {
+            s.input.push(inj);
+            emit(s, { kind: "context.injected", moment: "post-compaction", chars: inj.message.content[0].text.length, text: inj.message.content[0].text });
+          }
+        } catch {}
       } else if (m.type === "system" && m.subtype === "status") {
         // the SDK narrates compaction itself: status:"compacting" while it runs,
         // then compact_result / compact_error on the verdict — exactly what the
@@ -1060,6 +1091,26 @@ function get(key) {
 //
 // Images come BEFORE the text in the block list — Anthropic's own guidance, and it reads right:
 // the picture is what you are pointing at, the sentence is what you are saying about it.
+// RFC-013 — the every-turn shelf: the highest rent in the system (spends attention on every
+// single prompt), which is why its cap is the smallest. Read live per send; rides as a leading
+// block inside the SAME user message, so the feed (which echoes only the human's text) never
+// shows it as words he typed. Extracted so the boundary is testable without a live model —
+// delivery verified by a test, not by reading my own code.
+function sendContent(identity, text, pics = []) {
+  let turnShelf = "";
+  try { turnShelf = context.injectedFor(identity, "every-turn"); } catch {}
+  return [
+    ...pics.map((im) => ({
+      type: "image",
+      source: { type: "base64", media_type: im.mime, data: im.data },
+    })),
+    ...(turnShelf && String(text || "").trim() ? [{ type: "text", text: turnShelf }] : []),
+    // A picture with no caption is a whole message — do not invent words for it, and do not send
+    // an empty text block, which the API rejects.
+    ...(String(text || "").trim() ? [{ type: "text", text }] : []),
+  ];
+}
+
 function send(key, text, images = []) {
   const s = get(key);
   const pics = (Array.isArray(images) ? images : []).filter((im) => im && im.data && im.mime);
@@ -1070,16 +1121,10 @@ function send(key, text, images = []) {
     text,
     images: pics.map((im) => ({ name: im.name || "image", mime: im.mime, thumb: im.thumb || "" })),
   });
-  const content = [
-    ...pics.map((im) => ({
-      type: "image",
-      source: { type: "base64", media_type: im.mime, data: im.data },
-    })),
-    // A picture with no caption is a whole message — do not invent words for it, and do not send
-    // an empty text block, which the API rejects.
-    ...(String(text || "").trim() ? [{ type: "text", text }] : []),
-  ];
+  const content = sendContent({ projectCode: s.projectCode, slot: s.agentId }, text, pics);
   if (!content.length) return;
+  const turnInj = content.find((b) => b.text && b.text.startsWith('<injected-context moment="every-turn"'));
+  if (turnInj) emit(s, { kind: "context.injected", moment: "every-turn", chars: turnInj.text.length, text: turnInj.text });
   s.input.push({
     type: "user",
     message: { role: "user", content },
@@ -1409,6 +1454,7 @@ function transcriptsFor(cwd, projectCode) {
 }
 
 module.exports = {
+  sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
   purgeAgent, agentRuns,
   open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,

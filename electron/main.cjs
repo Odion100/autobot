@@ -800,6 +800,62 @@ app.whenReady().then(async () => {
     };
     setTimeout(run, 5000);
   }
+
+  // APPSMOKE — the GENERIC version of the lynx smoke: point it at any registered app and it
+  // proves that app actually receives its side of the contract. LYNXSMOKE above is Blink's
+  // regression test and stays pinned to Blink; this one takes the app from the environment, so
+  // registering a new app can be VERIFIED rather than assumed:
+  //   AUTOBOT_APPSMOKE=1 AUTOBOT_APPSMOKE_URL=http://localhost:3400 AUTOBOT_APPSMOKE_ID=bustudio \
+  //   AUTOBOT_APPSMOKE_SVC=/studio/api npm run shell
+  // It checks four things that fail independently: the library is injected (the grant reached
+  // this origin), the gate is closed (an app granted only `systemlynx` gets no other namespace,
+  // absent-not-denied), the app can load its OWN service, and it can load a service on ANOTHER
+  // origin — which is the buAPI case mechanically.
+  if (process.env.AUTOBOT_APPSMOKE === "1") {
+    const run = async () => {
+      try {
+        const url = process.env.AUTOBOT_APPSMOKE_URL;
+        const appId = process.env.AUTOBOT_APPSMOKE_ID;
+        const svcPath = process.env.AUTOBOT_APPSMOKE_SVC || "";
+        const cross = process.env.AUTOBOT_APPSMOKE_CROSS || "";
+        const tab = addTab({ url, kind: "app", appId, activate: false });
+        await new Promise((r) => setTimeout(r, 3500));
+        // Built by concatenation, not a nested template: the injected script is itself full of
+        // ${...} and backticks, and nesting them is how this ends up unparseable.
+        const script =
+          "(async () => {" +
+          "  const out = {" +
+          "    hasLynx: !!(window.systemlynx && window.systemlynx.Client)," +
+          "    libraryShape: !!(window.systemlynx && window.systemlynx.createClient && window.systemlynx.HttpClient)," +
+          "    systemviewKeys: Object.keys(window.systemview || {}).sort()," +
+          "    themeShape: typeof (window.systemview && window.systemview.theme && window.systemview.theme.current().dark)," +
+          "  };" +
+          "  if (!out.hasLynx) return out;" +
+          "  const Client = window.systemlynx.Client;" +
+          "  const mods = (svc) => Object.keys(svc).filter((k) => svc[k] && typeof svc[k] === 'object' && typeof svc[k].on === 'function').sort();" +
+          "  try { out.ownModules = mods(await Client.loadService(location.origin + " + JSON.stringify(svcPath) + ")); }" +
+          "  catch (e) { out.ownError = String((e && e.message) || e).slice(0, 140); }" +
+          (cross
+            ? "  try { out.crossModules = mods(await Client.loadService(" + JSON.stringify(cross) + ")); }" +
+              "  catch (e) { out.crossError = String((e && e.message) || e).slice(0, 140); }"
+            : "") +
+          "  return out;" +
+          "})()";
+        const result = await tab.view.webContents.executeJavaScript(script);
+        const gateClosed = result.systemviewKeys && result.systemviewKeys.length === 1 && result.systemviewKeys[0] === "theme";
+        const ok = !!(result.hasLynx && result.libraryShape && gateClosed &&
+                      result.themeShape === "boolean" && result.ownModules && result.ownModules.length &&
+                      (!cross || (result.crossModules && result.crossModules.length)));
+        console.log("APPSMOKE:", JSON.stringify(result));
+        console.log("APPSMOKE:", ok ? "PASS" : "FAIL");
+        app.exit(ok ? 0 : 1);
+      } catch (e) {
+        console.log("APPSMOKE error:", e.message);
+        app.exit(1);
+      }
+    };
+    setTimeout(run, 5000);
+  }
 });
 
 app.on("window-all-closed", () => app.quit());

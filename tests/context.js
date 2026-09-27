@@ -184,6 +184,118 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     fs.rmSync(CORPORA, { force: true });
   }
 
+  // ── RFC-013 — CONTEXT SUBSCRIPTIONS ─────────────────────────────────────────────────────
+  // The reader subscribes; content is never touched. Subscriptions live in the agent's DEF —
+  // so these claims create a throwaway agent definition and delete it after.
+  {
+    const defs = require("../electron/agents/definitions.cjs");
+    const sessions = require("../electron/agents/sessions.cjs");
+    const AG = "agent:smoketest";
+    const subScopes = { ...scopes, slot: "smoketest", by: "smoketest" };
+    defs.save({ id: "smoketest", name: "smoketest", description: "throwaway for context smoke" });
+
+    const noteA = await ctx.remember(subScopes, { text: "After a compaction, verify against real state before acting.", scope: AG, title: "verify after boundary" });
+    const noteB = await ctx.remember(subScopes, { text: "turn note one", scope: AG });
+    const noteC = await ctx.remember(subScopes, { text: "turn note two", scope: AG });
+
+    // gates at the door
+    let bad = false;
+    try { ctx.subscribe(subScopes, { what: `note:${noteA.id}@${AG}`, when: "sometimes" }); } catch (e) { bad = /unknown moment/.test(e.message); }
+    ok(bad, "a bad moment refuses at the door");
+    let badTtl = false;
+    try { ctx.subscribe(subScopes, { what: `note:${noteA.id}@${AG}`, when: "post-compaction", until: { ttl: "forever" } }); } catch (e) { badTtl = /ttl reads like/.test(e.message); }
+    ok(badTtl, "a bad clock refuses at the door");
+    let noSlot = false;
+    try { ctx.subscribe({ ...scopes, slot: null }, { what: `note:${noteA.id}@${AG}`, when: "post-compaction" }); } catch (e) { noSlot = /no agent slot/.test(e.message); }
+    ok(noSlot, "a session without an agent slot cannot subscribe");
+    let ghost = false;
+    try { ctx.subscribe(subScopes, { what: `note:not-a-real-note@${AG}`, when: "post-compaction" }); } catch (e) { ghost = /must exist/.test(e.message); }
+    ok(ghost, "subscribing to a target that does not exist refuses");
+    let big = false;
+    const noteBig = await ctx.remember(subScopes, { text: "y".repeat(800), scope: AG });
+    try { ctx.subscribe(subScopes, { what: `note:${noteBig.id}@${AG}`, when: "post-compaction" }); } catch (e) { big = /capped at 700/.test(e.message); }
+    ok(big, "an over-sized target refuses and names the cap");
+
+    // a real subscription: multi-moment, content untouched
+    const s1 = ctx.subscribe(subScopes, { what: `note:${noteA.id}@${AG}`, when: ["post-compaction", "session-start"], until: { ttl: "2d" } });
+    ok(s1.when.length === 2 && s1.until.untilTs > Date.now(), "one subscription, two moments, clock gate");
+    const rawA = fs.readFileSync(path.join(ctx.place(AG).dir, noteA.id + ".md"), "utf8");
+    ok(!/inject/.test(rawA), "the note file is UNTOUCHED — the preference lives with the subscriber");
+
+    // delivery at both subscribed moments, silence at the third
+    ok(/verify against real state/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction")), "delivers at post-compaction");
+    ok(/verify against real state/.test(ctx.injectedFor({ slot: "smoketest" }, "session-start")), "delivers at session-start");
+    ok(ctx.injectedFor({ slot: "smoketest" }, "every-turn") === "", "silent at the unsubscribed moment");
+
+    // caps per shelf, refusal names the unsubscribe verb's targets
+    ctx.subscribe(subScopes, { what: `note:${noteB.id}@${AG}`, when: "every-turn" });
+    ctx.subscribe(subScopes, { what: `note:${noteC.id}@${AG}`, when: "every-turn" });
+    let full = null;
+    const noteD = await ctx.remember(subScopes, { text: "turn note three", scope: AG });
+    try { ctx.subscribe(subScopes, { what: `note:${noteD.id}@${AG}`, when: "every-turn" }); } catch (e) { full = e.message; }
+    ok(full && /every-turn shelf is full/.test(full) && full.includes(noteB.id), "a full shelf refuses and names the holders");
+
+    // sessions seams still ride injectedFor
+    const c1 = sessions.sendContent({ slot: "smoketest" }, "what changed?");
+    ok(c1.length === 2 && /<injected-context moment="every-turn">/.test(c1[0].text) && c1[1].text === "what changed?",
+      "every-turn rides as a leading block, his words last");
+    ok(/session-start/.test(sessions.startInjection({ id: "smoketest", projectCode: null })), "session-start joins the composition");
+    const pc = sessions.postCompactionInjection({ slot: "smoketest" });
+    ok(pc && pc.type === "user" && /verify against real state/.test(pc.message.content[0].text), "post-compaction queues a turn");
+
+    // turns countdown: 1 delivery then dead AND DELETED
+    const noteT = await ctx.remember(subScopes, { text: "three turns only", scope: AG });
+    ctx.subscribe(subScopes, { what: `note:${noteT.id}@${AG}`, when: "post-compaction", until: { turns: 1 } });
+    ok(/three turns only/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction")), "count-gated delivery happens");
+    const after = ctx.injectedFor({ slot: "smoketest" }, "post-compaction");
+    ok(!/three turns only/.test(after), "the count spends and delivery stops");
+    ok(!defs.subscriptionsOf("smoketest").some((r) => r.what.includes(noteT.id)), "a spent subscription is DELETED from the def — nothing accumulates");
+
+    // clock death deletes
+    ctx.subscribe(subScopes, { what: `note:${noteD.id}@${AG}`, when: "post-compaction", until: { ttl: "12h" } });
+    const subsNow = defs.subscriptionsOf("smoketest").map((r) => (r.what.includes(noteD.id) ? { ...r, until: { untilTs: Date.now() - 1000 } } : r));
+    defs.saveSubscriptions("smoketest", subsNow);
+    ctx.injectedFor({ slot: "smoketest" }, "post-compaction");
+    ok(!defs.subscriptionsOf("smoketest").some((r) => r.what.includes(noteD.id)), "an expired subscription is DELETED at the first read that finds it dead");
+
+    // run-condition: cleared by a CLOSED run record, then deleted
+    const wlDir = path.join(os.homedir(), ".autobot", "worklists");
+    const runFile = path.join(wlDir, "run-smoketest-cond.json");
+    ctx.subscribe(subScopes, { what: `note:${noteB.id}@${AG}`, when: "post-compaction", until: { run: "skill:smoketest-proc" } });
+    ok(/turn note one/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction")), "condition-gated delivers while the run is open");
+    fs.mkdirSync(wlDir, { recursive: true });
+    fs.writeFileSync(runFile, JSON.stringify({ source: "skill:smoketest-proc", updatedAt: Date.now() + 1000, items: [{ text: "x", state: "done" }] }));
+    ok(!/turn note one/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction")), "the record clearing the condition ends delivery — never the agent's word");
+    ok(!defs.subscriptionsOf("smoketest").some((r) => r.until && r.until.run), "a cleared condition-subscription is deleted");
+    fs.rmSync(runFile, { force: true });
+
+    // target gone = dies loudly (deleted), other deliveries unaffected
+    ctx.subscribe(subScopes, { what: `note:${noteC.id}@${AG}`, when: "post-compaction" });
+    await ctx.deleteNote(AG, noteC.id);
+    ctx.injectedFor({ slot: "smoketest" }, "post-compaction");
+    ctx.injectedFor({ slot: "smoketest" }, "every-turn"); // noteC's cap-test row dies at ITS moment — death is lazy per moment
+    ok(!defs.subscriptionsOf("smoketest").some((r) => r.what.includes(noteC.id)), "a subscription whose target vanished is deleted, not silently stale");
+
+    // the regression he caught live: a subscribe must NOT touch the def file — the composition
+    // fingerprint stats its mtime, so a def write per subscribe rang "re-init me" every time.
+    const defFile = path.join(defs.DIR, "smoketest.json");
+    const mtBefore = fs.statSync(defFile).mtimeMs;
+    const noteS = await ctx.remember(subScopes, { text: "sidecar check", scope: AG });
+    ctx.subscribe(subScopes, { what: `note:${noteS.id}@${AG}`, when: "post-compaction" });
+    ok(fs.statSync(defFile).mtimeMs === mtBefore, "subscribing never touches the def file — no composition bell");
+    ok(fs.existsSync(path.join(defs.DIR, "smoketest.subs.json")), "the rows live in the sidecar, same owner");
+    ok(defs.get("smoketest").def.subscriptions.some((r) => r.what.includes(noteS.id)), "get() hydrates the sidecar — readers see one record");
+
+    // unsubscribe is the named verb
+    const u = ctx.unsubscribe(subScopes, { what: `note:${noteB.id}@${AG}` });
+    ok(typeof u.left === "number", "unsubscribe ends a preference by name");
+
+    // cleanup: throwaway def, notes, sidecar keys
+    defs.remove("smoketest");
+    ok(!fs.existsSync(path.join(defs.DIR, "smoketest.subs.json")), "standing orders die with the agent");
+    fs.rmSync(ctx.place(AG).dir, { recursive: true, force: true });
+  }
+
   console.log("\nALL " + n + " CLAIMS PASS");
   vectors.stop();
 })().catch((e) => { console.error("FAIL", e); process.exit(1); });

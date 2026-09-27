@@ -1,4 +1,4 @@
-# RFC-009 — The Broadcast Studio
+# RFC-001 — The Broadcast Studio
 
 **Status: draft, for discussion**
 
@@ -23,7 +23,7 @@ Named **BUStudio** (`~/BUStudio`) — his call, 2026-09-18.
 | **Live text** | `updateLiveText.js` — ZMQ to `tcp://127.0.0.1:<zmqPort>`, text nodes by `id`, no scene rebuild | **Pure** (`zeromq` only). Moves. This is the scoreboard's write path. |
 | Preview stills | `generateScreenshot.js` (fs/path/spawn) | Moves. |
 | Launchers | `launchFFmpegScene.js`, `createFFmpegStage.js` | **Stay behind** — entangled with mediasoup (`createInternalProducers`, `resolveMediasoupTransport*`, `writeSceneSdp`, SFU constants). The studio writes its own thin local launcher (§4); the SFU-coupled path is buAPI's world. |
-| RTMP ingest | `buAPI/Media/rtpm-server.js` — node-media-server, port 1935, app `live`, auth at `prePublish`, per-stream **recording and HLS already built** | The studio's upstream target. Nothing to build server-side for v1. |
+| RTMP ingest | `buAPI/Media/rtpm-server.js` — node-media-server, port 1935, app `live` | **NOT tied into the system** (verified 2026-09-18). `prePublish` parses the path, logs, and *never rejects* — any client may publish to any path. The recording spawn is **commented out**. Only the HLS transcode config is live. His own TODO in the file: "strategize around the stream key and post." |
 | Sessions & viewers | `Media/Broadcasts` module — `startBroadcast/endBroadcast`, mediasoup SFU, admins/contributors | Unchanged. Distribution stays buAPI's. |
 | Sports data | `Basketball/`, `gameEngine/` | The overlay's read path (§10). |
 
@@ -35,8 +35,10 @@ visual editor emits naturally. OBS builds scenes by dragging boxes; the box lang
 
 - **Local engine.** The app owns ffmpeg processes on the broadcaster's machine. Encoding cost
   lands on the broadcaster — the only way broadcasts scale without the server bill scaling.
-- **buAPI distributes.** The studio pushes `rtmp://<host>:1935/live/<key>`; ingest already
-  authenticates at `prePublish` and records + HLS-transcodes for free.
+- **buAPI distributes.** The studio pushes `rtmp://<host>:1935/live/<key>`. The ingest door is
+  currently **open and unrecorded** — validating the key against a broadcast document, and
+  turning recording back on, is **buAPI's work item** (Odion, 2026-09-18), not the studio's.
+  The studio should be built against the contract, not against today's behaviour.
 - **The builder moves, it does not fork.** No shared package, no dual dependency: buAPI was the
   workbench, the studio is the home. The copy in `Media/Broadcasts/utils` retires on Odion's
   schedule once the studio is standing (the SFU launchers keep only what they import).
@@ -73,9 +75,30 @@ health, go-live state, scoreboard widgets), web and native as two faces of one p
 
 The Blink pattern exactly: registered in `~/.autobot/apps.json` with a `start` entry
 (`{cwd:"~/BUStudio", cmd:"npm run app"}`), capabilities `["systemlynx"]` (+ `files:read` if the
-editor browses local media through the harness rather than its own service). The UI reaches its
-own service via `Client.loadService(location.origin + "/studio/api")` — and reaches buAPI the
-same way, because that is the whole point of `window.systemlynx`.
+editor browses local media through the harness rather than its own service). Registered and
+verified 2026-09-18 (`npm run smoke:app` → PASS: library injected, gate closed to `theme` only,
+own service loads).
+
+**Two client tiers, and the page never crosses the second one.** The page is a client of the
+Studio service ONLY — `Client.loadService(location.origin + "/studio/api")`. The **Studio
+service** is the buAPI client, Node-to-Node, inside `Live/`. An earlier draft of this RFC had
+the page reaching buAPI directly "because that is the whole point of `window.systemlynx`"; that
+was wrong, and testing found it: a page on one origin cannot `loadService` a service on another
+here (verified — `curl -I -H "Origin: …" http://localhost:3200/blink/api` returns 200 with no
+`access-control-allow-origin`).
+
+**Why, precisely** — because the first explanation in this RFC was wrong and the accurate one
+matters: SystemLynx *does* ship browser-callable CORS defaults, but only when it builds its own
+express app (`ServerManager/components/Server.js:48` — `!customServer && server.use(...)`).
+Every app here passes its own express server, since the page and the service are deliberately
+one origin — **and that silently opts out of the headers**. socket.io is not a second wall; it
+gets `cors:{origin:"*"}` unconditionally. So cross-origin from the page is **one line of
+express middleware away**, not blocked.
+
+Which makes the boundary below a *choice*, and it is still the right one for this app: **buAPI credentials never enter the page**; game-event → ZMQ overlay text is one hop
+inside one process rather than a round trip through the browser; and **a broadcast survives a
+page reload**, because the live connection was never the page's to hold. No CORS is being asked
+of buAPI (decision by BUApp as lead, 2026-09-18).
 
 Moved code is CJS (`require`) inside an ESM-standard project: `Engine/` stays CJS via
 `createRequire` or the files keep `.cjs` — port, don't rewrite; 2,294 working lines are not a
@@ -98,28 +121,65 @@ mediasoup plumbing. Locally the need is smaller and different:
 - Crash discipline: ffmpeg dies → event with the last stderr lines → UI shows it plainly;
   auto-relaunch is a setting, never a silent default.
 
-## 5 · The studio UI (the OBS face)
+## 5 · The studio UI — the Broadcast Manager, reborn
 
-- **Scene editor** — the visual editor over sceneSpec: drag components, nest them, bind inputs
-  (camera, screen, files, images, remote streams), set padding/borders/animations. Emits the
-  spec; the spec is the save file (`scenes/*.json` — documents, diffable, agent-editable).
-- **The deck** — scenes as cards; CUT switches the live program (v1: relaunch into the same
-  output; the gap is honest — a beat of black or a stinger. The switching ladder is §8).
-- **Program monitor** — the preview leg (§4).
-- **Live text panel** — every `text.id` in the live scene listed with its current value;
-  editable by hand, or **bound** (§10).
-- **Go live** — pick destination: buAPI (default — key from the session handshake), any RTMP
-  URL (YouTube/Twitch — the builder already infers FLV for `rtmp://`), or local `.mp4` record.
+The UI design is not new: Odion wrote it — the **BU Broadcast Manager**, the front-end half of
+the deleted `Broadcasting-Strategy.md` (recovered to `docs/recovered/`, 2026-03-31 deletion).
+**Its concepts are adopted; its implementation is deliberately NOT** — that plan composited
+server-side (mediasoup → FFmpeg → mediasoup), the part he was fighting, and the local engine
+replaces exactly that. Concepts from the doc, mechanics from this RFC.
+
+**Vocabulary, reconciled first** (the two systems must stop talking past each other): a buAPI
+Broadcasts "scene" — one contributed camera/source — is the studio's **feed**. A studio
+**scene** is a *composition*: a sceneSpec arranging feeds, media, and overlays. The plan's
+four-state model is the spine, restated in those terms:
+
+> **Feeds** (raw inputs) → **Scenes** (compositions) → **Staged** (ready, on the deck) →
+> **Live** (the program).
+
+- **The feed grid** — every source as a live tile: local devices, files, and remote feeds.
+  Remote feeds carry **identity**: in buAPI a camera is a *person* — a contributor with a
+  profile — so tiles show whose camera it is, and "add a camera" is *invite a contributor*
+  (buAPI's existing admin/contributor machinery), not a URL paste. Health on every tile
+  (bitrate, latency, a green/amber/red ring); label and categorize tiles mid-broadcast.
+- **Two ways to compose, both emitting sceneSpec**: **layouts with slots** — single, split,
+  PiP, grid; drop feeds into slots; the fast path a producer uses mid-game — and the
+  **canvas editor** — freeform: drag, nest, animate, bind; the design-time path. A layout IS
+  just a sceneSpec template; a canvas scene can start from one. Scenes save to
+  `scenes/*.json` — documents, diffable, agent-editable.
+- **The deck (staged tier) + PREVIEW | PROGRAM** — staged scenes as cards; click stages into
+  the preview monitor; **CUT** takes it to program (v1 relaunch-cut; the ladder is §8).
+  Number keys cut; a director's hands live on the keyboard.
+- **Audio section** (from the plan, kept whole): active source selection, per-feed volume,
+  mute/solo, commentator-vs-ambient — surfaced as a mixer strip, compiled into the spec's
+  existing audio model (`volume`, `amix`, `masterVolume`).
+- **Overlay & graphics panel** — scoreboards, lower thirds, sponsor slots as named overlay
+  objects: show/hide/transition live (rung 2's ZMQ command path), timed insertion without
+  operator action (`animate.enable` windows).
+- **Live text panel** — every `text.id` with its current value; hand-editable or **bound**
+  (§10); bound ids show their source and pulse when an event lands.
+- **Multi-operator control** (from the plan, kept): broadcast state synchronizes across every
+  connected control client — one operator cuts cameras while another runs graphics. Locally
+  this rides the Studio service's own socket events (module emits — no new machinery);
+  cross-site operators can ride buAPI's channel later.
+- **Go live** — destination and **latency tier** (§7): buAPI (default — key from the session
+  handshake), any RTMP URL (YouTube/Twitch), local `.mp4` record; hybrid tee when it lands.
+- **Two modes, hard-separated**: *Design* (canvas, library, bindings) and *Live* (the booth:
+  monitors, deck, mixer, feed grid — scenes locked, no accidental nudges mid-game).
 
 ## 6 · The buAPI handshake
 
 Going live to buAPI is a session, not just a URL: the studio (as the signed-in user, via the
-systemlynx client) calls `Media.Broadcasts.startBroadcast(...)` to open the session and derive
-the stream key `prePublish` will accept, pushes RTMP, and `endBroadcast` closes it. Viewers,
-HLS, recording — all existing buAPI behavior, untouched. What buAPI may eventually want is a
-`streamKey`-issuing method if the current prePublish contract expects something the client
-cannot derive — flagged as the one possible server-side touch, to be confirmed against
-`methods.js` when building.
+systemlynx client) calls `Media.Broadcasts.startBroadcast(...)` to open the session and obtain a
+stream key, pushes RTMP, and `endBroadcast` closes it.
+
+**This handshake does not exist yet on the server side**, and that is the one real dependency
+this RFC has on buAPI. Today `prePublish` validates nothing, so a studio pointed at the ingest
+would appear to work perfectly while the door stands open to anyone — the worst kind of "it
+works." buAPI owns three items: issue a stream key bound to a broadcast document, **reject** at
+`prePublish` when the key does not resolve (`session.reject()`), and restore the recording spawn
+that is currently commented out. The studio builds against that contract; until it lands, treat
+any go-live as unauthenticated.
 
 ## 7 · Output modes & latency tiers
 
@@ -195,20 +255,24 @@ rung 2 exists (SRT shrinks the skew to negligible).
 
 The inversion that makes this not-OBS: **video up, data down.**
 
-- The studio subscribes (systemlynx events) to game state — Basketball/gameEngine — and maps
-  events onto ZMQ text ids: `score.home`, `score.away`, `clock`, `period`. The scoreboard keeps
-  itself while the broadcaster watches the game, not the overlay.
+- **`Live/` subscribes — not the page** (§3). The Studio service holds the buAPI connection,
+  receives gameEngine events, and writes ZMQ text ids directly into the running ffmpeg program:
+  `score.home`, `score.away`, `clock`, `period`. Both ends of that hop live in one Node process,
+  so the scoreboard keeps itself even with no browser window open — the broadcaster watches the
+  game, not the overlay. The page observes the same state through the Studio service's own
+  events (what the live-text panel renders), and can never be the thing the overlay depends on.
 - **Bindings live in the scene document**: a text node carries `bind: "basketball.game(<id>).homeScore"`
   (shape to be settled against the real event vocabulary) — so a scene is portable and
   re-bindable to next week's game.
 - Profile imagery and stats are just inputs/texts whose sources are buAPI URLs — team logos,
-  player headshots, season stat lines — fetched at scene load, cached locally.
+  player headshots, season stat lines — **fetched by the service** at scene load and cached
+  locally, which is also what makes them available to ffmpeg as file inputs.
 - **Scorekeeping in the studio is optional.** buAPI owns the score — gameEngine already
   supports multiple scorekeepers per game (BUApp, the website). Usually a dedicated scorekeeper
   is on one of those surfaces and the studio just consumes the events; but the studio CAN keep
-  score too, as one more gameEngine client — same calls, a desktop layout — for the solo
-  operator directing and scoring at once. Either way the score lives in buAPI, never in the
-  broadcast.
+  score too, as one more gameEngine client — the desktop panel writing through the Studio
+  service's buAPI connection (§3), never from the page — for the solo operator directing and
+  scoring at once. Either way the score lives in buAPI, never in the broadcast.
 - **Sponsorships (later, designed-for now)**: an ad slot is a component with
   `animate.enable` windows — the machinery for "this lower-third shows 0:00–0:15 each rotation"
   already exists in the compiler. Sponsor content + schedules come down from buAPI like stats
@@ -250,3 +314,45 @@ service in SystemView.
 - **Binding vocabulary** — the `bind:` shape needs writing against gameEngine's actual event
   names before §7 lands.
 - **When buAPI's utils copy retires** — his call, after the studio stands.
+- **Clock sync and feed reconnection** — the recovered plan's appendices B/C bank these risks
+  (timestamping across feeds; producer re-binding after a drop). Both survive the move to
+  local composition and need answers by the time cloud cameras (§9) land.
+
+---
+
+## Amendment — the server side, planned (buAPI, 2026-09-21)
+
+§1's ingest row and §6 are both accurate: the handshake does not exist, and it is this RFC's one
+real dependency on buAPI. Two gaps beyond the three §6 names, found by reading the file:
+
+4. **The process is not wired into anything.** Nothing imports `rtpm-server.js`; it ends in a bare
+   `nms.run()`; it is absent from `ecosystem.config.js`; it is not running on the droplet. Even
+   with the key and the recorder fixed, nothing would be listening.
+5. **`FFMPEG_PATH` is hardcoded** to `/usr/local/bin/ffmpeg`, while the deployed box's binary is at
+   `/usr/bin/ffmpeg` — so the HLS transcode config that §1 calls "live" would silently never start
+   there. §13 flags the binary question in general; this is the specific value already being wrong.
+
+**The plan is [buAPI RFC 038](../../buAPI/RFCs/038-rtmp-ingest-tie-in.md)** — the work is entirely
+server-side, so it lives in that repo's numbering. It specifies §6 concretely: `startBroadcast`
+returns a stream key, `prePublish` resolves it to a `Broadcasts` document and rejects on a miss,
+authorization reuses the `requireAdminOrContributor` rule that already gates publishing, and
+`outputs[]` carries the HLS playlist and the recording. Steps 1–2 of its order are what unblock
+§12 step 5.
+
+**Clip capture** — raised separately by Odion — is [buAPI RFC 039](../../buAPI/RFCs/039-replays-and-highlights.md).
+Its scope is deliberately narrow: record a broadcast, cut a time range out of it, materialize that as
+a post. *What* a clip is of is a later concern. Relevant to this RFC in three ways:
+
+- The Studio's replay-as-production-element (slow-motion on air) consumes those clip URLs as scene
+  inputs later. No coupling now.
+- **Studio-produced programs are the first recordable ones.** Recording the RTMP path is cheap;
+  recording today's mediasoup broadcasts is unsolved work. So the Studio's output is what makes
+  highlights possible, which is an argument for its priority rather than against it.
+- §13's "clock sync" open question has a sharper edge than banked: **play timestamps are
+  client-authored**, never stamped server-side. Any mapping from a play to a video offset inherits
+  the scorekeeper's device clock. RFC 039 proposes an additive server-observed `received_at`.
+
+**One open question from 038 that is joint, not buAPI's to settle:** how a phone viewer watches an
+RTMP-ingested program — HLS playback in the app, or re-publishing the ingest into mediasoup. §7
+already argues hybrid; if that is the intent it should be stated as a decision, because it
+determines what `outputs[]` carries and what the app's player must support.

@@ -47,7 +47,7 @@ const SERVER = "context";
 // separation at all. So `context` answers with both halves, labelled, and takes `kind` to narrow.
 // What remains here is MANAGEMENT — listing, planning cuts, indexing, dropping — which is not
 // retrieval and has no context-store equivalent to merge with.
-const TOOL_NAMES = ["remember", "context", "list", "forget", "docsList", "docsPlan", "docsIndex", "docsDrop", "hooksList", "hooksWrite", "hooksDrop"]
+const TOOL_NAMES = ["remember", "context", "list", "forget", "subscribe", "unsubscribe", "subscriptions", "docsList", "docsPlan", "docsIndex", "docsDrop", "hooksList", "hooksWrite", "hooksDrop"]
   .map((t) => `mcp__${SERVER}__${t}`);
 const ROOT = path.join(os.homedir(), ".autobot", "context");
 
@@ -86,13 +86,13 @@ const slug = (t) =>
 // identity, same class as the serviceUrl bug. One line per value, no leading ---, at WRITE.
 const fmv = (v) => String(v).replace(/\r?\n/g, " ").replace(/^---\s*/, "").trim();
 
-function writeNote(dir, { id, title, body, pointer, supersedes, by }) {
+function writeNote(dir, { id, title, body, pointer, supersedes, by, created }) {
   fs.mkdirSync(dir, { recursive: true });
   const front = [
     "---",
     `id: ${fmv(id)}`,
     `title: ${fmv(title)}`,
-    `created: ${new Date().toISOString()}`,
+    `created: ${created ? fmv(created) : new Date().toISOString()}`,
     // WHO WROTE IT — stamped by the harness, never sent by the agent (his rule: "it should just
     // be automatically known"). Matters most on the shared scopes, where the scope itself says
     // nothing about the author.
@@ -102,6 +102,205 @@ function writeNote(dir, { id, title, body, pointer, supersedes, by }) {
     "---",
   ].filter(Boolean).join("\n");
   fs.writeFileSync(path.join(dir, id + ".md"), front + "\n\n" + body.trim() + "\n");
+}
+
+// ── RFC-013 — CONTEXT SUBSCRIPTIONS ─────────────────────────────────────────────────────────
+// The reader subscribes; the content is never touched. A subscription is a row in the AGENT'S
+// OWN definition — its standing orders: what content, at which moments, until which gate. That
+// placement is the design: caps are per-subscriber (your shelf spends only your attention), the
+// profile renders the rows for free, and there is no commons — two agents wanting the same note
+// each subscribe to it. Writes go THROUGH definitions.cjs (lazy-required inside the functions:
+// definitions requires this module for purgeAgent, so a top-level require would be a cycle).
+const INJECT_TYPES = ["every-turn", "session-start", "post-compaction"];
+const INJECT_CAPS = {
+  "every-turn": { notes: 2, chars: 1000 },
+  "session-start": { notes: 5, chars: 3000 },
+  "post-compaction": { notes: 5, chars: 3000 },
+};
+const INJECT_NOTE_MAX = 700; // per item — the pitch will always be "it's just one paragraph"
+const INJECT_TTL_DEFAULT_MS = 7 * 24 * 3600 * 1000;
+const INJECT_TTL_MAX_MS = 30 * 24 * 3600 * 1000;
+// turn countdowns live HERE, never in the def — a per-delivery def write would ring the
+// composition-staleness bell every turn (same truth/state split as the usage sidecar).
+const SUBS_STATE = path.join(ROOT, "subscriptions-state.json");
+const readSubsState = () => { try { return JSON.parse(fs.readFileSync(SUBS_STATE, "utf8")) || {}; } catch { return {}; } };
+const writeSubsState = (st) => { try { fs.writeFileSync(SUBS_STATE, JSON.stringify(st)); } catch {} };
+
+function parseTtlMs(ttl) {
+  if (ttl == null || ttl === "") return INJECT_TTL_DEFAULT_MS;
+  const m = /^(\d+)([dh])$/.exec(String(ttl).trim());
+  if (!m) return null;
+  const ms = Number(m[1]) * (m[2] === "d" ? 24 : 1) * 3600 * 1000;
+  return ms > 0 && ms <= INJECT_TTL_MAX_MS ? ms : null;
+}
+
+// what: "note:<id>@<scope>" or "corpus:<name>:<source>#<heading>". Resolution returns
+// { title, body } or null when the target no longer exists — and a subscription whose target
+// is gone DIES LOUDLY: deleted from the def, receipted in the delivery wrapper, never silent.
+function resolveWhat(what, allowedScopes) {
+  const nm = /^note:(.+)@([a-zA-Z0-9._:-]+)$/.exec(String(what || ""));
+  if (nm) {
+    const [, id, scope] = nm;
+    if (allowedScopes && !allowedScopes.includes(scope)) return { denied: scope };
+    const p = place(scope);
+    const n = p && readNoteFile(p.dir, id);
+    return n ? { title: n.title || id, body: n.body || "" } : null;
+  }
+  const cm = /^corpus:([a-zA-Z0-9._-]+):(.+?)#(.+)$/.exec(String(what || ""));
+  if (cm) {
+    const [, corpus, source, heading] = cm;
+    const c = docs.corpusNamed && docs.corpusNamed(corpus);
+    if (!c || !c.root) return null;
+    let raw = "";
+    try { raw = fs.readFileSync(path.join(c.root, source), "utf8"); } catch { return null; }
+    // the heading's own section: from its line to the next heading of equal-or-higher depth.
+    const lines = raw.split("\n");
+    const hx = lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#{1,6}\s+/, "").trim() === heading.trim());
+    if (hx < 0) return null; // re-chunked away — the caller deletes the subscription, loudly
+    const depth = (lines[hx].match(/^#+/) || ["#"])[0].length;
+    let ex = lines.length;
+    for (let i = hx + 1; i < lines.length; i++) {
+      const m2 = lines[i].match(/^(#{1,6})\s/);
+      if (m2 && m2[1].length <= depth) { ex = i; break; }
+    }
+    return { title: `${source} › ${heading}`, body: lines.slice(hx + 1, ex).join("\n").trim() };
+  }
+  return null;
+}
+
+// The gate, at the subscribing door — nothing saves-then-ignores.
+function subscribe(scopes, { what, when, until } = {}) {
+  const defs = require("./definitions.cjs");
+  const slot = scopes.slot;
+  if (!slot) throw new Error("subscriptions belong to an agent definition — this session has no agent slot");
+  const whens = (Array.isArray(when) ? when : String(when || "").split(",")).map((t) => String(t).trim()).filter(Boolean);
+  if (!whens.length) throw new Error(`when is one or more of ${INJECT_TYPES.join(" | ")}`);
+  for (const w of whens) if (!INJECT_TYPES.includes(w)) throw new Error(`unknown moment "${w}" — moments are ${INJECT_TYPES.join(" | ")}`);
+  const u = until && typeof until === "object" ? until : {};
+  const gate = {};
+  if (u.turns != null) {
+    const n = Number(u.turns);
+    if (!Number.isInteger(n) || n < 1 || n > 50) throw new Error(`until.turns is a whole number of deliveries, 1–50 — got "${u.turns}"`);
+    gate.turns = n;
+  }
+  if (u.run != null) {
+    const r = String(u.run).trim();
+    if (!r) throw new Error("until.run names a worklist source, like \"skill:doc-maintenance\"");
+    gate.run = r;
+  }
+  if (!gate.turns && !gate.run) {
+    const ms = parseTtlMs(u.ttl);
+    if (ms == null) throw new Error(`until.ttl reads like "7d" or "12h", max 30d — got "${u.ttl}"`);
+    gate.untilTs = Date.now() + ms;
+  } else if (u.ttl != null && u.ttl !== "") {
+    const ms = parseTtlMs(u.ttl);
+    if (ms == null) throw new Error(`until.ttl reads like "7d" or "12h", max 30d — got "${u.ttl}"`);
+    gate.untilTs = Date.now() + ms; // a clock can back up a count or a condition
+  }
+  const target = resolveWhat(what, scopes.allowed);
+  if (!target) throw new Error(`nothing at "${what}" — a subscription points at note:<id>@<scope> or corpus:<name>:<source>#<heading>, and the target must exist`);
+  if (target.denied) throw new Error(`scope ${target.denied} is not readable by this session`);
+  if (target.body.length > INJECT_NOTE_MAX)
+    throw new Error(`an injected item is capped at ${INJECT_NOTE_MAX} chars (this one resolves to ${target.body.length}) — injection spends attention on every delivery; point at something tighter`);
+  const subs = defs.subscriptionsOf(slot);
+  if (subs.some((r) => r.what === what && r.when.some((w) => whens.includes(w))))
+    throw new Error(`already subscribed to ${what} at an overlapping moment — unsubscribe first to change its gate`);
+  for (const w of whens) {
+    const onShelf = subs.filter((r) => r.when.includes(w));
+    const cap = INJECT_CAPS[w];
+    const used = onShelf.reduce((c, r) => {
+      const t = resolveWhat(r.what, scopes.allowed);
+      return c + (t && t.body ? t.body.length : 0);
+    }, 0);
+    if (onShelf.length >= cap.notes || used + target.body.length > cap.chars)
+      throw new Error(
+        `your ${w} shelf is full (${onShelf.length}/${cap.notes} items, ${used}/${cap.chars} chars). ` +
+        `Unsubscribe one first — currently: ${onShelf.map((r) => `"${r.what}"`).join(", ")}`
+      );
+  }
+  const row = { what: String(what), when: whens, until: gate, addedAt: Date.now() };
+  defs.saveSubscriptions(slot, [...subs, row]);
+  return { ...row, title: target.title, chars: target.body.length };
+}
+
+function unsubscribe(scopes, { what } = {}) {
+  const defs = require("./definitions.cjs");
+  const slot = scopes.slot;
+  if (!slot) throw new Error("subscriptions belong to an agent definition — this session has no agent slot");
+  const subs = defs.subscriptionsOf(slot);
+  const keep = subs.filter((r) => r.what !== String(what));
+  if (keep.length === subs.length) throw new Error(`no subscription to "${what}"`);
+  defs.saveSubscriptions(slot, keep);
+  const st = readSubsState();
+  delete st[`${slot}|${what}`];
+  writeSubsState(st);
+  return { what: String(what), left: keep.length };
+}
+
+// A run-condition is cleared when a CLOSED run carrying that source exists — the record, never
+// the agent's word. Read from the worklist store directly; a missing dir means "not cleared".
+function runCleared(source, sinceTs) {
+  const dir = path.join(os.homedir(), ".autobot", "worklists");
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.startsWith("run-") && f.endsWith(".json")); } catch { return false; }
+  for (const f of files) {
+    try {
+      const r = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      if (r.source === source && (r.updatedAt || 0) >= (sinceTs || 0) &&
+          Array.isArray(r.items) && r.items.length && r.items.every((i) => i.state === "done")) return true;
+    } catch {}
+  }
+  return false;
+}
+
+// What the harness delivers at a moment. Reads the def live; every dead subscription met here —
+// clock lapsed, turns spent, condition cleared, target gone — is DELETED on the spot (expired
+// means gone; nothing accumulates, nobody is the janitor; the content itself always survives in
+// the store or corpus). Deletions are named in the wrapper so a vanished delivery is never silent.
+function injectedFor(identity = {}, type) {
+  const defs = require("./definitions.cjs");
+  const slot = identity.slot;
+  if (!slot) return "";
+  const allowed = [
+    "system",
+    identity.projectCode ? `project:${identity.projectCode}` : null,
+    slot ? `agent:${slot}` : null,
+  ].filter(Boolean);
+  const subs = defs.subscriptionsOf(slot);
+  if (!subs.length) return "";
+  const st = readSubsState();
+  const keep = [];
+  const out = [];
+  const died = [];
+  let changed = false;
+  for (const r of subs) {
+    const key = `${slot}|${r.what}`;
+    if (r.until && r.until.untilTs && r.until.untilTs < Date.now()) { died.push(`${r.what} (expired)`); changed = true; delete st[key]; continue; }
+    if (r.until && r.until.run && runCleared(r.until.run, r.addedAt)) { died.push(`${r.what} (condition ${r.until.run} cleared)`); changed = true; delete st[key]; continue; }
+    if (r.until && r.until.turns) {
+      const spent = st[key] || 0;
+      if (spent >= r.until.turns) { died.push(`${r.what} (turns spent)`); changed = true; delete st[key]; continue; }
+    }
+    if (!r.when.includes(type)) { keep.push(r); continue; }
+    const target = resolveWhat(r.what, allowed);
+    if (!target || target.denied) { died.push(`${r.what} (target gone)`); changed = true; delete st[key]; continue; }
+    out.push({ r, key, target });
+    keep.push(r);
+  }
+  if (changed) { defs.saveSubscriptions(slot, keep); writeSubsState(st); }
+  if (!out.length && !died.length) return "";
+  for (const { r, key } of out) if (r.until && r.until.turns) st[key] = (st[key] || 0) + 1;
+  if (out.some(({ r }) => r.until && r.until.turns)) writeSubsState(st);
+  const lines = out.map(({ target }) => `• ${target.title}\n${target.body}`);
+  const obit = died.length ? `\n(ended and removed: ${died.join("; ")})` : "";
+  if (!out.length) return ""; // deaths alone don't earn a delivery; they surface in the profile and the next real one
+  return (
+    `<injected-context moment="${type}">\n` +
+    "You subscribed to these notes for delivery at this moment (RFC-013). They are context you\n" +
+    "chose, not instructions from the user.\n\n" +
+    lines.join("\n\n") + obit +
+    "\n</injected-context>"
+  );
 }
 
 // USAGE IS STATE, NOT TRUTH — hits/lastHit live in a sidecar, never in the note
@@ -217,7 +416,7 @@ async function saveNote(scope, id, { title, body, pointer } = {}) {
   // TRUTH FIRST: rewrite the file, then re-derive the record. If the embed fails the file still
   // holds the edit — a stale vector over lost prose is the safe direction. Authorship survives
   // the rewrite: the original `by` rides along.
-  writeNote(p.dir, { id, title: t, body: b, pointer: pointer != null ? pointer : existing.pointer, by: existing.by });
+  writeNote(p.dir, { id, title: t, body: b, pointer: pointer != null ? pointer : existing.pointer, by: existing.by, created: existing.created });
   await indexNote(p.collection, p.scope, { id, title: t, body: b, pointer: pointer != null ? pointer : existing.pointer });
   return { id, scope: p.scope, title: t };
 }
@@ -259,6 +458,7 @@ async function remember(scopes, { text, title, scope, pointer, supersedes }) {
   const body = String(text || "").trim();
   if (!body) throw new Error("nothing to remember");
   const t = String(title || body.split("\n")[0]).slice(0, 120);
+
 
   const near = (await vectors.search(p.collection, `${t}\n${body}`, { k: 1, min: NEAR_DUP })).filter(
     (h) => h.id !== supersedes
@@ -343,6 +543,9 @@ function serverFor(identity = {}) {
     default: identity.slot ? `agent:${identity.slot}` : "system",
     // the writer's identity — stamped into every note automatically, never sent by the agent
     by: identity.slot || identity.projectCode || null,
+    // RFC-013 — the subscriber's identity: subscriptions live in the agent's own definition,
+    // so they exist only for sessions that ARE an agent. Closed over, never an argument.
+    slot: identity.slot || null,
   };
 
   return createSdkMcpServer({
@@ -355,7 +558,10 @@ function serverFor(identity = {}) {
           "can find it. Use it the moment you learn something a future agent would otherwise " +
           "rediscover: a correction from the user, a convention, a gotcha, what a command really " +
           "does. One concept per note. If the response says a similar note already exists, update " +
-          "that one (pass supersedes) instead of piling on near-duplicates.",
+          "that one (pass supersedes) instead of piling on near-duplicates. And if what you just " +
+          "wrote is something a future you NEEDS DELIVERED rather than findable — state to verify " +
+          "after a compaction, a rule you keep missing at session start — subscribe to it " +
+          "(the subscribe tool), at will, any time: that is what the shelves are for.",
         {
           text: z.string().describe("the knowledge itself — a few sentences, one concept"),
           title: z.string().optional().describe("short title; defaults to the first line"),
@@ -542,6 +748,83 @@ function serverFor(identity = {}) {
               )
               .join("\n");
             return { content: [{ type: "text", text: `${rows.length} note${rows.length === 1 ? "" : "s"}, ${order === "stale" ? "quietest" : "newest"} first:\n\n${body}` }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "subscribe",
+        "Subscribe YOURSELF to a piece of context for delivery unasked at a moment — the reader " +
+          "subscribes, the content is never touched, and only your own attention is spent. Use it " +
+          "for what you will need at a moment you won't think to ask: \"post-compaction\" (meets " +
+          "you on the far side, where a summary has replaced your reasoning — the sharpest use), " +
+          "\"session-start\" (rides the composition like presence), \"every-turn\" (ahead of every " +
+          "prompt — highest rent, smallest shelf). Every subscription ENDS — a clock (default 7d), " +
+          "a delivery count, or a run-condition — and a dead subscription is deleted, never piled. " +
+          "Your shelves are capped; the refusal names what to unsubscribe. Visible and editable in " +
+          "your profile.",
+        {
+          what: z.string().describe("note:<id>@<scope> (any scope you can read, including system) or corpus:<name>:<source>#<heading>"),
+          when: z.union([z.string(), z.array(z.string())]).describe("one or more moments, comma-separated or a list: every-turn | session-start | post-compaction"),
+          until: z
+            .object({
+              ttl: z.string().optional().describe("a clock, like \"7d\" or \"12h\" (max 30d). The default gate: 7d"),
+              turns: z.number().optional().describe("a delivery count, 1\u201350 — delivered N times, then gone (no waiting for a week to pass)"),
+              run: z.string().optional().describe("a condition: ends when a CLOSED run with this worklist source exists, e.g. \"skill:doc-maintenance\" — the record clears it, never your say-so"),
+            })
+            .optional()
+            .describe("when the subscription ENDS. Omit for the 7d clock. A clock may back up a count or condition."),
+        },
+        async (args) => {
+          try {
+            const r = subscribe(scopes, args);
+            const gate = r.until.turns ? `${r.until.turns} deliveries` : r.until.run ? `until run ${r.until.run} closes` : `until ${new Date(r.until.untilTs).toISOString().slice(0, 10)}`;
+            return { content: [{ type: "text", text: `Subscribed to "${r.title}" (${r.chars} chars) at ${r.when.join(" + ")}, ${gate}. It will be delivered unasked, then the subscription dies on its own.` }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        }
+      ),
+      tool(
+        "unsubscribe",
+        "End one of your context subscriptions by its `what` — the delivery preference dies, the " +
+          "content survives untouched in the store or corpus. Also the verb a full-shelf refusal " +
+          "points at.",
+        { what: z.string().describe("the subscription's what, exactly as `subscriptions` lists it") },
+        async (args) => {
+          try {
+            const r = unsubscribe(scopes, args);
+            return { content: [{ type: "text", text: `Unsubscribed from ${r.what} — ${r.left} subscription${r.left === 1 ? "" : "s"} remain.` }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        }
+      ),
+      tool(
+        "subscriptions",
+        "Your standing context subscriptions — what meets you, at which moments, and when each " +
+          "one ends. The same rows the profile shows.",
+        {},
+        async () => {
+          try {
+            const defs = require("./definitions.cjs");
+            if (!scopes.slot) return { content: [{ type: "text", text: "This session has no agent slot — no subscriptions." }] };
+            const subs = defs.subscriptionsOf(scopes.slot);
+            if (!subs.length) return { content: [{ type: "text", text: "No subscriptions. subscribe() sets one." }] };
+            const st = readSubsState();
+            const rows = subs.map((r) => {
+              const gate = r.until.turns
+                ? `${st[`${scopes.slot}|${r.what}`] || 0}/${r.until.turns} deliveries spent`
+                : r.until.run
+                ? `until run ${r.until.run} closes`
+                : r.until.untilTs
+                ? `until ${new Date(r.until.untilTs).toISOString().slice(0, 10)}`
+                : "no gate (?)";
+              return `\u26a1 ${r.what}\n  at ${r.when.join(" + ")} \u00b7 ${gate}`;
+            });
+            return { content: [{ type: "text", text: rows.join("\n") }] };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }
@@ -911,4 +1194,4 @@ function stats(scopes = []) {
   };
 }
 
-module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince };
+module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince, injectedFor, subscribe, unsubscribe, resolveWhat, runCleared, INJECT_TYPES, INJECT_CAPS, INJECT_NOTE_MAX };

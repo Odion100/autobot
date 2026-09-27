@@ -3,7 +3,7 @@
 // outlive any view; this layer routes event channels per (webContents, session) and
 // cleans up when a view lets go. cwd resolution is the host's job — the browser side
 // never learns a project's absolute root.
-const { ipcMain, dialog } = require("electron");
+const { ipcMain, dialog, BrowserWindow } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -122,6 +122,42 @@ function register(surfaceOf) {
   // an agent and running one are different acts, and collapsing them is how you
   // end up unable to edit a definition without disturbing a conversation.
   ipcMain.handle("agent:defs", () => definitions.list());
+  // RFC-013 — one agent's subscriptions, RESOLVED for display: title, size, spent count, and
+  // whether the target still exists. Reads two small files per call — fetched on open and on
+  // defs:changed, never polled.
+  ipcMain.handle("agent:subs", (_e, id) => {
+    const rows = definitions.subscriptionsOf(id);
+    const rec = definitions.get(id);
+    const allowed = ["system", rec && rec.projectCode ? `project:${rec.projectCode}` : null, `agent:${id}`].filter(Boolean);
+    let st = {};
+    try { st = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".autobot", "context", "subscriptions-state.json"), "utf8")) || {}; } catch {}
+    return rows.map((r) => {
+      let t = null;
+      try { t = contextStore.resolveWhat(r.what, allowed); } catch {}
+      return {
+        ...r,
+        title: t && t.title ? t.title : null,
+        chars: t && t.body ? t.body.length : 0,
+        body: t && t.body ? t.body : "",
+        broken: !t || !!t.denied,
+        spent: st[`${id}|${r.what}`] || 0,
+      };
+    });
+  });
+  // THE WINDOW NEVER NEEDS A REFRESH (his rule, said with heat): the defs dir is watched, and
+  // every window hears about a change — a subscribe, a def save, a new agent — the moment the
+  // disk moves. Debounced; the payload is a ping, the window re-reads the truth itself.
+  try {
+    let defsT = null;
+    fs.watch(definitions.DIR, () => {
+      clearTimeout(defsT);
+      defsT = setTimeout(() => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          try { if (!w.isDestroyed()) w.webContents.send("defs:changed"); } catch {}
+        }
+      }, 150);
+    });
+  } catch {}
   ipcMain.handle("agent:def", (_e, id) => definitions.get(id));
   ipcMain.handle("agent:def-save", (_e, rec) => definitions.save(rec));
   ipcMain.handle("agent:def-remove", (_e, id) => {

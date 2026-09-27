@@ -115,6 +115,13 @@ const FULL = {
     // beside it because they are session facts, not agent facts.
     // Run one with open({ agentId }) — anything passed explicitly still wins.
     defs: () => ipcRenderer.invoke("agent:defs"),
+    // RFC-013 — one agent's subscriptions, resolved for display; and the no-refresh channel.
+    subsOf: (id) => ipcRenderer.invoke("agent:subs", id),
+    onDefsChanged: (cb) => {
+      const l = () => { try { cb(); } catch {} };
+      ipcRenderer.on("defs:changed", l);
+      return () => ipcRenderer.removeListener("defs:changed", l);
+    },
     def: (id) => ipcRenderer.invoke("agent:def", id),
     saveDef: (rec) => ipcRenderer.invoke("agent:def-save", rec),
     removeDef: (id) => ipcRenderer.invoke("agent:def-remove", id),

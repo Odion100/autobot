@@ -54,6 +54,7 @@ function normalize(input = {}) {
   // enable switch a lie: the UI wrote `hooks`, save() reported success, and normalize() dropped
   // it, so every hook came back disabled after a re-init with nothing to explain why.
   if (Array.isArray(input.hooks)) def.hooks = input.hooks.map(String);
+
   if (Array.isArray(input.mcpServers)) def.mcpServers = input.mcpServers;
   if (input.model) def.model = String(input.model);
   if (input.maxTurns != null) def.maxTurns = Number(input.maxTurns) || undefined;
@@ -81,16 +82,29 @@ function normalize(input = {}) {
 function list() {
   ensureDir();
   let names = [];
-  try { names = fs.readdirSync(DIR).filter((f) => f.endsWith(".json")); } catch { return []; }
+  // NOT the sidecars: `<id>.subs.json` lives in this dir too (RFC-013), and a glob on .json was
+  // quietly pushing subscription arrays into the roster as agent records.
+  try { names = fs.readdirSync(DIR).filter((f) => f.endsWith(".json") && !f.endsWith(".subs.json")); } catch { return []; }
   const out = [];
   for (const n of names) {
-    try { out.push(JSON.parse(fs.readFileSync(path.join(DIR, n), "utf8"))); } catch {}
+    // through get(), so every reader of the roster sees hydrated subscriptions — one record shape
+    const rec = get(n.replace(/\.json$/, ""));
+    if (rec) out.push(rec);
   }
   return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 function get(id) {
-  try { return JSON.parse(fs.readFileSync(fileOf(id), "utf8")); } catch { return null; }
+  try {
+    const rec = JSON.parse(fs.readFileSync(fileOf(id), "utf8"));
+    // RFC-013 — subscriptions hydrate from their sidecar: readers see one record, the def file
+    // stays untouched by subscribes (the composition bell stats ITS mtime).
+    try {
+      const subs = JSON.parse(fs.readFileSync(subsFileOf(id), "utf8"));
+      if (Array.isArray(subs) && rec && rec.def) rec.def.subscriptions = subs;
+    } catch {}
+    return rec;
+  } catch { return null; }
 }
 
 function save(input) {
@@ -103,6 +117,18 @@ function save(input) {
   // halves up after their records, input last so an explicit edit still wins.
   const rec = normalize({ ...(prev || {}), ...(prev?.def || {}), ...input, ...(input.def || {}), createdAt: prev?.createdAt });
   fs.writeFileSync(fileOf(rec.id), JSON.stringify(rec, null, 2));
+  // RFC-013 — subscription rows ride saves into the SIDECAR, never the def (see subscriptionsOf).
+  // An explicit edit (the profile's delete) wins; otherwise hydrated rows pass through unchanged.
+  const subsIn = Array.isArray(input.subscriptions)
+    ? input.subscriptions
+    : input.def && Array.isArray(input.def.subscriptions)
+    ? input.def.subscriptions
+    : prev && prev.def && Array.isArray(prev.def.subscriptions)
+    ? prev.def.subscriptions
+    : null;
+  if (subsIn) {
+    try { fs.writeFileSync(subsFileOf(rec.id), JSON.stringify(cleanSubs(subsIn), null, 2)); } catch {}
+  }
   return rec;
 }
 
@@ -117,6 +143,7 @@ function save(input) {
 function remove(id) {
   let ok = false;
   try { fs.unlinkSync(fileOf(id)); ok = true; } catch {}
+  try { fs.unlinkSync(subsFileOf(id)); } catch {} // standing orders die with the agent
   // the agent's learned memory: context.cjs is the ONE writer of ctx-agent-* (the writer map),
   // so the wipe is ITS function and this module only calls it — never touches the scope itself.
   try { require("./context.cjs").purgeAgent(id); } catch {}
@@ -418,4 +445,35 @@ function adopt({ projectCode, cwd, permissionMode, model } = {}) {
 // `normalize` is exported so jobs.cjs can run a job's definition half through THIS whitelist
 // rather than keeping its own. RFC-003's rule is that AgentDefinition is adopted, not paralleled;
 // two whitelists is how it gets paralleled without anyone deciding to.
-module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, createSkill, removeSkill, help, saveHelp };
+// RFC-013 — the subscription accessors. context.cjs's subscribe/unsubscribe call THROUGH these,
+// so this module stays the sole writer of everything definition-shaped. Subscriptions live in a
+// SIDECAR (`<id>.subs.json`), not the def file: the composition fingerprint is the def's mtime
+// (deliberately — content-hashing that hot path is the 154%-CPU shape), so subscriptions in the
+// def made every subscribe ring "re-init me". His catch, on the first live subscribe. The trade:
+// a session-start subscription no longer nags running sessions — it meets the NEXT session,
+// which is what session-start means.
+const subsFileOf = (id) => path.join(DIR, `${String(id).replace(/[^a-zA-Z0-9._-]/g, "")}.subs.json`);
+function cleanSubs(subs) {
+  return (Array.isArray(subs) ? subs : [])
+    .filter((r) => r && typeof r === "object" && r.what && Array.isArray(r.when))
+    .map((r) => ({
+      what: String(r.what),
+      when: r.when.map(String),
+      until: r.until && typeof r.until === "object" ? r.until : {},
+      addedAt: Number(r.addedAt) || Date.now(),
+    }));
+}
+function subscriptionsOf(id) {
+  try { return cleanSubs(JSON.parse(fs.readFileSync(subsFileOf(id), "utf8"))); } catch {}
+  // migration: rows written while subscriptions lived in the def file
+  const rec = get(id);
+  return rec && rec.def && Array.isArray(rec.def.subscriptions) ? cleanSubs(rec.def.subscriptions) : [];
+}
+function saveSubscriptions(id, subs) {
+  if (!get(id)) return { ok: false, error: `no agent "${id}"` };
+  ensureDir();
+  fs.writeFileSync(subsFileOf(id), JSON.stringify(cleanSubs(subs), null, 2));
+  return { ok: true };
+}
+
+module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, createSkill, removeSkill, help, saveHelp, subscriptionsOf, saveSubscriptions };
