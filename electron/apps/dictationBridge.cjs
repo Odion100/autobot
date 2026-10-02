@@ -30,7 +30,7 @@ module.exports = (ipcRenderer) => ({
         wanted.find((m) => MediaRecorder.isTypeSupported(m))) || "";
 
       let rec = null, chunks = [], spoke = false, quietSince = null;
-      let draftBusy = false, stopped = false, cancelled = false;
+      let draftBusy = false, stopped = false, cancelled = false, closing = false;
       let pipeline = Promise.resolve(); // keeps segment commits ordered
 
       const startSegment = () => {
@@ -48,8 +48,19 @@ module.exports = (ipcRenderer) => ({
         r.stop();
         await ended;
         _debug?.("segment-closed");
-        if (!spoke && !forced) return ""; // pure silence — nothing to commit
-        const blob = new Blob(chunks, { type: mime || "audio/webm" });
+        // THE BUFFER IS SPENT THE MOMENT THE RECORDER STOPS, not when the transcription comes
+        // back. Transcribing takes seconds; `startSegment()` only runs after it resolves, so
+        // until this line existed `chunks` and `spoke` still held the JUST-CLOSED sentence —
+        // and the draft timer (every 1200ms, guarded only by `spoke && chunks.length`) kept
+        // re-decoding audio that was already on its way into the input. Whisper never decodes
+        // the same audio identically, so each repaint was the same sentence worded slightly
+        // differently, and every one of them was a candidate to ride a send. That is the
+        // "recorder repeats my words" glitch: one sentence, five transcriptions of it.
+        const held = chunks;
+        const hadSpeech = spoke;
+        chunks = []; spoke = false; quietSince = null;
+        if (!hadSpeech && !forced) return ""; // pure silence — nothing to commit
+        const blob = new Blob(held, { type: mime || "audio/webm" });
         if (blob.size < 2000) return "";
         try {
           const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -73,16 +84,23 @@ module.exports = (ipcRenderer) => ({
       };
 
       const levelTimer = setInterval(() => {
-        if (stopped || !rec || rec.state === "inactive") return;
+        // ONE CLOSE AT A TIME. A close is queued behind the pipeline and can wait seconds for a
+        // transcription, during which the recorder is still `recording` and `spoke` is still
+        // true — so this timer used to re-arm and queue ANOTHER close for the same sentence
+        // every pauseMs, stacking closes that each stop whatever recorder they find. `closing`
+        // ends that: the countdown cannot restart until the segment it belongs to is finished.
+        if (stopped || closing || !rec || rec.state === "inactive") return;
         if (rms() > levelThreshold) { spoke = true; quietSince = null; return; }
         if (!spoke) return;
         if (quietSince == null) { quietSince = Date.now(); return; }
         if (Date.now() - quietSince >= pauseMs) {
           quietSince = null;
+          closing = true;
           pipeline = pipeline
             .then(() => closeSegment(false))
             .catch(() => {})
-            .then(() => { if (!stopped) startSegment(); }); // the restart is UNCONDITIONAL on the way through
+            .then(() => { if (!stopped) startSegment(); }) // the restart is UNCONDITIONAL on the way through
+            .then(() => { closing = false; }, () => { closing = false; });
         }
       }, 100);
 
@@ -114,14 +132,16 @@ module.exports = (ipcRenderer) => ({
         // send pressed mid-sentence: finish the sentence being said and RETURN its
         // text so the send takes it along (their AgentChat awaits exactly this)
         flush: () => {
+          closing = true; // same reason as the level timer: no countdown against a spent buffer
           const done = pipeline
             .catch(() => {})
             .then(() => closeSegment(true, true))
             .catch(() => "")
             .then((text) => {
               if (!stopped) startSegment();
+              closing = false;
               return text || "";
-            });
+            }, (e) => { closing = false; throw e; });
           pipeline = done.then(() => {}, () => {});
           return done;
         },

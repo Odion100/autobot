@@ -147,11 +147,40 @@ function renderRun(r) {
     return [`✗ ${ns} — "${t.title}"${ms}`, ...details].join("\n");
   });
   const foot = [];
+  // WHERE IT RAN, ALWAYS — the hub has always returned this (`services[].at`) and this renderer
+  // dropped it. An agent reading a failure could see WHAT failed and nothing about WHICH instance
+  // answered, so a method missing from a deployed service read as "my registration is broken."
+  // That cost buapi-7e a day and three methods declared blocked, one of them abandoned and
+  // rebuilt for nothing (2026-09-30). One line would have ended it in one run, so it is one line
+  // that is never conditional on the run having failed.
+  if (Array.isArray(r.services) && r.services.length)
+    foot.push(`ran against: ${r.services.map((s) => `${s.serviceId} ${s.at || "(no url)"}`).join(", ")}`);
   if (r.ms != null) foot.push(`${r.ms}ms`);
   if (Array.isArray(r.unreachable) && r.unreachable.length)
     foot.push(`did not answer: ${r.unreachable.map((u) => `${u.serviceId} (${u.at})`).join(", ")}`);
   if (r.stoppedEarly) foot.push(`stopped early — ${r.notRun} not run`);
   return [head, "", ...lines, ...(foot.length ? ["", foot.join("  ·  ")] : [])].join("\n");
+}
+
+// THE URL IS THE POINT, not the service name. A project whose services sit on two different hosts
+// is the thing this listing exists to make visible — and DUPLICATES are called out rather than
+// left for someone to notice: one serviceId registered twice under one project is how a suite ends
+// up running somewhere nobody meant, and the reader should not have to diff the lines themselves.
+function renderProjects(r) {
+  if (r && r.error) return r.error;
+  const projects = (r && r.projects) || r || {};
+  const codes = Object.keys(projects);
+  if (!codes.length) return "No connected projects.";
+  const out = [];
+  for (const pc of codes) {
+    const rows = projects[pc] || [];
+    const seen = {};
+    for (const s of rows) seen[s.serviceId] = (seen[s.serviceId] || 0) + 1;
+    const dupes = Object.keys(seen).filter((k) => seen[k] > 1);
+    out.push(`${pc}${dupes.length ? `  ⚠ registered twice: ${dupes.join(", ")}` : ""}`);
+    for (const s of rows) out.push(`   ${String(s.serviceId).padEnd(14)} ${s.serviceUrl || "(no url)"}`);
+  }
+  return out.join("\n");
 }
 
 function renderList(r) {
@@ -275,10 +304,24 @@ function serverFor(identity = {}) {
       ),
       tool(
         "projects",
-        "List the connected projects and their services — what the hub can reach right now.",
+        "List the connected projects and their services, with the URL each one actually resolves " +
+          "to — what the hub can reach right now. Takes no arguments. Read it when a namespace " +
+          "resolves somewhere surprising, or before believing a failure that says a method does " +
+          "not exist: the same service can be registered under more than one project, and a " +
+          "deployed instance legitimately lacks code nobody pushed to it.",
         {},
         async () => {
-          try { return text(renderList(await hub("Agent", "listTests", {}))); } catch (e) { return fail(e); }
+          // THIS TOOL WAS UNCALLABLE FOR ITS WHOLE LIFE (buapi-7e, 2026-09-30, confirmed first
+          // try). It declared no parameters and called `Agent.listTests`, which requires a
+          // projectCode — so `projects({})` answered "projectCode required" and
+          // `projects({projectCode})` was rejected by the schema for passing an argument it does
+          // not accept. No successful invocation existed, and the cost landed on somebody else:
+          // with no way to list connections, another project's agent read our connections.json by
+          // hand to find out which instance a test had resolved against.
+          //
+          // `getProjects` is what it always wanted — it is the connection list, serviceUrl
+          // included, and it is the same door the window's nav is drawn from.
+          try { return text(renderProjects(await hub("SystemView", "getProjects", {}))); } catch (e) { return fail(e); }
         }
       ),
       tool(

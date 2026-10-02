@@ -21,6 +21,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const sources = require("./skillSources.cjs");
 
 const DIR = path.join(os.homedir(), ".autobot", "agents");
 
@@ -246,30 +247,79 @@ function skillDirs(rec) {
   return dirs;
 }
 
+// EVERY SKILL AN AGENT CAN INVOKE, WITH WHERE IT CAME FROM. The two hardcoded directories are gone
+// (see skillSources.cjs): sources are configuration, and ours is simply the one that is writable.
+// `where` keeps its old values for the writable pair — "user" and "project" — because the profile
+// and `saveSkill` address a skill by them; the new sources carry their own name.
 function skills(id) {
   const rec = get(id);
   const out = [];
-  for (const { where, dir } of skillDirs(rec)) {
-    let names = [];
-    try { names = fs.readdirSync(dir); } catch { continue; }
-    for (const n of names) {
-      // the standard shape is <name>/SKILL.md; a flat <name>.md counts too
-      const p = n.endsWith(".md") ? path.join(dir, n) : path.join(dir, n, "SKILL.md");
-      try {
-        const text = fs.readFileSync(p, "utf8");
-        const desc = (text.match(/^description:\s*(.+)$/m) || [])[1] || "";
-        out.push({ name: n.replace(/\.md$/, ""), where, path: p, description: desc.slice(0, 300), text });
-      } catch {}
+  const seen = new Set();
+  for (const src of sources.resolved(rec && rec.cwd)) {
+    for (const dir of src.dirs) {
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch { continue; }
+      for (const n of names) {
+        if (n.startsWith(".")) continue;
+        if (src.exclude.includes(n)) continue;
+        // the standard shape is <name>/SKILL.md; a flat <name>.md counts too
+        const p = n.endsWith(".md") ? path.join(dir, n) : path.join(dir, n, "SKILL.md");
+        const name = n.replace(/\.md$/, "");
+        // FIRST SOURCE WINS, and the order in the file is the precedence — the same name in two
+        // sources is one skill with one body, not two rows that cannot both be the one that fires.
+        const key = `${name}|${src.name}`;
+        if (seen.has(key)) continue;
+        try {
+          const text = fs.readFileSync(p, "utf8");
+          const desc = (text.match(/^description:\s*(.+)$/m) || [])[1] || "";
+          seen.add(key);
+          out.push({
+            name,
+            // back-compat: the old two sources keep the `where` the profile and saveSkill use
+            where: src.name === "ours" ? "user" : src.name,
+            source: src.name,
+            // the two truths, carried per skill so a surface never has to infer them
+            writable: src.writable,
+            discoverable: src.discoverable,
+            sourceNote: src.note,
+            path: p,
+            description: desc.slice(0, 300),
+            text,
+          });
+        } catch {}
+      }
     }
   }
   return out;
 }
 
+// What the window draws the sources panel from — including the ones that resolved to NOTHING, which
+// is the whole reason this is exposed rather than inferred from the skills list. A source with no
+// skills and a source that is not there are different facts.
+function skillSources(id) {
+  const rec = get(id);
+  return sources.resolved(rec && rec.cwd).map((s) => ({
+    ...s,
+    count: s.unresolved ? 0 : skills(id).filter((k) => k.source === s.name).length,
+  }));
+}
+
 // Writes go only to a skill the scan already knows — the renderer names a skill, never a path,
 // and editing is not creating (a typo must not mint a file).
 function saveSkill(id, name, where, text) {
-  const target = skills(id).find((s) => s.name === name && s.where === where);
+  const target = skills(id).find((s) => s.name === name && (s.where === where || s.source === where));
   if (!target) return { ok: false, error: `unknown skill: ${name} (${where})` };
+  // READ-ONLY IS ENFORCED, NOT LABELLED. A shipped skill lives in a directory keyed to the CLI's
+  // version and a content hash; a synced one is overwritten by the next account sync. Letting the
+  // write succeed would be worse than refusing, because it would work — once — and then evaporate,
+  // having taught the agent that editing these is a thing that works.
+  if (!target.writable)
+    return {
+      ok: false,
+      error:
+        `"${name}" comes from the "${target.source}" source and cannot be edited — ${target.sourceNote}. ` +
+        `Read it and write your own instead; a copy under your writable source is a skill you keep.`,
+    };
   try {
     fs.writeFileSync(target.path, String(text));
     return { ok: true };
@@ -295,6 +345,12 @@ function createSkill(id, name, where = "user", text = "") {
   if (!/^[a-z0-9][a-z0-9-]{1,48}$/.test(clean))
     return { ok: false, error: `a skill name is lowercase letters, digits and dashes: "${name}"` };
   const rec = get(id);
+  // CREATION GOES ONLY WHERE WE CAN KEEP IT. `where` names a source; a read-only one is refused
+  // here as well as in saveSkill, so "create" can never mint a file in a folder the CLI will
+  // replace on its next upgrade.
+  const src = sources.resolved(rec && rec.cwd).find((x) => x.name === where || (where === "user" && x.name === "ours"));
+  if (src && !src.writable)
+    return { ok: false, error: `the "${src.name}" source is read-only — ${src.note}. Create it under a writable source instead.` };
   const target = skillDirs(rec).find((d) => d.where === where);
   if (!target) return { ok: false, error: `unknown location: ${where}` };
   if (where === "project" && !(rec && rec.cwd))
@@ -476,4 +532,4 @@ function saveSubscriptions(id, subs) {
   return { ok: true };
 }
 
-module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, saveSkill, createSkill, removeSkill, help, saveHelp, subscriptionsOf, saveSubscriptions };
+module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, skillSources, saveSkill, createSkill, removeSkill, help, saveHelp, subscriptionsOf, saveSubscriptions };

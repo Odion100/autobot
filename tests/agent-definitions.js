@@ -169,5 +169,78 @@ assert.deepEqual(edited.def.tools, ["Read", "Grep"], "...and leaves the fields i
 assert.equal(edited.projectCode, "autobot", "placement survives every shape");
 ok("a save that reads then writes keeps the whole def (both shapes accepted)");
 
+// ---------------------------------------------------------------------------------------------
+// SKILL SOURCES — his design (2026-10-02). Two hardcoded directories became a LIST, so every
+// provenance is one entry and ours is simply the writable one. What matters here is the two truths
+// a source carries, and that read-only is ENFORCED rather than labelled: a shipped skill lives in a
+// path keyed to the CLI's version and a content hash, so an edit that "worked" would evaporate on
+// the next upgrade, having taught the agent that editing it works.
+const sources = require("../electron/agents/skillSources.cjs");
+
+// A FIXTURE, NOT THE MACHINE. This suite points HOME at a scratch dir, so the first version of
+// these claims found zero skills and its `if (skill)` guards skipped in silence — passing while
+// asserting nothing, which is the exact shape I had just filed against someone else's test runner.
+// So the sources are DECLARED here (which exercises the config path too) and populated on disk.
+const writeSkill = (dir, name, body) => {
+  fs.mkdirSync(path.join(dir, name), { recursive: true });
+  fs.writeFileSync(path.join(dir, name, "SKILL.md"), `---\nname: ${name}\ndescription: ${body}\n---\n\n${body}\n`);
+};
+const mineDir = path.join(scratch, ".claude", "skills");
+const shippedDir = path.join(scratch, "fake-bundled", "2.1.241", "deadbeef");
+writeSkill(mineDir, "my-own-thing", "authored here");
+writeSkill(shippedDir, "code-review", "ships with the CLI");
+fs.mkdirSync(path.join(scratch, ".autobot"), { recursive: true });
+fs.writeFileSync(path.join(scratch, ".autobot", "skill-sources.json"), JSON.stringify([
+  { name: "ours", pattern: mineDir, writable: true, discoverable: true, exclude: ["synced"], note: "yours" },
+  { name: "shipped", pattern: path.join(scratch, "fake-bundled", "*", "*"), writable: false, discoverable: true, note: "ships with the CLI" },
+  { name: "ghost", pattern: path.join(scratch, "not-here", "*"), writable: false, discoverable: false, note: "nothing here" },
+], null, 2));
+
+const allSrc = definitions.skillSources("roundtrip");
+const bySrc = Object.fromEntries(allSrc.map((x) => [x.name, x]));
+assert.equal(allSrc.length, 3, "the sources FILE wins over the defaults");
+assert.equal(bySrc.ours.writable, true, "ours is writable");
+assert.equal(bySrc.shipped.writable, false, "shipped is not");
+ok("skill sources are configuration — the file defines them, ours is just the writable one");
+
+const found = definitions.skills("roundtrip");
+assert.equal(found.length, 2, "both sources contributed, and only once each");
+const mine = found.find((x) => x.name === "my-own-thing");
+const shipped = found.find((x) => x.name === "code-review");
+assert.equal(mine.source, "ours", "a skill knows which source it came from");
+assert.equal(shipped.source, "shipped", "including the one we do not own");
+assert.equal(shipped.writable, false, "...and whether it can be edited");
+assert.equal(shipped.discoverable, true, "...and whether it can actually fire");
+ok("every skill carries its provenance, so no surface has to infer it");
+
+// ABSENCE IS STATED: "no skills here" and "this folder is not there" are different facts, and the
+// shipped directory really is gone between CLI versions.
+assert.equal(bySrc.ghost.unresolved, true, "a source that resolves to nothing says unresolved");
+assert.equal(bySrc.ghost.count, 0, "and contributes nothing");
+assert.equal(bySrc.shipped.unresolved, false, "while a real one is not unresolved");
+assert.equal(bySrc.shipped.count, 1, "and is counted");
+ok("a source that is not there is reported as absent, never as empty");
+
+// A `*` MUST NOT MATCH A DOTFILE — the synced folder keeps a `.bucket-<uuid>` twin beside the real
+// one, and matching both listed every account skill twice.
+fs.mkdirSync(path.join(scratch, "fake-bundled", ".hidden-twin", "x"), { recursive: true });
+writeSkill(path.join(scratch, "fake-bundled", ".hidden-twin", "x"), "code-review", "the twin");
+assert.equal(definitions.skills("roundtrip").filter((x) => x.name === "code-review").length, 1,
+  "a glob skips dotfiles, so a hidden twin cannot double a source");
+ok("a hidden twin directory cannot double-count a source's skills");
+
+// THE ENFORCEMENT, which is the entire point of the flag. An edit that "worked" and then evaporated
+// on the next CLI upgrade is worse than a refusal, because it teaches that editing works.
+const refused = definitions.saveSkill("roundtrip", "code-review", "shipped", "overwritten");
+assert.equal(refused.ok, false, "editing a read-only skill is refused");
+assert.ok(/shipped/.test(refused.error || ""), "and the refusal names the source");
+assert.ok(fs.readFileSync(path.join(shippedDir, "code-review", "SKILL.md"), "utf8").includes("ships with the CLI"),
+  "and the file on disk is untouched");
+const created = definitions.createSkill("roundtrip", "smoke-should-not-exist", "shipped", "x");
+assert.equal(created.ok, false, "creating inside a read-only source is refused too");
+const still = definitions.saveSkill("roundtrip", "my-own-thing", "ours", "edited body");
+assert.equal(still.ok, true, "while a writable source still saves");
+ok("read-only is enforced at the write — and writable still writes");
+
 fs.rmSync(scratch, { recursive: true, force: true });
-console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip\n`);
+console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip + skill sources\n`);

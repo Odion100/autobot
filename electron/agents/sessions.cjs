@@ -333,6 +333,158 @@ function inputQueue() {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// THE TURN BOUNDARY — RFC-012.
+//
+// The SDK announces the real yield: `m.type === "result"` is the agent handing the turn back, not
+// an inference from activity going quiet. So the boundary is OBSERVED, and the debounce below is a
+// safety net on a signal we actually have rather than the mechanism itself.
+//
+// What it nets: `result` lands, and a turn the human had already queued has not been announced yet
+// — flushing into that gap would put the pointer back beside his message, which is the exact
+// failure this RFC exists to end. Any in-turn activity cancels the flush, so the timer only has to
+// cover the race between the yield and the next turn being seen. 1.5s covers it with room, and the
+// seam stays under what reads as a pause in the UI.
+//
+// AND IT IS CHEAP TO BE WRONG. A persisting hook (`until:`) comes back next turn, so a missed
+// boundary costs one turn instead of the procedure — which is what lets the value be conservative
+// at all. Without persistence the timing would have to be exact, because a miss would be permanent.
+const TURN_SETTLE_MS = 1500;
+
+// A turn is in flight while any of these are arriving. `usage` is not here on purpose: the
+// mid-turn snapshot and the end-of-turn receipt share the kind, so treating it as activity would
+// make the session's own ruler tick cancel the flush it just armed.
+const TURN_ACTIVITY = new Set([
+  "user.prompt",
+  "assistant.text",
+  "assistant.thinking",
+  "tool.call",
+  "tool.result",
+  "permission.request",
+]);
+
+// Hand the pointer over. THE WRAPPER IS THE POINT: it rides the same path a cross-session message
+// does — the pump recognises it and the feed draws a row instead of pretending the human typed it.
+function deliverHook(s, h, event) {
+  try {
+    s.input.push({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: hooks.pointerText(h, event) }] },
+      parent_tool_use_id: null,
+      session_id: "",
+    });
+  } catch {}
+  // THE RECEIPT, AND IT IS WRITTEN AT DELIVERY, NOT AT MATCH. A pointer held for the turn boundary
+  // has not reached anyone yet; a receipt at match time would put a row in the feed for something
+  // that had not happened, and for a hook whose session ends first, never would.
+  emit(s, { kind: "hook.fired", name: h.name, on: event.kind, to: h.do, hookKind: h.kind, note: h.note || "" });
+  logLife(s, `hook fired: ${h.name} on ${event.kind} -> ${h.do || "(no target)"}`);
+  // THE RATE'S CLOCK STARTS AT DELIVERY, not at match — same reason the receipt is written here.
+  // A pointer that matched, was held for the turn boundary and then dropped has not spent the
+  // agent's once-a-day; recording at match time would silently eat cadences nobody received.
+  try { hooks.recordFired(h, { agentId: s.agentId, projectCode: s.projectCode }); } catch {}
+}
+
+function flushTurnEndHooks(s) {
+  s.turnEndTimer = null;
+  if (s.turnActive) return;        // something started again — a pause is not an ending
+  if (s.toolsInFlight > 0) return; // work is still outstanding, whatever the message stream said
+  const pend = s.pendingHooks;
+  if (!pend || !pend.size) return;
+  const held = [...pend.values()];
+  pend.clear();
+  for (const { hook, event } of held) deliverHook(s, hook, event);
+}
+
+function armFlush(s) {
+  if (s.turnEndTimer) clearTimeout(s.turnEndTimer);
+  s.turnEndTimer = setTimeout(() => flushTurnEndHooks(s), TURN_SETTLE_MS);
+  if (s.turnEndTimer.unref) s.turnEndTimer.unref();
+}
+
+// IDLE — THE TURN ENDED AND NOBODY CAME BACK (his ask). End-of-turn and idle are different
+// moments and the difference is the human: a turn ending means he has just been answered and may
+// be typing, while idle means he left. Work that should never compete with him — doc maintenance,
+// an audit, anything long — belongs here and nowhere else.
+//
+// It reuses the boundary RFC-012 already observes rather than inventing a second detector, and it
+// is cancelled by the same TURN_ACTIVITY set, so a session that is doing anything at all is not
+// idle. Emitted ONCE per quiet stretch: a hook's own guard decides the cadence, and an event that
+// repeated every N minutes would make `cooldown:` meaningless by drowning it.
+// THE HARNESS REPORTS; THE HOOK JUDGES (his call, and it deleted a design). The first version of
+// this picked five minutes and emitted once — a threshold of mine, in code, which is a setting
+// competing with configuration that already exists. A hook carries `when` and `guard`: ask for
+// `{quietMin: {gte: 15}}` and you have named your own duration; add `cooldown:` and you have named
+// how often it may repeat. So there is nothing here to configure, and no rungs file, no setting —
+// quiet simply TICKS and reports its total, and every question about "how long" and "how often" is
+// answered where it was always answerable.
+//
+// The one number left is RESOLUTION, not policy: a minute is the granularity `quietMin` is
+// measured in, the same way ctxPct is a whole percent.
+//
+// AND IT NEVER REACHES THE FEED. This goes through fireHooks, not emit — a session that sits quiet
+// for a week must not write ten thousand rows about its own silence into anyone's log. Hooks are
+// the only consumer of a tick, so hooks are the only thing it is handed to.
+// THE INTERVAL IS HIS HOOKS', TOO (his last cut). A minute was still a number I picked: if the
+// only idle hook in play asks for `{quietMin: {gte: 15}}`, waking fourteen times to learn it is
+// not fifteen yet is work nobody ordered. So the wake comes from the THRESHOLDS THEMSELVES —
+// the smallest one any carried idle hook declared — and a wake does not count or accumulate
+// anything, it asks one question: has the last activity passed that threshold. Nothing is
+// tracked between wakes, because the clock already knows.
+let IDLE_TICK_OVERRIDE = 0;
+function __setIdleTick(ms) { IDLE_TICK_OVERRIDE = Number(ms) || 0; } // tests only
+
+function idleWakeMs(s) {
+  if (!s.carriesHooks || !s.carriesHooks.length) return 0;
+  const mins = [];
+  try {
+    for (const h of hooks.list()) {
+      if (h.on !== "idle" || h.enabled === false) continue;
+      if (!s.carriesHooks.includes(h.name)) continue;
+      const q = (h.when || {}).quietMin || {};
+      const n = Number(q.gte != null ? q.gte : q.gt);
+      // a hook that names no duration wants any quiet at all, so it sets the floor
+      mins.push(n > 0 ? n : 1);
+    }
+  } catch { return 0; }
+  return mins.length ? Math.min(...mins) * 60000 : 0; // 0 = nobody listens, so no clock runs
+}
+
+// DERIVED, NOT COUNTED (his catch). The first version did `idleMin += 1` per tick, which trusts
+// every tick to have fired on time — and background timers are throttled in Electron while a
+// sleeping laptop stops them dead, so a three-hour nap would have reported two minutes. The tick's
+// only job is to give hooks a chance to be ASKED; the answer comes from the clock.
+//
+// AND IT IS NOT ARMED AT ALL unless something is listening — an agent carrying no idle hook pays
+// nothing, no timer and no wakeups, which is the honest answer to "isn't this inefficient": the
+// cost exists only where somebody asked for the signal, at the rate they asked for it.
+function armIdle(s) {
+  if (s.idleTimer) clearInterval(s.idleTimer);
+  s.idleTimer = null;
+  s.quietSince = Date.now();
+  const every = IDLE_TICK_OVERRIDE || idleWakeMs(s);
+  if (!every) return; // nobody listens — no clock runs
+  s.idleTimer = setInterval(() => {
+    if (s.turnActive || s.toolsInFlight > 0) return; // busy after all — not quiet
+    // ONE QUESTION, ASKED OF THE CLOCK: how long since he last did anything. No accumulator, so a
+    // throttled or slept timer cannot make this lie.
+    const quietMin = Math.floor((Date.now() - (s.quietSince || Date.now())) / 60000);
+    if (quietMin < 1) return;
+    try { fireHooks(s, { kind: "idle", quietMin }); } catch {}
+  }, every);
+  if (s.idleTimer.unref) s.idleTimer.unref();
+}
+
+// Called from the pump the moment the SDK yields. The counter is what makes "at most once per
+// turn" meanable for a persisting hook — hooks.guardAllows compares it, and without it the phrase
+// would quietly mean "no limit at all".
+function armTurnEnd(s) {
+  s.turnActive = false;
+  s.turnSeq = (s.turnSeq || 0) + 1;
+  armFlush(s);
+  armIdle(s);
+}
+
 // HOOKS FIRE FROM emit(), AND THAT IS THE WHOLE DESIGN, NOT A SHORTCUT. Hook points are the
 // events the system already announces — we do not invent injection sites, because a private
 // injection call bolted into a handler buys one hook and no visibility, where an emitted event
@@ -348,6 +500,20 @@ function fireHooks(s, event) {
   // A token at a time is not a moment. Deltas are the highest-frequency events in the system and
   // nothing meaningful can key off half a sentence — the settled event carries the same text.
   if ((event.kind === "assistant.text" || event.kind === "assistant.thinking") && event.done !== true) return;
+  // THE TURN IS ALIVE AGAIN. Anything a working session emits cancels a flush that was armed on a
+  // boundary that turned out not to be one — including the pointer's own turn, so a delivered hook
+  // can never be flushed on top of itself.
+  if (TURN_ACTIVITY.has(event.kind)) {
+    s.turnActive = true;
+    if (s.turnEndTimer) { clearTimeout(s.turnEndTimer); s.turnEndTimer = null; }
+    // and the quiet stretch is over — the next yield starts a fresh one from now
+    if (s.idleTimer) { clearInterval(s.idleTimer); s.idleTimer = null; }
+    s.quietSince = 0;
+  }
+  // CLEARING IS READ FROM THE RUN RECORD, NOT FROM THE AGENT. `run.finished` is emitted by the
+  // harness when a write leaves every item done (worklist.allDone on the persisted list) — there is
+  // no flag an agent can set, and an agent that wipes its worklist has not cleared anything.
+  if (event.kind === "run.finished" && event.source) s.runsDone.set(String(event.source), Date.now());
   // AMBIENT FIELDS (his design, hooks.AMBIENT is the declaration): every event carries what the
   // world can afford alongside what happened, so a `when` can say {"ctxPct":{"lte":40}} on any
   // kind. Stamped on a copy — the emitted event that feeds/history see stays exactly what
@@ -373,25 +539,32 @@ function fireHooks(s, event) {
       // hook the way it carries a skill, so nothing acquires one it never opted into.
       carries: s.carriesHooks || [],
       fired: s.hooksFired,
+      // what a persisting hook is measured against, and which turn this is
+      cleared: s.runsDone,
+      turn: s.turnSeq || 0,
     });
   } catch {}
   for (const h of hits) {
-    // THE POINTER RIDES THE INPUT QUEUE, exactly like a cross-session message: it is a turn that
-    // arrived from outside, not words the human typed, and the wrapper is what lets both the pump
-    // and the feed tell those apart.
-    try {
-      s.input.push({
-        type: "user",
-        message: { role: "user", content: [{ type: "text", text: hooks.pointerText(h, event) }] },
-        parent_tool_use_id: null,
-        session_id: "",
-      });
-    } catch {}
-    // THE RECEIPT. A hook fires without anyone asking, which makes it the easiest thing in this
-    // system to get wrong invisibly — so it is never silent. `fire()` refuses to match on
-    // `hook.fired`, so this emit cannot loop back around.
-    emit(s, { kind: "hook.fired", name: h.name, on: event.kind, to: h.do, hookKind: h.kind, note: h.note || "" });
-    logLife(s, `hook fired: ${h.name} on ${event.kind} -> ${h.do || "(no target)"}`);
+    // WHERE THE POINTER GOES DEPENDS ON WHAT KIND OF MOMENT THIS IS (hooks.deliverAt). An in-turn
+    // hook — one watching a tool call — is handed over now, because its whole value is proximity
+    // to the action. A session-level pointer is HELD for the yield: pushing it now would put it on
+    // the input queue beside the request the human just made, where it competes with the thing he
+    // asked for and loses.
+    if (hooks.deliverAt(h) === "turn-end") {
+      // Keyed by name, so a hook that matched three events inside one turn is ONE pointer. The
+      // newest match wins the payload — for a threshold hook that is the freshest reading, which
+      // is the whole second half of the argument: a `pct` measured at the start of a heavy turn is
+      // stale by 15–20 points before anyone acts on it.
+      s.pendingHooks.set(h.name, { hook: h, event });
+      // A MOMENT THAT ARRIVES AT AN IDLE SESSION HAS NO TURN TO WAIT FOR. `session.started`, a
+      // cross-session message, a page event fanned out by emitAmbient — none of them are inside a
+      // turn, and without this the pointer would sit in the queue until the human happened to say
+      // something, which for an unattended agent is never. The same timer, so a turn that starts
+      // inside the window still wins and the pointer waits for its ending instead.
+      if (!s.turnActive && !s.turnEndTimer) armFlush(s);
+      continue;
+    }
+    deliverHook(s, h, event);
   }
 }
 
@@ -781,6 +954,12 @@ async function pump(s) {
           durationMs: m.duration_ms,
           ok: m.subtype === "success",
         });
+        // THE REAL YIELD, AND IT IS A SIGNAL WE HAVE RATHER THAN ONE WE INFER (RFC-012). `result`
+        // is the SDK saying the agent handed the turn back — not activity going quiet, which is
+        // what a debounce alone would have had to guess at. Armed AFTER the usage emit on purpose:
+        // that emit is what a threshold hook matches, and it must be held before the boundary it
+        // will be delivered on is armed.
+        armTurnEnd(s);
       }
     }
     logLife(s, "ended: done");
@@ -790,6 +969,9 @@ async function pump(s) {
     emit(s, { kind: "session.ended", reason: "error", error: String(err?.message || err) });
   } finally {
     try { s.watcher?.close(); } catch {}
+    // A pending flush has nothing to flush into once the pump is done — and a timer holding a dead
+    // session is a leak that would deliver a pointer to an input queue nobody is reading.
+    if (s.turnEndTimer) { clearTimeout(s.turnEndTimer); s.turnEndTimer = null; }
     // DELETE ONLY IF THIS IS STILL THE SESSION AT THAT KEY. A key names a SLOT; this pump belongs
     // to one particular session OBJECT, and re-init deliberately puts a second one in the same
     // slot. The old pump drains a beat later (its input was ended, the iterator finishes, "ended:
@@ -850,6 +1032,17 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // Hook guards are per SESSION — once-per-session must mean this session, and a cooldown must
     // not leak into the next one. Created here so it can never be shared by accident.
     hooksFired: new Map(),
+    // RFC-012 — the turn boundary. `pendingHooks` holds the session-level pointers matched during
+    // this turn until the agent yields; `runsDone` is what a persisting hook is cleared by, keyed
+    // by run source and seeded from the run files below so a re-init does not forget that a
+    // procedure already ran. `turnSeq` counts yields, which is what makes "once per turn" real.
+    pendingHooks: new Map(),
+    runsDone: new Map(),
+    turnSeq: 0,
+    turnActive: false,
+    turnEndTimer: null,
+    idleTimer: null,
+    quietSince: 0,
     carriesHooks: (agent && Array.isArray(agent.def && agent.def.hooks) ? agent.def.hooks : []),
     composition: compositionOf(agent ? agent.id : null, cwd),
     // WHAT WAS ASKED FOR, not what came back. `s.model` is overwritten at init with the
@@ -907,6 +1100,17 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // from the real one inside a month.
   s.worklistOwner = `session:${key}`;
   s.worklist = worklist.read(s.worklistOwner);
+  // WHAT THIS SESSION HAS ALREADY FINISHED (RFC-012). Read ONCE, at open, off the run files —
+  // after this it is kept current by the `run.finished` events fireHooks already sees, because
+  // re-scanning a directory per emitted event is precisely the read-a-file-per-event shape that
+  // cost a day of CPU and a jammed main process. A re-init lands here too, which is the point: a
+  // maintenance pass done before the restart must not be re-demanded after it.
+  for (const r of worklist.all()) {
+    if (!r.owner.startsWith("run:") || r.session !== s.worklistOwner || !r.source) continue;
+    if (!worklist.allDone(Array.isArray(r.items) ? r.items : [])) continue;
+    const at = r.updatedAt || 0;
+    if (!(s.runsDone.get(r.source) >= at)) s.runsDone.set(r.source, at);
+  }
   // CARRY-OVER, ONCE. Lists written before worklists were owned are in the session store, and a
   // conversation mid-plan must not open blank on the day this shipped.
   if (!s.worklist.length) {
@@ -1468,4 +1672,9 @@ module.exports = {
   weights,
   loadSessionStore: loadStore,
   saveSessionStore: saveStore,
+  // RFC-012 — THE TURN BOUNDARY, EXPORTED SO IT CAN BE PROVEN. Holding a pointer until the agent
+  // yields is the kind of behaviour that is invisible when it is right and indistinguishable from
+  // "the hook never fired" when it is wrong, and the only thing that separates those two readings
+  // is a test that can drive the boundary without a live model on the other end.
+  TURN_SETTLE_MS, idleWakeMs, __setIdleTick, fireHooks, armTurnEnd, armIdle, flushTurnEndHooks,
 };

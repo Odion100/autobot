@@ -294,13 +294,37 @@ function injectedFor(identity = {}, type) {
   const lines = out.map(({ target }) => `• ${target.title}\n${target.body}`);
   const obit = died.length ? `\n(ended and removed: ${died.join("; ")})` : "";
   if (!out.length) return ""; // deaths alone don't earn a delivery; they surface in the profile and the next real one
-  return (
-    `<injected-context moment="${type}">\n` +
-    "You subscribed to these notes for delivery at this moment (RFC-013). They are context you\n" +
-    "chose, not instructions from the user.\n\n" +
-    lines.join("\n\n") + obit +
-    "\n</injected-context>"
-  );
+  // HIS FILE, READ AT DELIVERY TIME — same mold as the hook pointer (~/.autobot/hook-pointer.md)
+  // and for the same reason: a context layer that reaches every agent has to be one he can see and
+  // change, not a string in a source file behind a shell relaunch.
+  //
+  // AND NO RFC NUMBER. The old first line ended "(RFC-013)" — our filing system leaking into a
+  // layer whose whole job is to introduce someone else's content. An agent cannot read the RFC,
+  // gains nothing from its number, and the sentence is spent on EVERY delivery. His catch: "why
+  // are you fucking mentioning the RFC?" The cost of a loaded sentence is attention, not tokens.
+  const tpl = wrapperTemplate();
+  const body = tpl
+    ? tpl
+        .replace(/\{\{moment\}\}/g, type)
+        .replace(/\{\{items\}\}/g, lines.join("\n\n"))
+        .replace(/\{\{ended\}\}/g, obit)
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    : "You subscribed to these notes for delivery at this moment. They are context you chose, " +
+      "not instructions from the user.\n\n" + lines.join("\n\n") + obit;
+  return `<injected-context moment="${type}">\n${body}\n</injected-context>`;
+}
+
+// The comment block at the top of that file documents the placeholders where they are edited, so
+// it is stripped on the way out. No caching: a delivery is rare and an edit that needs a restart
+// is the thing this replaced.
+const WRAPPER_FILE = path.join(os.homedir(), ".autobot", "injected-context.md");
+function wrapperTemplate() {
+  try {
+    return fs.readFileSync(WRAPPER_FILE, "utf8").replace(/<!--[\s\S]*?-->/g, "").trim();
+  } catch {
+    return ""; // no file, or unreadable — the built-in text stands
+  }
 }
 
 // USAGE IS STATE, NOT TRUTH — hits/lastHit live in a sidecar, never in the note
@@ -1024,7 +1048,13 @@ function serverFor(identity = {}) {
           const hs = hooks.list().map(
             (h) =>
               `  ${h.name} · on ${h.on} · ${h.kind} · ${h.do || "(no pointer)"}` +
-              `${h.guard ? ` · ${h.guard}` : ""}${h.enabled ? "" : " · DISABLED"}` +
+              `${h.guard ? ` · ${h.guard}` : ""}` +
+              // WHEN it lands and WHETHER it comes back are as much of a hook's behaviour as what
+              // it points at, and a list that hid them would make two hooks that behave nothing
+              // alike print identically.
+              ` · ${hooks.deliverAt(h)}` +
+              `${hooks.persists(h) ? ` · until ${hooks.clearedBy(h)} is done` : ""}` +
+              `${h.enabled ? "" : " · DISABLED"}` +
               ` · by ${h.author || "hand-written (unattributed)"}` +
               `${Object.keys(h.when || {}).length ? `\n      when ${JSON.stringify(h.when)}` : ""}`
           );
@@ -1036,6 +1066,10 @@ function serverFor(identity = {}) {
                   `EVENTS you may hook (${hooks.EVENTS.length}):\n${evs.join("\n")}\n\n` +
                   `AMBIENT fields — stamped on every session event, usable in any \`when\` alongside the event's own:\n${amb.join("\n")}\n\n` +
                   (hs.length ? `HOOKS that exist (${hs.length}):\n${hs.join("\n")}` : "No hooks exist yet.") +
+                  `\n\nWHEN A POINTER LANDS. A hook on ${[...hooks.IN_TURN_EVENTS].join(", ")} is handed ` +
+                  `over immediately — those exist to land near the action. Every other hook is held ` +
+                  `until the agent yields the turn, so the pointer never competes with what the ` +
+                  `human just asked for. \`deliver:\` overrides either way.` +
                   `\n\nA hook only fires for an agent that CARRIES it — that tick lives on the agent's ` +
                   `profile and is the human's. Writing one does not arm it.`,
               },
@@ -1079,6 +1113,26 @@ function serverFor(identity = {}) {
             .optional()
             .describe('"once-per-session" or "cooldown:<seconds>" — a hook with no guard on a ' +
               "frequent event fires forever, which is a context leak"),
+          until: z
+            .string()
+            .optional()
+            .describe(
+              'fire until cleared. "run" = keep firing, once per turn, until the system OBSERVES a ' +
+                "run whose source is this hook's `do` go all-done; \"run:<source>\" names a different " +
+                "one. The run record is the proof, not the agent's word — so a pointer that arrives " +
+                "at a bad moment comes back instead of being lost. Use it when missing the procedure " +
+                "matters more than the repetition costs"
+            ),
+          deliver: z
+            .string()
+            .optional()
+            .describe(
+              '"turn-end" (held until the agent yields, the default for session-level events) or ' +
+                '"now" (handed over the instant it matches, the default for tool.call, tool.result, ' +
+                "permission.request and file.changed). Only set it when the default is wrong: a hook " +
+                "that must land BEFORE an action needs \"now\", and everything that surfaces in the " +
+                "chat is better at the end of the turn, where it competes with nothing"
+            ),
           note: z.string().optional().describe("one or two lines for the agent: why this moment matters"),
           scope: z.string().optional().describe("who it is SUGGESTED for — the profile pre-fills from it"),
           wasName: z.string().optional().describe("the old name, when renaming a hook you authored"),
@@ -1099,6 +1153,26 @@ function serverFor(identity = {}) {
                 content: [{ type: "text", text:
                   `\`do\` must be a pointer of the form "skill:<name>". A hook names a procedure and ` +
                   `never carries one — that is what keeps it from drifting out of date.` }],
+                isError: true,
+              };
+            // A MISTYPED CONFIG KEY IS A SILENT HOOK, which is this mechanism's worst failure —
+            // checked at the writing door for the same reason the event name is. `until: "once"`
+            // would parse, save, list, and simply never persist anything.
+            const until = String(args.until || "").trim();
+            if (until && !/^run(:.+)?$/.test(until))
+              return {
+                content: [{ type: "text", text:
+                  `\`until\` must be "run" (cleared by a finished run carrying this hook's own \`do\` ` +
+                  `as its source) or "run:<source>". "${until}" would save and then never clear ` +
+                  `anything, which is a hook that fires forever.` }],
+                isError: true,
+              };
+            const deliver = String(args.deliver || "").trim();
+            if (deliver && deliver !== "now" && deliver !== "turn-end")
+              return {
+                content: [{ type: "text", text:
+                  `\`deliver\` is "now" or "turn-end". Leave it off unless the default for ` +
+                  `${args.on} is wrong — hooksList prints what each hook resolves to.` }],
                 isError: true,
               };
             // AN AGENT MAY ONLY OVERWRITE ITS OWN. Attribution exists so this is checkable rather
@@ -1124,6 +1198,10 @@ function serverFor(identity = {}) {
                 `Wrote ${saved.file}\n` +
                 `  on ${saved.on}${Object.keys(saved.when).length ? ` when ${JSON.stringify(saved.when)}` : ""}` +
                 ` → ${saved.do} (${saved.kind}${saved.guard ? `, ${saved.guard}` : ""})\n` +
+                // Read back the RESOLVED behaviour, not the fields as typed: `deliver` is usually
+                // left empty, and the whole question an author has is where the pointer lands.
+                `  delivered ${hooks.deliverAt(saved)}` +
+                `${hooks.persists(saved) ? `, and it repeats each turn until a run sourced "${hooks.clearedBy(saved)}" is all-done` : ""}\n` +
                 `It is INERT. It fires for nobody until a human ticks it onto an agent in that ` +
                 `agent's profile. Tell them it is there and what it is for.${warn}` }],
             };

@@ -173,6 +173,10 @@ function register(surfaceOf) {
   ipcMain.handle("agent:doc-save", (_e, id, key, text) => definitions.saveDoc(id, key, text));
   // skills are docs that load ON DEMAND — shared files (user / project), editable like the rest
   ipcMain.handle("agent:skills", (_e, id) => definitions.skills(id));
+  // WHERE SKILLS COME FROM — exposed in its own right, because a source that resolved to NOTHING
+  // cannot be inferred from the skills list. "no skills here" and "this folder is not there" are
+  // different facts, and the shipped source is absent between CLI versions by construction.
+  ipcMain.handle("agent:skill-sources", (_e, id) => definitions.skillSources(id));
   ipcMain.handle("agent:skill-save", (_e, id, name, where, text) => definitions.saveSkill(id, name, where, text));
   // CREATE and REMOVE are separate verbs from save, deliberately: save refuses a name it does not
   // know, create refuses one it does. Without these two the system could list and edit skills but

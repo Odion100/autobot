@@ -132,6 +132,8 @@ const FULL = {
     saveDoc: (id, key, text) => ipcRenderer.invoke("agent:doc-save", id, key, text),
     // skills: shared on-demand docs (user + project scan), editable by name
     skills: (id) => ipcRenderer.invoke("agent:skills", id),
+    // each source: name, pattern, writable, discoverable, count, unresolved, note
+    skillSources: (id) => ipcRenderer.invoke("agent:skill-sources", id),
     saveSkill: (id, name, where, text) => ipcRenderer.invoke("agent:skill-save", id, name, where, text),
     // Creating and retiring are their own verbs — save edits a skill that exists, create refuses
     // one that does. Until these existed the system could read and edit skills but never make one.
