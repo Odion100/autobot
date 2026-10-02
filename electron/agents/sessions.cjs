@@ -1193,7 +1193,13 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
 
   // SYSTEMVIEW — the agent face of the hub (RFC-056): tests, probe-grade calls, logs, stats, the
   // TV, the window-driving verbs — as tools with THIS session's identity, replacing the CLI door.
-  const systemviewServer = systemview.serverFor({ projectCode, slot: agent ? agent.id : null });
+  const systemviewServer = systemview.serverFor({
+    projectCode,
+    slot: agent ? agent.id : null,
+    // the half the hub cannot do: drop the run record and tell every strip in this project, so a
+    // lane cleared by an agent disappears the same way one cleared by his press does
+    onLaneRemoved: (branch) => removeLaneByBranch(projectCode, branch),
+  });
 
   s.query = query({
     prompt: s.input,
@@ -1370,6 +1376,43 @@ function laneRuns(key) {
   return worklist.laneRuns(String(key || "").split(":")[0]);
 }
 const deleteLaneRun = (_key, id) => worklist.deleteRun(id);
+
+// A LANE DISAPPEARING IS AN EVENT — and until now it was the only lifecycle moment that wasn't.
+//
+// The strip's rows come from run FILES, and `refreshLanes()` re-reads only when something ticks:
+// `run.started`, `run.finished`, `todo.updated` with a `lane:` source. Nothing ticked when a lane was
+// REMOVED. The only reason the user's strip ever dropped a row is that his own press called
+// refreshLanes() in the same callback (useAgentSession.js:113) — so the row vanished because he
+// clicked, not because the lane was gone. Anyone else clearing a lane left a ghost row sitting on a
+// surface whose entire claim is that it reads state instead of being told.
+//
+// The precedent is eight lines up: wipeWhiteboard emits `whiteboard.updated` so every watcher clears
+// together, whoever erased it. Lanes get the same treatment. Keyed by PROJECT because that is how a
+// lane row is keyed — the lanes an earlier life of this chat spawned still belong on its strip.
+function announceLaneRemoved(projectCode, branch) {
+  let told = 0;
+  for (const s of sessions.values()) {
+    if (s.projectCode !== projectCode) continue;
+    emit(s, { kind: "lane.removed", branch: String(branch || "") });
+    told++;
+  }
+  return told;
+}
+
+// BY BRANCH, NOT BY RUN ID. A caller holding a branch name should not have to learn the id scheme to
+// clean up after itself, and the branch is the only name a lane has in every other door.
+//
+// THE RECORD GOING IS NOT CONDITIONAL ON FINDING IT. A lane whose run file was already swept (two
+// weeks of retention) still has a worktree and a branch on disk and still has a ROW — so a remove
+// that refused because there was no record would leave exactly the lane nobody can clear. It reports
+// `record: false` and announces anyway.
+function removeLaneByBranch(projectCode, branch) {
+  const b = String(branch || "").trim();
+  if (!b) return { ok: false, error: "which branch?" };
+  const id = worklist.runIdForLane(projectCode, b);
+  const record = id ? worklist.deleteRun(id) : false;
+  return { ok: true, branch: b, record, told: announceLaneRemoved(projectCode, b) };
+}
 
 // Model switching — a real SDK primitive (verified by experiment 2026-08-24), not
 // a slash command. supportedModels() is the menu: the SDK owns the list, so no
@@ -1660,7 +1703,7 @@ function transcriptsFor(cwd, projectCode) {
 module.exports = {
   sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
   purgeAgent, agentRuns,
-  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
+  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
   // file by path; with the name changing, a missed caller reads an empty object

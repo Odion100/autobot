@@ -118,10 +118,78 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
       "only lane: sources are lanes — a skill run never becomes a row");
     ok("laneRuns: project-scoped, source-gated — a refresh (new session id) cannot hide a lane");
 
+    // ---- THE RECEIPT (RFC-063) — a record of an ACT, on the record it describes -----------
+    // Derivation decays: a lane brought in and then built on top of matches neither by blob nor by
+    // patch, and the row said "not brought in" about work already in. The receipt is the moment of
+    // the bring-in, written down. These claims are about the FIELD and its lifetime; the ordering
+    // rule (a receipt never outranks a derived `out`) is derived in systemview and proven there, in
+    // src/organisms/AgentChat/laneVerdict.test.js.
+    assert.equal(mine[0].broughtIn, null, "a lane nobody brought in reads null, not undefined");
+    ok("broughtIn is on every lane row — absent reads as null, which the row can render");
+
+    const stamped = worklist.markBroughtIn(lane, { base: "6dd6cc9", repo: "autobot", by: "agent:systemview-test" });
+    assert.ok(stamped && stamped.ts > 0, "markBroughtIn answers with the receipt it wrote");
+    const withR = worklist.laneRuns("proj-a")[0];
+    assert.ok(withR, "the lane row is still there after the stamp");
+    assert.equal(withR.broughtIn.base, "6dd6cc9");
+    assert.equal(withR.broughtIn.repo, "autobot");
+    assert.equal(withR.broughtIn.by, "agent:systemview-test");
+    assert.equal(withR.broughtIn.ts, stamped.ts, "dated, and the date is the one it reported");
+    ok("markBroughtIn stamps the receipt on the lane's own run record — ts, base, repo, by");
+
+    // save() carries every key a writer does not own; forgetting one destroys it silently. The
+    // lane's own last list write must not be what erases the receipt.
+    worklist.writeRun(lane, "session:proj-a:old-session-id", [{ id: "1", text: "build", state: "done" }], "lane:test/a");
+    assert.equal(worklist.laneRuns("proj-a")[0].broughtIn.base, "6dd6cc9",
+      "a later list write must not clobber the receipt");
+    ok("a list write preserves the receipt — the same carry-forward the whiteboard needed");
+
+    // IT CANNOT MINT A LANE. save() would create the file, and a receipt for a run nobody ran is
+    // exactly the thing that accumulates in the background.
+    const ghost = worklist.newRunId();
+    assert.equal(worklist.markBroughtIn(ghost, { base: "deadbee" }), null,
+      "stamping a run that does not exist is refused, not invented");
+    assert.equal(fs.existsSync(path.join(worklist.DIR, `run-${ghost}.json`)), false,
+      "and it wrote no file doing it");
+    ok("markBroughtIn on a run that does not exist writes nothing — a receipt cannot mint a lane");
+
+    // ---- FINDING A LANE'S RUN BY BRANCH (the clear-a-lane door, 2026-10-02) ----------------
+    // An agent can now clear a lane (mcp__systemview__lanes remove=...), and the record half of that
+    // starts here: turn a BRANCH into the run id, because the branch is the only name a lane carries
+    // in the git verbs, the row, and the tool. Claimed here rather than in sessions.cjs because this
+    // is the part with failure modes, and the part nothing else can reach once it is inlined.
+    assert.equal(worklist.runIdForLane("proj-a", "test/a"), lane,
+      "a lane's run is found by its branch, not by an id the caller had to already know");
+    ok("runIdForLane turns a branch into its run id");
+
+    assert.equal(worklist.runIdForLane("proj-a", "lane:test/a"), null,
+      "the branch is the branch — the `lane:` prefix belongs to the source, not the name");
+    assert.equal(worklist.runIdForLane("proj-a", "test/nope"), null, "a branch with no run answers null");
+    assert.equal(worklist.runIdForLane("proj-a", ""), null, "and so does no branch at all");
+    assert.equal(worklist.runIdForLane("proj-b", "test/a"), null,
+      "scoped to the project — another project's lane of the same name is not this one");
+    ok("runIdForLane answers null for absent, misprefixed, empty and wrong-project — never a guess");
+
+    // NULL IS A REAL STATE, NOT AN ERROR. Closed runs are swept after two weeks while the worktree,
+    // the branch and the ROW survive — so a lane can outlive its record, and that is precisely the
+    // lane nobody can clear if a null makes the remove refuse. The caller must be free to go on.
+    const orphan = worklist.newRunId();
+    assert.equal(worklist.runIdForLane("proj-a", "test/orphan"), null,
+      "a lane whose record was already swept answers null and the caller clears git anyway");
+    assert.equal(fs.existsSync(path.join(worklist.DIR, `run-${orphan}.json`)), false,
+      "and asking never created a file");
+    ok("a swept record reads null without inventing one — the lane is still clearable");
+
+    // THE RETENTION IS INHERITED, NOT INVENTED — the whole reason the receipt lives here. No extra
+    // code deletes it: the run file IS the receipt's home, so the user's 🗑 takes it along.
     assert.equal(worklist.deleteRun(lane), true, "the user's confirmed delete removes the record");
     assert.deepEqual(worklist.laneRuns("proj-a"), [], "and the row's source of truth is gone");
     assert.equal(worklist.deleteRun(lane), false, "deleting what is already gone says so");
-    ok("deleteRun: the record dies once, honestly — verification is absence");
+    assert.equal(fs.existsSync(path.join(worklist.DIR, `run-${lane}.json`)), false,
+      "the file the receipt lived in is gone from disk");
+    assert.ok(!worklist.all().some((r) => r.broughtIn && r.broughtIn.base === "6dd6cc9"),
+      "and nothing anywhere on this machine still holds that receipt");
+    ok("deleteRun: the record dies once, honestly — and the receipt cannot outlive the lane it describes");
   }
 
   // ---- RETENTION — closed runs age out, died runs never do -----------------------

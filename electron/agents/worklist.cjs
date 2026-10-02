@@ -124,10 +124,15 @@ function save(owner, patch) {
     const cur = readFile(owner);
     // `updatedAt` is not decoration: for a list nobody watched, "when did this last move" is the
     // difference between a job that finished and a job that stopped.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, ...patch, updatedAt: Date.now() };
+    // EVERY KEY A WRITER DOES NOT OWN IS CARRIED FORWARD BY HAND, and one that is forgotten here
+    // is silently destroyed by the next unrelated write — the lesson the whiteboard already taught
+    // (a set() that clobbered the board made the two features enemies). `broughtIn` is the newest
+    // passenger: a receipt stamped at bring-in must survive the lane's own last list write.
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, ...patch, updatedAt: Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
+    if (!next.broughtIn) delete next.broughtIn;
     fs.writeFileSync(fileFor(owner), JSON.stringify(next, null, 2));
   } catch {}
 }
@@ -209,7 +214,27 @@ function laneRuns(projectCode) {
   );
 }
 
-// The delete is the USER'S, pressed on the row after a confirm — never an agent tidying quietly.
+// FINDING A LANE'S RUN BY ITS BRANCH. The worklist indexes its own files, because the alternative is
+// every caller learning that a lane's run is the one whose `source` is `lane:` + the branch — which
+// is a scheme, and a scheme copied into three callers is a scheme that drifts in two of them.
+//
+// Answers null for a lane with no run file, and that is a REAL case rather than an error: closed runs
+// are swept after two weeks, so a lane can outlive its record while its worktree and branch — and its
+// ROW — are still there. A caller that treated null as failure would refuse to clear exactly the
+// lane nobody else can.
+function runIdForLane(projectCode, branch) {
+  const b = String(branch || "").trim();
+  if (!b) return null;
+  const row = laneRuns(projectCode).find((r) => String(r.source || "") === `lane:${b}`);
+  return row ? String(row.owner || "").replace(/^run:/, "") : null;
+}
+
+// The delete used to be the USER'S ALONE — "never an agent tidying quietly". OVERRIDDEN 2026-10-02 by
+// him, and the reasoning that replaced it is better than mine: the bring-in model already made agents
+// responsible for landing a lane's work, so leaving them unable to clear the lane afterwards left
+// seven rows and seven two-step confirms for him to click through. The 🗑 stays his; it is no longer
+// the only door. What keeps that honest is `announceLaneRemoved` in sessions.cjs — a lane cleared by
+// anyone announces itself, so his strip drops the row whether or not he was the one who pressed.
 // Scoped to run files by construction: the owner is minted from the id, so no path escapes DIR.
 function deleteRun(id) {
   try {
@@ -218,6 +243,47 @@ function deleteRun(id) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE RECEIPT (RFC-063) — the one thing derivation cannot recover.
+//
+// A lane row answers "can I delete this?" by comparing the branch against the tree. That is
+// archaeology and the evidence decays: `lane/hooks-end-of-turn` was brought in and committed, both
+// files it touched were then rewritten on top of it, and the comparison went blind — blobs no
+// longer matched, the patch no longer reversed, so the row said NOT BROUGHT IN about work that was
+// already in. The moment the knowledge existed was the moment of the bring-in, and nothing wrote it
+// down.
+//
+// A RECEIPT, NOT A SETTABLE VERDICT, and the distinction is the whole design. "This lane's work is
+// in the tree" is a claim about current state — testimony, which derivation must always beat. "I
+// applied this lane's diff into autobot at base 6dd6cc9 on 2026-10-02" is a record of an ACT: dated,
+// naming the base, checkable against history. So the agent never answers the question; it leaves a
+// receipt at the moment it acts, and `out` still beats it (see api/index.js `branchState` and
+// `laneVerdict.js` — a receipt against proof is a receipt that is wrong).
+//
+// WHY ON THE RUN RECORD AND NOT IN A STORE OF ITS OWN: nothing may accumulate in the background.
+// This cannot, by construction — no new file (a field on a record that already exists), the user's
+// 🗑 unlinks the run file so the receipt dies with the lane it describes, and closed runs already
+// sweep themselves after two weeks, so the retention is inherited rather than invented.
+//
+// A RUN THAT IS NOT THERE IS NOT STAMPED. save() would happily create the file, which would mint a
+// lane record out of a receipt for a lane nobody ran — the one way this could accumulate.
+function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
+  const owner = runOwner(String(id || ""));
+  try {
+    if (!fs.existsSync(fileFor(owner))) return null;
+  } catch {
+    return null;
+  }
+  const broughtIn = {
+    ts: Number(ts) > 0 ? Number(ts) : Date.now(),
+    base: String(base || "").trim().slice(0, 80),
+    repo: String(repo || "").trim().slice(0, 80),
+    by: String(by || "").trim().slice(0, 80),
+  };
+  save(owner, { broughtIn });
+  return broughtIn;
 }
 
 // Every worklist on this machine, newest first — what makes one readable AFTER the fact, by
@@ -240,6 +306,10 @@ function all() {
         updatedAt: r.updatedAt || 0,
         items,
         whiteboard: String(r.whiteboard || ""),
+        // THE RECEIPT RIDES THE ROW, or the window cannot see it: `laneRuns` filters this list, and
+        // the lane strip is drawn from what comes back here. null, never undefined — "no receipt" is
+        // an answer the row renders, not a key it has to guess about.
+        broughtIn: r.broughtIn && typeof r.broughtIn === "object" ? r.broughtIn : null,
         done: items.filter((i) => i.state === "done").length,
         total: items.length,
         active: (items.find((i) => i.state === "active") || {}).text || "",
@@ -382,4 +452,4 @@ function serverFor(onSet, getList = () => [], onBoard = null, getBoard = () => "
   });
 }
 
-module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, deleteRun, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, deleteRun, runIdForLane, markBroughtIn, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

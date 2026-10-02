@@ -17,7 +17,7 @@ const TOOL_NAME = (t) => `mcp__${SERVER}__${t}`;
 const TOOL_NAMES = [
   "runTests", "probe", "projects", "logs", "stats",
   "show", "tv", "reply", "board", "comments",
-  "nav", "refresh", "act", "highlight",
+  "nav", "refresh", "act", "highlight", "lanes",
   "connect", "disconnect",
   "terminal", "terminals",
 ].map(TOOL_NAME);
@@ -28,7 +28,11 @@ async function hub(moduleName, fn, arg) {
     res = await fetch(`${HUB()}/${moduleName}/${fn}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ __arguments: arg === undefined ? [] : [arg] }),
+      // An ARRAY is already the argument list. The Agent module's verbs each take one object, so for
+      // a year this only ever needed to wrap one — but every verb on the SystemView module is
+      // (projectCode, opts), and wrapping that in a single array sends the opts as nothing at all.
+      // That is the exact mistake that cost me an hour today, from the outside, with curl.
+      body: JSON.stringify({ __arguments: arg === undefined ? [] : Array.isArray(arg) ? arg : [arg] }),
     });
   } catch (e) {
     throw new Error(`the SystemView hub is not reachable at ${HUB()} — is it running?`);
@@ -166,6 +170,56 @@ function renderRun(r) {
 // is the thing this listing exists to make visible — and DUPLICATES are called out rather than
 // left for someone to notice: one serviceId registered twice under one project is how a suite ends
 // up running somewhere nobody meant, and the reader should not have to diff the lines themselves.
+// WHAT A LANE ROW SAYS, for the agent face. Deliberately the SAME three words the window's chip uses
+// (laneVerdict.js in systemview/src) — a tool that invented its own vocabulary would have an agent
+// reporting "pending" about a row the user is reading as "in tree", and then neither of them is wrong.
+function renderLanes(projectCode, r) {
+  if (r && r.error) return r.error;
+  const rows = r.lanes || [];
+  if (!rows.length) return `${projectCode}: no lanes standing.`;
+  const WORD = {
+    in: (l) => (l.committed ? "in · committed" : "in · uncommitted"),
+    out: () => "OUT — proven not in this tree",
+    unknown: () => "can't tell — files moved on since it was cut",
+  };
+  const out = [`${projectCode} — ${rows.length} lane${rows.length === 1 ? "" : "s"} standing`];
+  for (const l of rows) {
+    const word = (WORD[l.verdict] || (() => String(l.verdict || "?")))(l);
+    const counts = l.total ? `  ${l.matching}/${l.total} files match` : "";
+    // A receipt is a RECORD, never proof — said here too, so a reader of this tool cannot mistake it
+    // for the disk's answer.
+    const rcpt = l.broughtIn ? `  · receipt: brought in ${new Date(l.broughtIn.ts).toISOString().slice(0, 10)}${l.broughtIn.by ? ` by ${l.broughtIn.by}` : ""} (a record, not proof)` : "";
+    out.push(`   ${String(l.branch).padEnd(30)} ${word}${counts}${rcpt}`);
+  }
+  if (r.notIn) out.push(`\n⚠ ${r.notIn} lane${r.notIn === 1 ? "" : "s"} PROVEN not in this tree — that work exists nowhere else. Bring it in before anyone clears it.`);
+  else out.push(`\nnotIn: 0 — no lane's work is provably outside this tree.`);
+  return out.join("\n");
+}
+
+// WHAT WAS CLEARED, AND WHAT WAS NOT, in one answer. A remove that reported only its successes would
+// read as "all your lanes are gone" while the ones holding unrecovered work quietly stayed — the exact
+// shape of a log that lies by omission.
+function renderCleared(projectCode, cleared, refused) {
+  const out = [];
+  if (cleared.length) {
+    out.push(`cleared ${cleared.length} lane${cleared.length === 1 ? "" : "s"} in ${projectCode}:`);
+    for (const c of cleared)
+      out.push(`   ${String(c.branch).padEnd(30)} worktree: ${c.worktree} · branch: ${c.branchDeleted} · record: ${c.record} · told ${c.told} session${c.told === 1 ? "" : "s"}`);
+  } else out.push(`cleared nothing in ${projectCode}.`);
+  if (refused.length) {
+    out.push(`\nREFUSED ${refused.length} — their work cannot be shown to be in this tree:`);
+    for (const l of refused)
+      out.push(
+        `   ${String(l.branch).padEnd(30)} ${l.verdict === "out"
+          ? "PROVEN not in — deleting this destroys the only copy"
+          : `can't tell (${l.matching}/${l.total} match) — it may already be in, or may not`}`
+      );
+    out.push(`Bring the work in, or delete these yourself on the row where the confirm says what dies.`);
+  }
+  if (cleared.some((c) => !c.told)) out.push(`\nNote: told 0 sessions — no open session for ${projectCode}, so no strip was listening. The rows will be gone when one opens.`);
+  return out.join("\n");
+}
+
 function renderProjects(r) {
   if (r && r.error) return r.error;
   const projects = (r && r.projects) || r || {};
@@ -239,6 +293,10 @@ function renderStats(r) {
 
 function serverFor(identity = {}) {
   const who = identity.slot || identity.projectCode || null;
+  // sessions.cjs requires this file, so this file cannot require it back. The git half of clearing a
+  // lane is the hub's; the RECORD and the announce are the session host's, and they arrive here as a
+  // function rather than an import.
+  const onLaneRemoved = typeof identity.onLaneRemoved === "function" ? identity.onLaneRemoved : null;
   return createSdkMcpServer({
     name: SERVER,
     version: "1.0.0",
@@ -299,6 +357,68 @@ function serverFor(identity = {}) {
                 .map(([s]) => `${s}   log: ${path.join(os.homedir(), ".autobot", "terminals")}/*_${s}.log`)
                 .join("\n")
             );
+          } catch (e) { return fail(e); }
+        }
+      ),
+      tool(
+        "lanes",
+        "Every lane standing in a project — delegated work on its own branch and worktree — with the " +
+          "one answer that decides what to do next: is its work in the tree. `in` means present, and " +
+          "`committed` says whether history holds it too; `out` means PROVEN absent (the patch applies " +
+          "forward cleanly, so there is nothing of it here); `unknown` means the files it touched moved " +
+          "on since it was cut, so neither direction is clean and the lane may already be in. Read it " +
+          "before reporting delegated work as finished and before telling the user a lane is safe to " +
+          "delete. Pass `remove` with a branch to clear that lane — worktree, branch, run record, and an " +
+          "announce so his strip drops the row without him pressing anything — or `remove: \"all\"` for " +
+          "every lane whose work is verifiably in. A lane reading `out` or `unknown` is REFUSED and " +
+          "named: that is work nothing here can prove exists anywhere else.",
+        {
+          projectCode: z.string().describe("the project whose lanes to read"),
+          remove: z
+            .string()
+            .optional()
+            .describe('a branch to clear, or "all" for every lane whose work is verifiably in'),
+        },
+        async ({ projectCode, remove }) => {
+          try {
+            const st = await hub("SystemView", "lanes", [projectCode]);
+            if (!st || st.ok === false) return text(`lanes: ${(st && st.error) || "the hub said no"}`);
+            const rows = st.lanes || [];
+            if (!remove) return text(renderLanes(projectCode, st));
+            const want = String(remove).trim();
+            const targets = want === "all" ? rows : rows.filter((l) => l.branch === want);
+            if (!targets.length)
+              return text(
+                want === "all"
+                  ? `no lanes standing in ${projectCode} — nothing to clear`
+                  : `no lane called ${want} in ${projectCode}. Standing: ${rows.map((l) => l.branch).join(", ") || "none"}`
+              );
+            // THE GUARD IS THE VERDICT, NOT GIT'S ANCESTRY. A brought-in lane is unmerged by ancestry
+            // — the owner applied its diff rather than merging — so `branch -d` would refuse every
+            // lane this is for, and `-D` is correct. What makes -D safe here is that `in` is the DISK
+            // saying the work is present, checked one line above the delete. `out` and `unknown` are
+            // refused for opposite reasons: out is proof the work is nowhere else, unknown is the
+            // honest absence of proof either way. Both are his call, on the row, with the confirm.
+            const wts = await hub("SystemView", "worktrees", [projectCode]);
+            const wtOf = (b) => ((wts && wts.worktrees) || []).find((w) => !w.main && w.branch === b);
+            const cleared = [];
+            const refused = [];
+            for (const l of targets) {
+              if (l.verdict !== "in") { refused.push(l); continue; }
+              const wt = wtOf(l.branch);
+              const wtRes = wt ? await hub("SystemView", "removeWorktree", [projectCode, { path: wt.path, force: true }]) : null;
+              const brRes = await hub("SystemView", "deleteBranch", [projectCode, { name: l.branch, force: true }]);
+              // the record and the announce — the session host's half, injected at serverFor
+              const rec = onLaneRemoved ? onLaneRemoved(l.branch) : null;
+              cleared.push({
+                branch: l.branch,
+                worktree: wt ? (wtRes && wtRes.ok !== false ? "removed" : `FAILED: ${(wtRes && wtRes.error) || "?"}`) : "none",
+                branchDeleted: brRes && brRes.ok !== false ? "deleted" : `FAILED: ${(brRes && brRes.error) || "?"}`,
+                record: rec ? (rec.record ? "removed" : "already gone") : "not reachable from here",
+                told: rec ? rec.told : 0,
+              });
+            }
+            return text(renderCleared(projectCode, cleared, refused));
           } catch (e) { return fail(e); }
         }
       ),

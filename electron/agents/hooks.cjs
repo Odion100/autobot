@@ -658,7 +658,21 @@ function mayWrite(existing, author) {
 const isEvent = (name) => EVENTS.some((e) => e.name === String(name || "").trim());
 
 function remove(name) {
-  try { fs.unlinkSync(path.join(DIR, `${slug(name)}.md`)); return true; } catch { return false; }
+  const n = slug(name);
+  let gone = false;
+  try { fs.unlinkSync(path.join(DIR, `${n}.md`)); gone = true; } catch {}
+  // THE RATE RECORD DIES WITH THE HOOK. Found by cleaning up after a probe (2026-10-02): deleting a
+  // hook left its entries in hooks-fired.json forever — one line of orphan state per hook anyone
+  // ever tried, which nothing swept. His constraint is that nothing accumulates in the background,
+  // and the only way to honour that is for the record to be unable to outlive what it describes.
+  // Keyed `<agent>|<hook>`, so every agent's record for this hook goes, not just one.
+  try {
+    const st = readFiredState();
+    let touched = false;
+    for (const k of Object.keys(st)) if (k.endsWith(`|${n}`)) { delete st[k]; touched = true; }
+    if (touched) writeFiredState(st);
+  } catch {}
+  return gone;
 }
 
 module.exports = {
