@@ -374,6 +374,10 @@ function deliverHook(s, h, event) {
       session_id: "",
     });
   } catch {}
+  // NOBODY SENT THIS ONE. The pointer now on the queue will start a turn, and the harness knows —
+  // without asking the agent — that a hook and not the human started it. Marked here, at the only
+  // place a hook enters the conversation, and committed when that turn actually begins.
+  s.nextTurnFromHook = true;
   // THE RECEIPT, AND IT IS WRITTEN AT DELIVERY, NOT AT MATCH. A pointer held for the turn boundary
   // has not reached anyone yet; a receipt at match time would put a row in the feed for something
   // that had not happened, and for a hook whose session ends first, never would.
@@ -504,6 +508,13 @@ function fireHooks(s, event) {
   // boundary that turned out not to be one — including the pointer's own turn, so a delivered hook
   // can never be flushed on top of itself.
   if (TURN_ACTIVITY.has(event.kind)) {
+    // A TURN IS STARTING — the one moment `turnActive` goes false -> true. Whatever the queue was
+    // holding is now the turn in flight, and the holder is reset so a pointer that is never
+    // followed by a turn cannot colour the next one the human starts.
+    if (!s.turnActive) {
+      s.turnFromHook = s.nextTurnFromHook === true;
+      s.nextTurnFromHook = false;
+    }
     s.turnActive = true;
     if (s.turnEndTimer) { clearTimeout(s.turnEndTimer); s.turnEndTimer = null; }
     // and the quiet stretch is over — the next yield starts a fresh one from now
@@ -1040,6 +1051,15 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     runsDone: new Map(),
     turnSeq: 0,
     turnActive: false,
+    // WHO STARTED THE TURN THAT IS RUNNING (RFC-066 §3). `turnFromHook` is the COMMITTED answer for
+    // the turn in flight; `nextTurnFromHook` is what the queue is holding for the turn that has not
+    // begun. Two fields and not one, because the three writers into `s.input` push at moments that
+    // are NOT turn starts: a `deliver: now` hook pointer is pushed mid-turn and begins its own turn
+    // after the yield, and `send()` emits `user.prompt` before it pushes. Committing at the one
+    // moment a turn is observably starting — turnActive going false -> true in fireHooks — is what
+    // keeps a mid-turn pointer from relabelling the turn it interrupted.
+    turnFromHook: false,
+    nextTurnFromHook: false,
     turnEndTimer: null,
     idleTimer: null,
     quietSince: 0,
@@ -1136,7 +1156,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         s.currentRun = { id: back || worklist.newRunId(), source };
         if (!back) emit(s, { kind: "run.started", id: s.currentRun.id, source });
       }
-      worklist.writeRun(s.currentRun.id, s.worklistOwner, items, source);
+      // NOBODY SENT ME HERE — AND THE HOST SAYS SO, NOT THE AGENT (RFC-066 §3). Read off the
+      // session's current-turn origin, which the harness observed; there is no tool parameter
+      // carrying this and there must never be one. writeRun stamps it only at the run's BIRTH, so
+      // a lane's later list writes — possibly landing in a turn the human did start — cannot
+      // relabel the provenance of the run.
+      worklist.writeRun(s.currentRun.id, s.worklistOwner, items, source, { selfDirected: s.turnFromHook === true });
       s.worklistSource = source;
       emit(s, { kind: "todo.updated", items, source, run: s.currentRun.id });
       if (worklist.allDone(items)) {
@@ -1199,6 +1224,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // the half the hub cannot do: drop the run record and tell every strip in this project, so a
     // lane cleared by an agent disappears the same way one cleared by his press does
     onLaneRemoved: (branch) => removeLaneByBranch(projectCode, branch),
+    onLaneBroughtIn: (branch, opts) => recordLaneBroughtIn(projectCode, branch, opts),
   });
 
   s.query = query({
@@ -1323,6 +1349,10 @@ function sendContent(identity, text, pics = []) {
 
 function send(key, text, images = []) {
   const s = get(key);
+  // THE HUMAN ASKED. Cleared before the emit below, because emitting `user.prompt` is what trips
+  // the turn-start transition that commits the flag — set it after and the commit reads the stale
+  // value from whatever queued last.
+  s.nextTurnFromHook = false;
   const pics = (Array.isArray(images) ? images : []).filter((im) => im && im.data && im.mime);
   // echoed into the feed so history carries BOTH sides — a late-attaching view
   // (or another window) can replay the whole conversation, not just the answers
@@ -1397,6 +1427,25 @@ function announceLaneRemoved(projectCode, branch) {
     told++;
   }
   return told;
+}
+
+// RECORDING A BRING-IN (RFC-063's door, 2026-10-03). The receipt is stamped by the OWNER at the
+// moment it applies a lane's diff, because that is the only moment the fact is known for certain —
+// twenty minutes later the owner has edited those files and derivation has gone blind. BUApp proved
+// it from the other side: a verified bring-in read "can't tell (0/1 match)" within the hour.
+//
+// `by` is the session's own slot, which is honest: the agent that applied the diff is the one making
+// the claim, and a receipt is a claim. `markBroughtIn` refuses a run that does not exist, so a
+// receipt can never mint a lane — and it lives on the run record, so it dies with the lane.
+function recordLaneBroughtIn(projectCode, branch, { base = "", repo = "" } = {}) {
+  const id = worklist.runIdForLane(projectCode, String(branch || "").trim());
+  if (!id) return null;
+  const me = [...sessions.values()].find((s) => s.projectCode === projectCode);
+  return worklist.markBroughtIn(id, {
+    base,
+    repo: repo || projectCode,
+    by: (me && me.agentId) || `project:${projectCode}`,
+  });
 }
 
 // BY BRANCH, NOT BY RUN ID. A caller holding a branch name should not have to learn the id scheme to
@@ -1703,7 +1752,7 @@ function transcriptsFor(cwd, projectCode) {
 module.exports = {
   sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
   purgeAgent, agentRuns,
-  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
+  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
   // file by path; with the name changing, a missed caller reads an empty object

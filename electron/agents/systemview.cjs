@@ -297,6 +297,7 @@ function serverFor(identity = {}) {
   // lane is the hub's; the RECORD and the announce are the session host's, and they arrive here as a
   // function rather than an import.
   const onLaneRemoved = typeof identity.onLaneRemoved === "function" ? identity.onLaneRemoved : null;
+  const onLaneBroughtIn = typeof identity.onLaneBroughtIn === "function" ? identity.onLaneBroughtIn : null;
   return createSdkMcpServer({
     name: SERVER,
     version: "1.0.0",
@@ -378,12 +379,58 @@ function serverFor(identity = {}) {
             .string()
             .optional()
             .describe('a branch to clear, or "all" for every lane whose work is verifiably in'),
+          // THE RECEIPT'S DOOR (RFC-063, built 2026-10-03 after BUApp reported the gap from the
+          // other side). Derivation DECAYS: a lane is "in" only while its files still match, and the
+          // normal flow — apply the diff, then keep working on those files — breaks the match within
+          // minutes. BUApp's `lane/post-form` read "can't tell (0/1)" twenty minutes after a verified
+          // bring-in; buAPI's two read 0/9 and 0/4 with their features provably live in master. The
+          // row's whole job is the delete decision, and a decaying answer cannot make it.
+          //
+          // So the owner records the ACT at the moment it happens, and file-matching becomes a
+          // cross-check rather than the source of truth. It is a RECEIPT, not a settable verdict:
+          // laneVerdict only lets it answer `unknown`, never outrank a derived `out`, because `out`
+          // is proof and this is a record.
+          broughtIn: z
+            .string()
+            .optional()
+            .describe(
+              "a branch you have just applied into this tree — records WHEN and against what base, " +
+                "so the row still says so after the files move on. Stamp it at the moment you bring " +
+                "a lane in; derivation goes blind the moment anyone edits those files again."
+            ),
         },
-        async ({ projectCode, remove }) => {
+        async ({ projectCode, remove, broughtIn }) => {
           try {
             const st = await hub("SystemView", "lanes", [projectCode]);
             if (!st || st.ok === false) return text(`lanes: ${(st && st.error) || "the hub said no"}`);
             const rows = st.lanes || [];
+            if (broughtIn) {
+              const b = String(broughtIn).trim();
+              const row = rows.find((l) => l.branch === b);
+              if (!row)
+                return text(
+                  `no lane called ${b} in ${projectCode}. Standing: ${rows.map((l) => l.branch).join(", ") || "none"}`
+                );
+              if (!onLaneBroughtIn) return text(`cannot record it from here — no host door for ${projectCode}`);
+              // The base is the tree the work landed IN, which is the only thing that makes a stale
+              // receipt checkable later: "brought in against THIS commit" can be verified; a bare
+              // date cannot.
+              const g = await hub("SystemView", "gitState", [projectCode]);
+              const base = (g && (g.head || g.sha || (g.branch ? String(g.branch) : ""))) || "";
+              const rec = onLaneBroughtIn(b, { base, repo: projectCode });
+              if (!rec || !rec.ts)
+                return text(
+                  `${b}: nothing recorded — no run file for this lane (its record may have been swept). ` +
+                    `The branch and worktree are still there; derivation is all the row has.`
+                );
+              return text(
+                [
+                  `recorded: ${b} brought in${base ? ` at ${base}` : ""} in ${projectCode}`,
+                  `   the row will say so even after these files move on — derivation is now a cross-check.`,
+                  `   it is a RECORD, not proof: a derived \`out\` still overrules it, and it dies with the lane.`,
+                ].join("\n")
+              );
+            }
             if (!remove) return text(renderLanes(projectCode, st));
             const want = String(remove).trim();
             const targets = want === "all" ? rows : rows.filter((l) => l.branch === want);
@@ -404,7 +451,12 @@ function serverFor(identity = {}) {
             const cleared = [];
             const refused = [];
             for (const l of targets) {
-              if (l.verdict !== "in") { refused.push(l); continue; }
+              // IN, or UNKNOWN WITH A RECEIPT. `out` stays refused — that is proof of absence and a
+              // record cannot outrank proof. But refusing a receipt-answered lane is what made
+              // BUApp route around this by hand (`git worktree remove` + `rm run-*.json`), which
+              // orphans the record and announces nothing to anyone's strip.
+              const answered = l.verdict === "unknown" && l.broughtIn;
+              if (l.verdict !== "in" && !answered) { refused.push(l); continue; }
               const wt = wtOf(l.branch);
               const wtRes = wt ? await hub("SystemView", "removeWorktree", [projectCode, { path: wt.path, force: true }]) : null;
               const brRes = await hub("SystemView", "deleteBranch", [projectCode, { name: l.branch, force: true }]);

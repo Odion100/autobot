@@ -153,6 +153,32 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
       "and it wrote no file doing it");
     ok("markBroughtIn on a run that does not exist writes nothing — a receipt cannot mint a lane");
 
+    // save() carries every key a writer does not own — the claim the receipt needs: a lane's own
+    // next list write must not wipe the stamp the owner just put on it.
+    worklist.writeRun(lane, "session:proj-a:old-session-id", [{ id: "1", text: "build", state: "done" }], "lane:test/a");
+    assert.equal(worklist.laneRuns("proj-a")[0].broughtIn.base, "6dd6cc9",
+      "a later list write must not clobber the receipt");
+    ok("a list write preserves the receipt — the same carry-forward the whiteboard needed");
+
+    // ---- selfDirected (RFC-066 §3) — written at birth, by the HOST, never by the agent ---------
+    assert.equal(worklist.laneRuns("proj-a")[0].selfDirected, false,
+      "a record written before this field existed reads false, not undefined — no migration");
+    ok("selfDirected defaults false — every run already on disk is commissioned work");
+
+    {
+      const own = worklist.newRunId();
+      worklist.writeRun(own, "session:proj-a:s1", [{ id: "1", text: "unbidden", state: "active" }], "lane:test/self", { selfDirected: true });
+      const seenSelf = () => worklist.laneRuns("proj-a").find((r) => r.source === "lane:test/self");
+      assert.equal(seenSelf().selfDirected, true, "a run born in a hook's turn says so");
+      // PROVENANCE IS A FACT ABOUT THE BIRTH. A backgrounded lane's fifth list write may land in a
+      // turn the human DID start; relabelling the run there would make the field a rolling guess.
+      worklist.writeRun(own, "session:proj-a:s1", [{ id: "1", text: "unbidden", state: "done" }], "lane:test/self", { selfDirected: false });
+      assert.equal(seenSelf().selfDirected, true,
+        "a later write cannot relabel it — the flag is stamped at birth and carried forward");
+      ok("selfDirected is written once, at the run's birth, and no later write can flip it");
+      worklist.deleteRun(own);
+    }
+
     // ---- FINDING A LANE'S RUN BY BRANCH (the clear-a-lane door, 2026-10-02) ----------------
     // An agent can now clear a lane (mcp__systemview__lanes remove=...), and the record half of that
     // starts here: turn a BRANCH into the run id, because the branch is the only name a lane carries
@@ -189,7 +215,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
       "the file the receipt lived in is gone from disk");
     assert.ok(!worklist.all().some((r) => r.broughtIn && r.broughtIn.base === "6dd6cc9"),
       "and nothing anywhere on this machine still holds that receipt");
-    ok("deleteRun: the record dies once, honestly — and the receipt cannot outlive the lane it describes");
+    ok("deleteRun: the record dies once, honestly — the receipt cannot outlive the lane");
   }
 
   // ---- RETENTION — closed runs age out, died runs never do -----------------------
@@ -239,6 +265,36 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   assert.equal(out.length, 3, "empty text is dropped");
   assert.ok(out.every((i) => i.id), "every item gets a stable id");
   ok("one active item is enforced by the tool, not requested of the model");
+}
+
+// ---- THE DOOR'S SHAPE — and no way to testify (RFC-066 §3) ---------------------------------
+// `markBroughtIn` shipped defined, exported and tested with NO caller but its own test: no tool, no
+// IPC, so no agent could write a receipt and zero receipts ever existed. These claims are about the
+// door itself — that `set` is the two-parameter verb it has always been, and that there is nothing
+// beside those two an agent could use to claim its own provenance.
+{
+  const calls = [];
+  const tools = worklist.toolsFor((items, source) => calls.push({ items, source }));
+  const setTool = tools.find((t) => t.name === worklist.TOOL);
+  assert.ok(setTool, "the worklist still has a `set` tool");
+  const keys = Object.keys(setTool.inputSchema || {});
+  assert.ok(!keys.includes("selfDirected"),
+    "there is NO selfDirected parameter — a field an agent sets about its own provenance is testimony");
+  assert.deepEqual(keys.sort(), ["items", "source"], "exactly two parameters, no third door");
+  ok("`set` takes items and source and nothing else — provenance is not settable at all");
+
+  // AN EXTRA KEY REACHES NOTHING. A handler that forwards whatever it was handed is the same
+  // failure as a parameter, one layer deeper.
+  const r1 = await setTool.handler(
+    { items: [{ id: "1", text: "done it", state: "done" }], source: "lane:test/door", selfDirected: true },
+    {}
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].source, "lane:test/door");
+  assert.equal(calls[0].selfDirected, undefined,
+    "an extra `selfDirected` in the input reaches NOTHING — the host has no argument for it");
+  assert.ok(/worklist: 1\/1 done/.test(r1.content[0].text), "and the ordinary reply is unchanged");
+  ok("an agent cannot smuggle its own provenance through `set` — the host reads it off the session");
 }
 
 // ---- 1-3. against a live session -----------------------------------------------
@@ -315,6 +371,35 @@ ok("a late subscriber renders the current list from history, from ONE event");
   const store = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".autobot", "sessions.json"), "utf8"));
   assert.ok(!(store[s.key] || {}).worklist, "and the old second copy in the run store is gone");
   ok("one copy of one fact — the run store no longer holds a worklist that can disagree");
+}
+
+// ---- PROVENANCE, READ OFF A REAL SESSION (RFC-066 §3) ---------------------------
+// The claim a unit test cannot make: a model calls the tool it was given, a run is born, and the
+// HOST — not the input — is what answered "did anyone send me here".
+{
+  const seen = [];
+  sessions.subscribe(s.key, (e) => { if (e.kind === "run.started") seen.push(e); });
+  sessions.send(
+    s.key,
+    "Call your worklist tool ONCE with source \"lane:test/live-run\", one item " +
+      "{id:\"1\",text:\"tidy the readme\",state:\"done\"}. Then stop and say nothing else."
+  );
+  const dl = Date.now() + 120000;
+  while (!seen.some((e) => e.source === "lane:test/live-run") && Date.now() < dl) {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!seen.length) {
+    console.error("no run.started. kinds seen:", JSON.stringify(sessions.history(s.key).map((e) => e.kind)));
+  }
+  const row = worklist.laneRuns("worklist-test").find((r) => r.source === "lane:test/live-run");
+  assert.ok(row, "the run record exists, found the way a lane row finds it");
+  ok("a live agent opened a sourced run through `set` and it is on disk");
+
+  // THE TURN WAS STARTED BY THE HUMAN — sessions.send() above is the user's message, so the host's
+  // own answer to "did anyone send me here" must be no-this-was-asked-for.
+  assert.equal(row.selfDirected, false,
+    "a run born in a turn the user started is commissioned work, and the HOST is what says so");
+  ok("selfDirected reads false for a user-started turn — read off the session, never off the input");
 }
 
 // simulate the restart: drop the in-memory session, reopen the same key, and

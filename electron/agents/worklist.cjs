@@ -126,13 +126,17 @@ function save(owner, patch) {
     // difference between a job that finished and a job that stopped.
     // EVERY KEY A WRITER DOES NOT OWN IS CARRIED FORWARD BY HAND, and one that is forgotten here
     // is silently destroyed by the next unrelated write — the lesson the whiteboard already taught
-    // (a set() that clobbered the board made the two features enemies). `broughtIn` is the newest
-    // passenger: a receipt stamped at bring-in must survive the lane's own last list write.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, ...patch, updatedAt: Date.now() };
+    // (a set() that clobbered the board made the two features enemies). `broughtIn` was the first
+    // passenger; `selfDirected` (RFC-066) is the newest, and it rides for the same reason: it is
+    // stamped once at a run's birth, so every later list write is a write that does not know it.
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, selfDirected: cur.selfDirected, ...patch, updatedAt: Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
     if (!next.broughtIn) delete next.broughtIn;
+    // FALSE IS ABSENT, ON PURPOSE. Every run record already on disk is commissioned work, so
+    // "no key" and "false" must be the same answer — which is what makes this need no migration.
+    if (!next.selfDirected) delete next.selfDirected;
     fs.writeFileSync(fileFor(owner), JSON.stringify(next, null, 2));
   } catch {}
 }
@@ -197,8 +201,26 @@ function openRunFor(session, source) {
   return hit ? hit.owner.slice(4) : null;
 }
 
-function writeRun(id, session, items, source) {
-  save(runOwner(id), { items, source: source || undefined, session });
+// WHO COMMISSIONED THIS RUN (RFC-066 §3) — stamped AT BIRTH and never re-asked, because
+// `selfDirected` is a fact about the moment the run STARTED, not about the moment of any later
+// write. A backgrounded lane whose fifth list write lands in a turn the user did start must not be
+// quietly relabelled as commissioned work, and a run resumed after a harness restart must not be
+// relabelled either. So the flag is written only when the file does not exist yet; after that
+// save() carries it forward like every other key its writer does not own.
+//
+// THE CALLER IS THE HOST, NEVER THE AGENT. sessions.cjs reads it off the session's current-turn
+// origin; there is no tool parameter that reaches this, by construction — surfaces read state,
+// they never testify, and a field an agent sets about its own provenance is testimony.
+function writeRun(id, session, items, source, { selfDirected } = {}) {
+  const owner = runOwner(id);
+  let born = true;
+  try { born = !fs.existsSync(fileFor(owner)); } catch {}
+  save(owner, {
+    items,
+    source: source || undefined,
+    session,
+    ...(born ? { selfDirected: selfDirected === true } : {}),
+  });
   return items;
 }
 
@@ -286,6 +308,7 @@ function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
   return broughtIn;
 }
 
+
 // Every worklist on this machine, newest first — what makes one readable AFTER the fact, by
 // something that is not the session that wrote it.
 function all() {
@@ -310,6 +333,9 @@ function all() {
         // the lane strip is drawn from what comes back here. null, never undefined — "no receipt" is
         // an answer the row renders, not a key it has to guess about.
         broughtIn: r.broughtIn && typeof r.broughtIn === "object" ? r.broughtIn : null,
+        // ABSENT READS FALSE. No migration: every record written before this existed was
+        // commissioned by a human asking for it.
+        selfDirected: r.selfDirected === true,
         done: items.filter((i) => i.state === "done").length,
         total: items.length,
         active: (items.find((i) => i.state === "active") || {}).text || "",
@@ -333,11 +359,12 @@ function all() {
 // legitimate. So the check appends one ignorable line: the agent that typo'd a real job reacts;
 // the agent that named its own lane reads past it. `checkSource` is injected by sessions.cjs so
 // this module stays free of the registries.
-function serverFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null) {
-  return createSdkMcpServer({
-    name: SERVER,
-    version: "1.0.0",
-    tools: [
+// THE TOOLS, APART FROM THE SERVER THAT CARRIES THEM. One definition, two readers: serverFor wraps
+// these for the SDK, and a test can hold the handler and CALL it. That matters here more than usual
+// — `markBroughtIn` shipped defined, exported and tested with no door on it at all, called by
+// nothing but its own test, so zero receipts ever existed. A door is only proven by being opened.
+function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null) {
+  return [
       tool(
         TOOL,
         "Record your worklist for this session: the plan you are working through. " +
@@ -448,8 +475,11 @@ function serverFor(onSet, getList = () => [], onBoard = null, getBoard = () => "
         },
         { alwaysLoad: true }
       ),
-    ],
-  });
+  ];
 }
 
-module.exports = { serverFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, deleteRun, runIdForLane, markBroughtIn, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+function serverFor(...wiring) {
+  return createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: toolsFor(...wiring) });
+}
+
+module.exports = { serverFor, toolsFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, deleteRun, runIdForLane, markBroughtIn, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
