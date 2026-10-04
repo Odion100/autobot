@@ -290,6 +290,49 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     const u = ctx.unsubscribe(subScopes, { what: `note:${noteB.id}@${AG}` });
     ok(typeof u.left === "number", "unsubscribe ends a preference by name");
 
+    // ---- THE DECISION IS A PARAMETER ON `remember` (2026-10-04, his call) --------------------
+    // Through the REAL TOOL HANDLER, not the module function underneath: everything claimed here
+    // lives at the tool layer — that the parameter is required, that it subscribes without an id,
+    // that a refused shelf still keeps the note. A test that went around the tool would prove none
+    // of it, which is the `markBroughtIn` lesson.
+    {
+      const tools = ctx.toolsFor({ slot: "smoketest", projectCode: "smoketest-sys" });
+      const rem = tools.find((t) => t.name === "remember");
+      ok(!!rem && rem.inputSchema.subscribe && !rem.inputSchema.subscribe.isOptional(),
+        "`subscribe` is a REQUIRED parameter on remember — no default answers for the agent");
+
+      // "no" is a real answer, and the common one
+      const r1 = await rem.handler({ text: "findable only, no shelf", scope: AG, subscribe: "no" }, {});
+      const id1 = /Remembered as (\S+) in/.exec(r1.content[0].text)[1];
+      ok(!/Subscribed/.test(r1.content[0].text), "\"no\" writes the note and sets no shelf");
+      ok(!defs.subscriptionsOf("smoketest").some((x) => x.what.includes(id1)), "and nothing landed in the def");
+
+      // the object subscribes the note THIS call wrote — no id round-trip
+      const r2 = await rem.handler(
+        { text: "verify the tree before believing a summary", scope: AG, subscribe: { when: "post-compaction", until: { ttl: "2d" } } },
+        {}
+      );
+      const id2 = /Remembered as (\S+) in/.exec(r2.content[0].text)[1];
+      ok(/Subscribed at post-compaction/.test(r2.content[0].text), "the reply says the shelf was set, and at which moment");
+      ok(defs.subscriptionsOf("smoketest").some((x) => x.what === `note:${id2}@${AG}`),
+        "one call wrote the note AND subscribed it — the id never left the handler");
+      ok(/verify the tree/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction")),
+        "and it actually delivers at that moment");
+
+      // editing by id can subscribe too — same door, which is why correcting a note can also shelf it
+      const r3 = await rem.handler({ id: id1, text: "findable only — corrected", scope: AG, subscribe: { when: "session-start" } }, {});
+      ok(/Updated/.test(r3.content[0].text) && /Subscribed at session-start/.test(r3.content[0].text),
+        "the id-edit path subscribes as well — one door for write and correct");
+
+      // A REFUSED SHELF MUST NOT LOSE THE NOTE. The 700-char cap is a legitimate refusal; the write
+      // already succeeded, so silence here would mean an agent believing it filed nothing.
+      const r4 = await rem.handler({ text: "z".repeat(800), scope: AG, subscribe: { when: "post-compaction" } }, {});
+      ok(/Remembered as/.test(r4.content[0].text) && /NOT subscribed/.test(r4.content[0].text),
+        "a refused subscription keeps the note and says so out loud — never swallowed");
+      const id4 = /Remembered as (\S+) in/.exec(r4.content[0].text)[1];
+      ok(!defs.subscriptionsOf("smoketest").some((x) => x.what.includes(id4)), "and no half-row was left behind");
+    }
+
     // cleanup: throwaway def, notes, sidecar keys
     defs.remove("smoketest");
     ok(!fs.existsSync(path.join(defs.DIR, "smoketest.subs.json")), "standing orders die with the agent");

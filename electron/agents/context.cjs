@@ -554,9 +554,16 @@ async function search(scopes, { question, scope, k = 5, by = null }) {
   return hits;
 }
 
-// The per-session server. `identity` is CLOSED OVER: { projectCode, slot } come from
-// the harness's own knowledge of the session, never from tool arguments.
-function serverFor(identity = {}) {
+// THE TOOLS, APART FROM THE SERVER THAT CARRIES THEM. One definition, two readers: serverFor wraps
+// these for the SDK, and a test can hold a handler and CALL it. Without the split a test can only
+// reach the module functions underneath, so anything enforced at the TOOL layer — a required
+// parameter, a refusal, the text an agent actually reads back — is untestable. That is how
+// `markBroughtIn` shipped "tested" while being reachable by nothing (worklist.cjs carries the same
+// split for the same reason).
+//
+// `identity` is CLOSED OVER: { projectCode, slot } come from the harness's own knowledge of the
+// session, never from tool arguments.
+function toolsFor(identity = {}) {
   const allowed = [
     "system",
     identity.projectCode ? `project:${identity.projectCode}` : null,
@@ -572,20 +579,18 @@ function serverFor(identity = {}) {
     slot: identity.slot || null,
   };
 
-  return createSdkMcpServer({
-    name: SERVER,
-    version: "1.0.0",
-    tools: [
+  return [
       tool(
         "remember",
         "Write one small piece of knowledge to the shared context store so every future session " +
           "can find it. Use it the moment you learn something a future agent would otherwise " +
           "rediscover: a correction from the user, a convention, a gotcha, what a command really " +
           "does. One concept per note. If the response says a similar note already exists, update " +
-          "that one (pass supersedes) instead of piling on near-duplicates. And if what you just " +
-          "wrote is something a future you NEEDS DELIVERED rather than findable — state to verify " +
-          "after a compaction, a rule you keep missing at session start — subscribe to it " +
-          "(the subscribe tool), at will, any time: that is what the shelves are for.",
+          "that one (pass supersedes) instead of piling on near-duplicates. `subscribe` is " +
+          "REQUIRED and has no default: every note forces the one decision only you can make here " +
+          "\u2014 does a future session need this DELIVERED, or merely findable? Answer \"no\" freely; " +
+          "most notes are findable. But a state to verify after a compaction, or a rule a cold " +
+          "start keeps missing, is worth a shelf, and this is the moment you know it.",
         {
           text: z.string().describe("the knowledge itself — a few sentences, one concept"),
           title: z.string().optional().describe("short title; defaults to the first line"),
@@ -600,19 +605,85 @@ function serverFor(identity = {}) {
           pointer: z.string().optional().describe("optional pointer to the source: a file path, namespace, or report"),
           supersedes: z.string().optional().describe("id of the note this replaces"),
           id: z.string().optional().describe("id of an existing note to EDIT in place — use when you got a note wrong and want to correct it, not add a duplicate"),
+          // REQUIRED, AND THE REQUIREMENT IS THE FEATURE (his call, 2026-10-04). Subscribing used to
+          // live in a tool of its own, which meant it happened during a maintenance pass or not at
+          // all — decided days later by whoever ran maintenance, with less context than the agent
+          // that wrote the note. It also cost an id round-trip: write, read the id back, then
+          // subscribe("note:<id>@<scope>"). As a parameter the target is implicit and the decision
+          // lands where it is best informed.
+          //
+          // NO DEFAULT, deliberately, and the precedent is `nav`: "the caller always knows what it
+          // is sending him to; the code never guesses." The caller always knows whether a future
+          // self needs this delivered. A default would answer for it, and the answer would be "no"
+          // forever — which is the behaviour this replaces.
+          //
+          // AN OBJECT, not a boolean — his correction. `until` is a real parameter, and a boolean
+          // invites a reflexive tick; "when would this arrive, and until when" has to be answered.
+          subscribe: z
+            .union([
+              z.literal("no"),
+              z.literal(false),
+              z.object({
+                when: z.union([z.string(), z.array(z.string())]).describe("one or more moments: every-turn | session-start | post-compaction"),
+                until: z
+                  .object({
+                    ttl: z.string().optional().describe("a clock, like \"7d\" or \"12h\" (max 30d). The default gate: 7d"),
+                    turns: z.number().optional().describe("a delivery count, 1\u201350"),
+                    run: z.string().optional().describe("ends when a CLOSED run with this worklist source exists, e.g. \"skill:doc-maintenance\""),
+                  })
+                  .optional()
+                  .describe("when it ENDS. Omit for the 7d clock."),
+              }),
+            ])
+            .describe(
+              "REQUIRED, no default. `\"no\"` if this note only needs to be FINDABLE — most are. " +
+                "Otherwise { when, until } and it is DELIVERED unasked at that moment: " +
+                "\"post-compaction\" meets you where a summary replaced your reasoning (the sharpest " +
+                "use), \"session-start\" rides the composition, \"every-turn\" is highest rent. " +
+                "Subscribes the note THIS call writes or edits — no id to pass. Everything else " +
+                "(a corpus section, another agent's note) is still the `subscribe` tool"
+            ),
         },
         async (args) => {
           try {
+            // THE NOTE IS WRITTEN FIRST, AND THE ORDER IS THE POINT: a subscription's target must
+            // exist (resolveWhat refuses a ghost), so there is nothing to subscribe to until the
+            // write lands. Same reasoning as filing against a run that has to be open first.
+            let id, scope;
             if (args.id) {
               const e = await editNote(scopes, args);
-              return { content: [{ type: "text", text: `Updated ${e.id} in ${e.scope}.` }] };
+              ({ id, scope } = e);
+            } else {
+              var r = await remember(scopes, args);
+              ({ id, scope } = r);
             }
-            const r = await remember(scopes, args);
+            // A FAILED SUBSCRIPTION NEVER LOSES THE NOTE, and it is never swallowed either: the
+            // write already succeeded and saying so matters more than the shelf did. A full shelf,
+            // a 700-char note, a session with no agent slot — all legitimate refusals, and all of
+            // them have to reach the agent as the refusal they are rather than as silence.
+            let shelf = "";
+            const want = args.subscribe;
+            if (want && want !== "no" && typeof want === "object") {
+              try {
+                const sub = subscribe(scopes, { what: `note:${id}@${scope}`, when: want.when, until: want.until });
+                const gate = sub.until.turns
+                  ? `${sub.until.turns} deliveries`
+                  : sub.until.run
+                    ? `until run ${sub.until.run} closes`
+                    : `until ${new Date(sub.until.untilTs).toISOString().slice(0, 10)}`;
+                shelf = ` Subscribed at ${sub.when.join(" + ")}, ${gate}.`;
+              } catch (e) {
+                shelf = ` NOT subscribed — ${e.message} The note is written; fix the shelf with the subscribe tool or leave it findable.`;
+              }
+            }
+            if (args.id) {
+              return { content: [{ type: "text", text: `Updated ${id} in ${scope}.${shelf}` }] };
+            }
             const dup = r.near
               ? `\nNOTE: a similar note already exists — "${r.near.meta.title}" (id ${r.near.id}, ${r.near.score.toFixed(2)}). ` +
                 `If yours restates it, supersede it next time instead.`
               : "";
-            return { content: [{ type: "text", text: `Remembered as ${r.id} in ${r.scope}.${dup}` }] };
+            return { content: [{ type: "text", text: `Remembered as ${id} in ${scope}.${shelf}${dup}` }] };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }
@@ -780,7 +851,10 @@ function serverFor(identity = {}) {
       ),
       tool(
         "subscribe",
-        "Subscribe YOURSELF to a piece of context for delivery unasked at a moment — the reader " +
+        "Subscribe YOURSELF to context that ALREADY EXISTS — a corpus section, a note somebody " +
+          "else wrote, a note from an earlier session. For a note you are writing or correcting " +
+          "right now, do NOT come here: `remember` carries a required `subscribe` parameter and " +
+          "subscribes it in the same call, with no id to pass. The reader " +
           "subscribes, the content is never touched, and only your own attention is spent. Use it " +
           "for what you will need at a moment you won't think to ask: \"post-compaction\" (meets " +
           "you on the far side, where a summary has replaced your reasoning — the sharpest use), " +
@@ -1232,8 +1306,11 @@ function serverFor(identity = {}) {
         },
         { alwaysLoad: true }
       ),
-    ],
-  });
+    ];
+}
+
+function serverFor(identity = {}) {
+  return createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: toolsFor(identity) });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1272,4 +1349,4 @@ function stats(scopes = []) {
   };
 }
 
-module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince, injectedFor, subscribe, unsubscribe, resolveWhat, runCleared, INJECT_TYPES, INJECT_CAPS, INJECT_NOTE_MAX };
+module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, toolsFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince, injectedFor, subscribe, unsubscribe, resolveWhat, runCleared, INJECT_TYPES, INJECT_CAPS, INJECT_NOTE_MAX };
