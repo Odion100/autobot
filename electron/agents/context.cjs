@@ -234,14 +234,94 @@ function resolveWhat(what, allowedScopes) {
   return null;
 }
 
+// WHICH SCOPES A READER MAY BE MET BY — the subscriber's own three, built in one place because
+// injectedFor, contentDelivery and the tool layer all need the same answer and a fourth copy of
+// this list is how one of them quietly becomes able to inject another agent's lessons.
+const allowedFor = (identity = {}) =>
+  [
+    "system",
+    identity.projectCode ? `project:${identity.projectCode}` : null,
+    identity.slot ? `agent:${identity.slot}` : null,
+  ].filter(Boolean);
+
+// THE CONTENT GATE, AND ITS REFUSALS, IN ONE PLACE. Two doors now lead here — `subscribe` (a
+// reader shelving something for itself) and `hooks.save` (a content hook written into the shared
+// library) — and the wording is load-bearing: the cap refusal is the sentence that teaches why
+// injection is not free, and a test asserts it verbatim. One function, so the two doors cannot
+// start refusing differently.
+function checkContent(what, allowed) {
+  const target = resolveWhat(what, allowed);
+  if (!target) throw new Error(`nothing at "${what}" — a subscription points at note:<id>@<scope>, corpus:<name>:<source>#<heading>, or board:<projectCode>, and the target must exist`);
+  if (target.denied) throw new Error(`scope ${target.denied} is not readable by this session`);
+  if (target.body.length > INJECT_NOTE_MAX)
+    throw new Error(`an injected item is capped at ${INJECT_NOTE_MAX} chars (this one resolves to ${target.body.length}) — injection spends attention on every delivery; point at something tighter`);
+  return target;
+}
+
+// ── THE MERGE: A SUBSCRIPTION IS A CARRIED HOOK WHOSE `do` NAMES CONTENT ─────────────────────
+// Settled 2026-10-05. The row below is read as a hook record — same `on`, same `when`, same
+// `rate`, same `do` grammar — and handed to hooks.cjs's matcher and hooks.cjs's rate ledger.
+// Nothing here re-implements matching or cadence, which is the whole point: a subscription gains
+// `when` and `rate` by being a hook, not by growing two features of its own.
+//
+// WHY THESE ROWS DO NOT LIVE IN ~/.autobot/hooks AND ARE NOT CARRIED ON `def.hooks`, which was the
+// obvious shape and does not survive two facts already in the code:
+//
+//   1. `with:` IS NOT PER-AGENT DATA. It sits in the hook FILE's front matter, so every agent
+//      carrying a hook is given the same inputs. A shared `inject` hook carried with a different
+//      `what` per agent is not expressible — there is no per-carry record to put it in.
+//   2. CARRYING IS A DEF WRITE, AND A DEF WRITE RINGS THE COMPOSITION BELL. sessions.cjs stats the
+//      definition's mtime to decide whether to re-init, so appending to `def.hooks` on every
+//      subscribe would re-initialise the session on every subscribe. That is the bug the sidecar
+//      was created for, and it is tested.
+//
+// So: ONE MECHANISM, TWO OWNERSHIPS. A hook in the library is one definition many agents may carry;
+// a row in the sidecar is a hook only this agent has, written without touching its definition.
+// Both go through hooks.matchesWhen, hooks.rateAllows and hooks.recordFired. The difference is
+// where the record was read from — which is the one difference that was ever real.
+const hookOf = (row = {}) => ({
+  // STABLE AND UNIQUE PER (agent, target): hooks.recordFired keys the persisted rate ledger
+  // `<agentId>|<name>`, so a name derived from anything volatile would reset its own cadence.
+  name: `sub:${row.what}`,
+  on: (Array.isArray(row.when) ? row.when : []).map(hooks.eventForMoment).filter(Boolean),
+  // the payload condition — `if` on the row, because `when` on a subscription was already spent on
+  // the moment and renaming it would be the surface change he ruled out
+  when: row.if && typeof row.if === "object" ? row.if : {},
+  rate: row.rate ? String(row.rate) : "",
+  do: String(row.what || ""),
+  kind: "content",
+});
+
 // The gate, at the subscribing door — nothing saves-then-ignores.
-function subscribe(scopes, { what, when, until } = {}) {
+function subscribe(scopes, { what, when, until, if: cond, rate } = {}) {
   const defs = require("./definitions.cjs");
   const slot = scopes.slot;
   if (!slot) throw new Error("subscriptions belong to an agent definition — this session has no agent slot");
   const whens = (Array.isArray(when) ? when : String(when || "").split(",")).map((t) => String(t).trim()).filter(Boolean);
   if (!whens.length) throw new Error(`when is one or more of ${INJECT_TYPES.join(" | ")}`);
   for (const w of whens) if (!INJECT_TYPES.includes(w)) throw new Error(`unknown moment "${w}" — moments are ${INJECT_TYPES.join(" | ")}`);
+  // `if` — THE CONDITION, FREE WITH THE MERGE. Refused at the door when its operators are not ones
+  // hooks.cjs knows, because an unknown operator is false forever: the subscription would list,
+  // look armed, and never deliver once.
+  const badIf = hooks.checkWhen(cond);
+  if (badIf) throw new Error(badIf);
+  // `rate` — THE CADENCE, ALSO FREE, with one form refused. `once-per-session` is the only rate
+  // whose store IS the session, and the three injection moments are reached from composition and
+  // from send(), where there is not always a session map to spend. Rather than let it degrade to
+  // "no limit" — the exact failure a malformed cooldown used to cause — it is refused by name, and
+  // the refusal says what to use instead.
+  const rateIn = String(rate || "").trim();
+  if (rateIn) {
+    if (rateIn === "once-per-session")
+      throw new Error(`once-per-session is not a rate an injected item can keep — a session-start subscription already means "once per session". Use once-per-day, once-per-week, once-per-month or cooldown:<duration>.`);
+    if (!hooks.RATE_FORMS.test(rateIn))
+      throw new Error(`rate must be once-per-day, once-per-week, once-per-month, or cooldown:<duration> — got "${rateIn}"`);
+    if (rateIn.startsWith("cooldown:")) {
+      const ms = hooks.parseDur(rateIn.slice("cooldown:".length));
+      if (!Number.isFinite(ms) || ms <= 0)
+        throw new Error(`"${rateIn}" is not a duration I can read. Write it like 30m, 24h, 3d12h, 2w (bare digits still mean seconds). A rate that cannot be parsed would either block forever or not at all, and both are worse than this refusal.`);
+    }
+  }
   const u = until && typeof until === "object" ? until : {};
   const gate = {};
   if (u.turns != null) {
@@ -263,11 +343,7 @@ function subscribe(scopes, { what, when, until } = {}) {
     if (ms == null) throw new Error(`until.ttl reads like "7d" or "12h", max 30d — got "${u.ttl}"`);
     gate.untilTs = Date.now() + ms; // a clock can back up a count or a condition
   }
-  const target = resolveWhat(what, scopes.allowed);
-  if (!target) throw new Error(`nothing at "${what}" — a subscription points at note:<id>@<scope>, corpus:<name>:<source>#<heading>, or board:<projectCode>, and the target must exist`);
-  if (target.denied) throw new Error(`scope ${target.denied} is not readable by this session`);
-  if (target.body.length > INJECT_NOTE_MAX)
-    throw new Error(`an injected item is capped at ${INJECT_NOTE_MAX} chars (this one resolves to ${target.body.length}) — injection spends attention on every delivery; point at something tighter`);
+  const target = checkContent(what, scopes.allowed);
   const subs = defs.subscriptionsOf(slot);
   if (subs.some((r) => r.what === what && r.when.some((w) => whens.includes(w))))
     throw new Error(`already subscribed to ${what} at an overlapping moment — unsubscribe first to change its gate`);
@@ -284,7 +360,19 @@ function subscribe(scopes, { what, when, until } = {}) {
         `Unsubscribe one first — currently: ${onShelf.map((r) => `"${r.what}"`).join(", ")}`
       );
   }
-  const row = { what: String(what), when: whens, until: gate, addedAt: Date.now() };
+  // THE ROW IS A SUPERSET OF THE OLD ONE, WHICH IS WHY NOTHING ON DISK NEEDS MIGRATING. `if` and
+  // `rate` are written only when set, so a subscription that uses neither is byte-for-byte the row
+  // this harness has been writing since RFC-013 — the four live ones keep working by being already
+  // correct, not by being rewritten. (definitions.cleanSubs is the whitelist that decides whether a
+  // key survives a round trip; both are listed there.)
+  const row = {
+    what: String(what),
+    when: whens,
+    until: gate,
+    addedAt: Date.now(),
+    ...(cond && Object.keys(cond).length ? { if: cond } : {}),
+    ...(rateIn ? { rate: rateIn } : {}),
+  };
   defs.saveSubscriptions(slot, [...subs, row]);
   return { ...row, title: target.title, chars: target.body.length };
 }
@@ -323,17 +411,31 @@ function runCleared(source, sinceTs) {
 // clock lapsed, turns spent, condition cleared, target gone — is DELETED on the spot (expired
 // means gone; nothing accumulates, nobody is the janitor; the content itself always survives in
 // the store or corpus). Deletions are named in the wrapper so a vanished delivery is never silent.
-function injectedFor(identity = {}, type) {
+//
+// AND IT IS NOW THE CONTENT ARM OF hooks.fire(), not a second mechanism. Each row is read as a hook
+// (hookOf) and put through hooks.matchesWhen and hooks.rateAllows — so `if` and `rate` work here
+// without a line of matching or cadence code of their own.
+//
+// WHY THE TWO ARMS EXIST AT ALL, since one would be tidier: a skill pointer rides the INPUT QUEUE,
+// which is a turn, and that is fine for something the agent may decline. The three injection
+// moments are not on the input queue — `session-start` rides the system prompt (costs no turn,
+// survives compaction by construction) and `every-turn` rides as a leading block of the human's own
+// message. A content hook delivered through fire() would turn both of those into turns, which is a
+// surface change and a worse one. So the vehicle differs and the mechanism does not.
+//
+// `ctx` is optional and every existing caller omits it — { fired, event }. `event` is the real
+// payload of the moment (a compaction's `trigger`, the human's `text`), which is what gives `if`
+// something to match on; absent, a row with no `if` behaves exactly as it did before.
+function injectedFor(identity = {}, type, ctx = {}) {
   const defs = require("./definitions.cjs");
   const slot = identity.slot;
   if (!slot) return "";
-  const allowed = [
-    "system",
-    identity.projectCode ? `project:${identity.projectCode}` : null,
-    slot ? `agent:${slot}` : null,
-  ].filter(Boolean);
+  const allowed = allowedFor(identity);
   const subs = defs.subscriptionsOf(slot);
   if (!subs.length) return "";
+  // The event this moment IS, in the hook vocabulary, with whatever the caller knows about it.
+  const ev = { kind: hooks.eventForMoment(type) || type, ...(ctx.event && typeof ctx.event === "object" ? ctx.event : {}) };
+  const fired = ctx.fired instanceof Map ? ctx.fired : new Map();
   const st = readSubsState();
   const keep = [];
   const out = [];
@@ -348,37 +450,79 @@ function injectedFor(identity = {}, type) {
       if (spent >= r.until.turns) { died.push(`${r.what} (turns spent)`); changed = true; delete st[key]; continue; }
     }
     if (!r.when.includes(type)) { keep.push(r); continue; }
+    // GATED IS NOT DEAD, and the difference is the whole reason `if` and `rate` are safe to add. A
+    // lifetime gate above this line ENDS the row; a condition or a cadence below it declines THIS
+    // delivery and the row stands, waiting for a moment that matches. Confusing the two would make
+    // a hook that fires at most once a day delete itself after its first day.
+    const h = hookOf(r);
+    if (!hooks.matchesWhen(h.when, ev)) { keep.push(r); continue; }
+    if (h.rate && !hooks.rateAllows(h, fired, { agentId: slot })) { keep.push(r); continue; }
     const target = resolveWhat(r.what, allowed);
     if (!target || target.denied) { died.push(`${r.what} (target gone)`); changed = true; delete st[key]; continue; }
-    out.push({ r, key, target });
+    out.push({ r, key, target, h });
     keep.push(r);
   }
   if (changed) { defs.saveSubscriptions(slot, keep); writeSubsState(st); }
   if (!out.length && !died.length) return "";
   for (const { r, key } of out) if (r.until && r.until.turns) st[key] = (st[key] || 0) + 1;
   if (out.some(({ r }) => r.until && r.until.turns)) writeSubsState(st);
+  // THE RATE'S CLOCK STARTS AT DELIVERY, exactly as it does for a skill pointer (hooks.recordFired's
+  // own note): a row that matched and was then dropped has not spent the agent's once-a-day. Here
+  // "delivered" is this line — everything above it could still have returned "".
+  for (const { h } of out) if (h.rate) { try { hooks.recordFired(h, { agentId: slot }); } catch {} }
+  for (const { h } of out) fired.set(h.name, { ts: Date.now(), firstTs: Date.now(), count: ((fired.get(h.name) || {}).count || 0) + 1 });
   const lines = out.map(({ target }) => `• ${target.title}\n${target.body}`);
   const obit = died.length ? `\n(ended and removed: ${died.join("; ")})` : "";
   if (!out.length) return ""; // deaths alone don't earn a delivery; they surface in the profile and the next real one
-  // HIS FILE, READ AT DELIVERY TIME — same mold as the hook pointer (~/.autobot/hook-pointer.md)
-  // and for the same reason: a context layer that reaches every agent has to be one he can see and
-  // change, not a string in a source file behind a shell relaunch.
-  //
-  // AND NO RFC NUMBER. The old first line ended "(RFC-013)" — our filing system leaking into a
-  // layer whose whole job is to introduce someone else's content. An agent cannot read the RFC,
-  // gains nothing from its number, and the sentence is spent on EVERY delivery. His catch: "why
-  // are you fucking mentioning the RFC?" The cost of a loaded sentence is attention, not tokens.
+  return wrapInjection(type, lines, obit);
+}
+
+// HIS FILE, READ AT DELIVERY TIME — same mold as the hook pointer (~/.autobot/hook-pointer.md)
+// and for the same reason: a context layer that reaches every agent has to be one he can see and
+// change, not a string in a source file behind a shell relaunch.
+//
+// AND NO RFC NUMBER. The old first line ended "(RFC-013)" — our filing system leaking into a
+// layer whose whole job is to introduce someone else's content. An agent cannot read the RFC,
+// gains nothing from its number, and the sentence is spent on EVERY delivery. His catch: "why
+// are you fucking mentioning the RFC?" The cost of a loaded sentence is attention, not tokens.
+//
+// ONE WRAPPER FOR BOTH ARMS. Pulled out of injectedFor when content hooks arrived, because the
+// alternative is two renderings of the same layer and an agent that can tell which door its
+// context came through — which is exactly the thing it should not have to care about.
+function wrapInjection(moment, lines, obit = "") {
   const tpl = wrapperTemplate();
   const body = tpl
     ? tpl
-        .replace(/\{\{moment\}\}/g, type)
+        .replace(/\{\{moment\}\}/g, moment)
         .replace(/\{\{items\}\}/g, lines.join("\n\n"))
         .replace(/\{\{ended\}\}/g, obit)
         .replace(/\n{3,}/g, "\n\n")
         .trim()
     : "You subscribed to these notes for delivery at this moment. They are context you chose, " +
       "not instructions from the user.\n\n" + lines.join("\n\n") + obit;
-  return `<injected-context moment="${type}">\n${body}\n</injected-context>`;
+  return `<injected-context moment="${moment}">\n${body}\n</injected-context>`;
+}
+
+// THE LIBRARY ARM: a hook in ~/.autobot/hooks whose `do` names content rather than a skill. Called
+// by hooks.pointerText, which is the one place the "may be declined / may not" branch lives.
+//
+// What this buys that a subscription cannot: ONE definition carried by MANY agents. A subscription
+// is per-agent by construction (I shelve this note), so "every agent carrying this gets this
+// paragraph at compaction" had no expression at all before — and it is the shape a convention
+// wants, because the alternative is N copies that drift. It rides the input queue like any other
+// pointer, which is why the three composition moments stay in injectedFor.
+//
+// A VANISHED TARGET RETURNS "", AND THE CALLER DELIVERS NOTHING. There is no def row to delete here
+// — a library hook is a file somebody wrote — so the honest answer is silence plus the receipt
+// sessions.cjs already writes, rather than an empty message in the agent's queue.
+function contentDelivery(hook = {}, event = {}, identity = {}) {
+  const what = String(hook.do || "").trim();
+  const target = resolveWhat(what, allowedFor(identity));
+  if (!target || target.denied) return "";
+  if (target.body.length > INJECT_NOTE_MAX) return ""; // the write door refuses these; this is the belt for anything already on disk
+  const moment = String(event.kind || hook.on || "");
+  const note = hook.note ? `\n${String(hook.note).trim()}` : "";
+  return wrapInjection(moment, [`• ${target.title}\n${target.body}`], note);
 }
 
 // The comment block at the top of that file documents the placeholders where they are edited, so
@@ -1015,6 +1159,26 @@ function toolsFor(identity = {}) {
             })
             .optional()
             .describe("when the subscription ENDS. Omit for the 7d clock. A clock may back up a count or condition."),
+          // A SUBSCRIPTION IS A HOOK, SO IT HAS A HOOK'S OTHER TWO AXES. Both optional, and
+          // omitting them is the behaviour this tool has always had.
+          if: z
+            .record(z.any())
+            .optional()
+            .describe(
+              'optional CONDITION on the moment, the same declarative match a hook uses: ' +
+                '{"trigger": "auto"} to meet only automatic compactions, {"text": {"contains": "deploy"}} ' +
+                'to meet only turns that mention one. Omit for "every time this moment happens". ' +
+                "Operators: equals not contains startsWith endsWith matches in gt gte lt lte exists"
+            ),
+          rate: z
+            .string()
+            .optional()
+            .describe(
+              'optional CADENCE — how often this may be delivered at all, which is a different ' +
+                'axis from the moment: once-per-day | once-per-week | once-per-month | ' +
+                'cooldown:<duration> (30m, 24h, 3d12h, 2w). Use it to put something on every-turn ' +
+                "without paying for it every turn. Omit for every matching moment."
+            ),
         },
         async (args) => {
           try {
@@ -1061,7 +1225,11 @@ function toolsFor(identity = {}) {
                 : r.until.untilTs
                 ? `until ${new Date(r.until.untilTs).toISOString().slice(0, 10)}`
                 : "no gate (?)";
-              return `\u26a1 ${r.what}\n  at ${r.when.join(" + ")} \u00b7 ${gate}`;
+              // `if` and `rate` print only when set, so a row that uses neither reads exactly as
+              // it always has \u2014 the whole point of adding them as optional axes.
+              const cond = r.if && Object.keys(r.if).length ? ` \u00b7 only when ${JSON.stringify(r.if)}` : "";
+              const rate = r.rate ? ` \u00b7 at most ${r.rate}` : "";
+              return `\u26a1 ${r.what}\n  at ${r.when.join(" + ")} \u00b7 ${gate}${cond}${rate}`;
             });
             return { content: [{ type: "text", text: rows.join("\n") }] };
           } catch (e) {
@@ -1297,18 +1465,27 @@ function toolsFor(identity = {}) {
         "hooksWrite",
         "Propose a hook: when THIS moment happens, point an agent at THIS procedure. Use it " +
           "when you find a procedure that is needed rarely and urgently, and that the agent will " +
-          "not think to ask for because the moment arrives from outside. A hook holds no content " +
-          "— it carries a POINTER, so it can never drift from the procedure. `do` names a SKILL " +
-          "(`skill:<name>`, offered — the agent decides) or a JOB (`job:<name>`, GIVEN — and then " +
-          "`with:` must supply every input that job's document declares, or it refuses on every " +
-          "match). Call hooksList first: the event must be one the system really emits. Writing a " +
-          "hook does NOT arm it — it stays inert until a human carries it on an agent.",
+          "not think to ask for because the moment arrives from outside. A skill hook holds no " +
+          "content — it carries a POINTER, so it can never drift from the procedure. `do` names a " +
+          "SKILL (`skill:<name>`, offered — the agent decides), a JOB (`job:<name>`, GIVEN — and " +
+          "then `with:` must supply every input that job's document declares, or it refuses on " +
+          "every match), or CONTENT (\"note:<id>@<scope>\", " +
+          "\"corpus:<name>:<source>#<heading>\"), which is INJECTED rather than pointed at — use " +
+          "that for one paragraph every carrying agent should meet at a moment, and `subscribe` " +
+          "for something only YOU need. Call hooksList first: the event must be one the system " +
+          "really emits. Writing a hook does NOT arm it — it stays inert until a human carries it " +
+          "on an agent.",
         {
           name: z.string().describe("short kebab-case name; it is the filename and the identity"),
           on: z.string().describe("the event it fires on — must be one from hooksList"),
           do: z
             .string()
-            .describe('the pointer, "skill:<name>". A hook names a procedure; it never contains one'),
+            .describe(
+              'the pointer. "skill:<name>" names a procedure the agent may decline — a hook names ' +
+                'one, it never contains one. "note:<id>@<scope>" or ' +
+                '"corpus:<name>:<source>#<heading>" names CONTENT, which is injected at the moment ' +
+                "rather than offered; it must resolve, and it is capped per item like any injection"
+            ),
           when: z
             .record(z.any())
             .optional()
@@ -1384,14 +1561,19 @@ function toolsFor(identity = {}) {
             // nobody has, and hand-writing the file was the workaround, which is exactly what
             // creation-through-the-system exists to stop.
             const pointer = String(args.do || "").trim();
+            // `skill:` and `job:` POINT, `note:`/`corpus:` INJECT — every kind through one field,
+            // which is the subscription merge. A skill pointer still may not carry content (that is
+            // what keeps it from drifting from the procedure); a content pointer carries nothing BUT
+            // content, and is gated on resolving and on the per-item cap at the door below.
             const target = hooks.targetOf({ do: pointer });
-            if (!["skill", "job"].includes(target.kind) || !target.name)
+            if (![ "skill", "job", ...hooks.CONTENT_KINDS ].includes(target.kind) || !target.name)
               return {
                 content: [{ type: "text", text:
-                  `\`do\` must be a pointer — "skill:<name>" (offered: the agent decides) or ` +
+                  `\`do\` must be a pointer — "skill:<name>" (offered: the agent decides), ` +
                   `"job:<name>" (given: it carries a contract and must be supplied with what that ` +
-                  `document declares). A hook names a procedure and never carries one — that is what ` +
-                  `keeps it from drifting out of date.` }],
+                  `document declares), or "note:<id>@<scope>" / "corpus:<name>:<source>#<heading>" ` +
+                  `(content to inject). A hook that names a procedure never carries one — that is ` +
+                  `what keeps it from drifting out of date.` }],
                 isError: true,
               };
             // A MISTYPED CONFIG KEY IS A SILENT HOOK, which is this mechanism's worst failure —
@@ -1895,4 +2077,9 @@ function stats(scopes = []) {
   };
 }
 
-module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, toolsFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince, injectedFor, subscribe, unsubscribe, resolveWhat, runCleared, INJECT_TYPES, INJECT_CAPS, INJECT_NOTE_MAX };
+module.exports = { SERVER, TOOL_NAMES, ROOT, serverFor, toolsFor, remember, search, place, listNotes, saveNote, deleteNote, editNote, purgeAgent, stats, readUsage, usageSince, injectedFor, subscribe, unsubscribe, resolveWhat, runCleared, INJECT_TYPES, INJECT_CAPS, INJECT_NOTE_MAX,
+  // THE SUBSCRIPTION MERGE. `checkContent` and `contentDelivery` are the two doors hooks.cjs comes
+  // back through — the write gate and the rendering — so the store's caps, scopes and wrapper stay
+  // in the module that owns them. `hookOf` is exported for the tests, which assert that a
+  // subscription row really does read as a hook rather than merely being described as one.
+  checkContent, contentDelivery, hookOf, allowedFor, wrapInjection };

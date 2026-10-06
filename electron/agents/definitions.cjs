@@ -553,6 +553,19 @@ function cleanSubs(subs) {
       when: r.when.map(String),
       until: r.until && typeof r.until === "object" ? r.until : {},
       addedAt: Number(r.addedAt) || Date.now(),
+      // A SUBSCRIPTION IS A HOOK, AND THESE ARE THE TWO AXES IT WAS MISSING: `if` is the condition
+      // on the moment's payload, `rate` is how often it may be delivered at all. Both are read by
+      // context.cjs through hooks.matchesWhen and hooks.rateAllows — nothing here interprets them.
+      //
+      // THEY HAVE TO BE LISTED HERE OR THEY DO NOT EXIST, which is this file's oldest lesson in its
+      // other whitelist: normalize() dropping `hooks` made the profile's enable switch a lie, and a
+      // key missing from THIS list is the same failure one layer down — subscribe() would write it,
+      // report success, and the next read would hand back a row with no condition and no cadence.
+      //
+      // Written only when present, so a subscription that uses neither is byte-for-byte the row
+      // this harness has written since RFC-013. That is why the four on disk needed no migration.
+      ...(r.if && typeof r.if === "object" && !Array.isArray(r.if) && Object.keys(r.if).length ? { if: r.if } : {}),
+      ...(r.rate ? { rate: String(r.rate) } : {}),
     }));
 }
 function subscriptionsOf(id) {

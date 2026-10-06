@@ -428,6 +428,169 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
       ok(!defs.subscriptionsOf("smoketest").some((x) => x.what.includes(id4)), "and no half-row was left behind");
     }
 
+    // ── A SUBSCRIPTION IS A CARRIED HOOK WHOSE `do` NAMES CONTENT ─────────────────────────
+    // Settled 2026-10-05. A subscription had the same axes a hook has, with two amputated: no
+    // condition on the moment, no cadence. The merge gives it both by making the row READ AS A
+    // HOOK and running it through hooks.cjs's own matcher and hooks.cjs's own rate ledger — so
+    // every claim below is about behaviour this harness did not have, plus the ones proving the
+    // surface he asked not to move did not move.
+    //
+    // THE SCOPES ARE STILL THE THROWAWAY ONES. The hook files are named `smoke-*` and removed; the
+    // rate ledger entries are keyed by the throwaway slot and swept at the end.
+    {
+      const hooks = require("../electron/agents/hooks.cjs");
+      const FIRED = path.join(os.homedir(), ".autobot", "hooks-fired.json");
+      const sweepLedger = () => {
+        try {
+          const st = JSON.parse(fs.readFileSync(FIRED, "utf8"));
+          let touched = false;
+          for (const k of Object.keys(st)) if (k.startsWith("smoketest|")) { delete st[k]; touched = true; }
+          if (touched) fs.writeFileSync(FIRED, JSON.stringify(st, null, 2));
+        } catch {}
+      };
+      const clear = () => defs.saveSubscriptions("smoketest", []);
+      clear();
+      sweepLedger();
+
+      // ---- THE ROW READS AS A HOOK ----------------------------------------------------------
+      const noteIf = await ctx.remember(subScopes, { text: "only on an automatic compaction", scope: AG, title: "auto only" });
+      const h = ctx.hookOf({ what: `note:${noteIf.id}@${AG}`, when: ["post-compaction"], if: { trigger: "auto" }, rate: "once-per-day" });
+      ok(h.on.length === 1 && h.on[0] === "compaction.after", "a subscription row's moment reads back as the hook event it is: " + h.on[0]);
+      ok(h.do === `note:${noteIf.id}@${AG}` && hooks.isContent(h), "...and its target reads as a content pointer through the same `do` grammar a job uses");
+      ok(hooks.matchesWhen(h.when, { kind: "compaction.after", trigger: "auto" }), "...matched by hooks.cjs's own matcher, not a second one");
+
+      // ---- `when` NOW GATES AN INJECTION (the new capability) -------------------------------
+      ctx.subscribe(subScopes, { what: `note:${noteIf.id}@${AG}`, when: "post-compaction", if: { trigger: "auto" }, until: { ttl: "2d" } });
+      ok(/only on an automatic compaction/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction", { event: { trigger: "auto" } })),
+        "a CONDITION on the moment delivers when the moment matches it");
+      ok(ctx.injectedFor({ slot: "smoketest" }, "post-compaction", { event: { trigger: "manual" } }) === "",
+        "...and is silent when it does not — a subscription has a `when` now");
+      // GATED IS NOT DEAD, and the difference matters more than the gate: a lifetime gate ENDS the
+      // row, a condition declines THIS delivery. Confusing them would delete a row on its first
+      // non-matching moment, which for {"trigger":"auto"} is the first manual compaction.
+      ok(defs.subscriptionsOf("smoketest").some((r) => r.what.includes(noteIf.id)),
+        "a row the condition declined SURVIVES — gated is not dead");
+      ok(/only on an automatic compaction/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction", { event: { trigger: "auto" } })),
+        "...and still delivers at the next moment that does match");
+      // AND NO PAYLOAD AT ALL IS NOT A MATCH. A caller that knows nothing about the moment must not
+      // satisfy a condition by omission — that is how a gate becomes decoration.
+      ok(ctx.injectedFor({ slot: "smoketest" }, "post-compaction") === "",
+        "a moment with no payload does not satisfy a condition by default");
+
+      // ---- `rate` NOW LIMITS ONE (also new) -------------------------------------------------
+      clear();
+      sweepLedger();
+      const noteRate = await ctx.remember(subScopes, { text: "paid for once a day, not once a turn", scope: AG, title: "rate limited" });
+      ctx.subscribe(subScopes, { what: `note:${noteRate.id}@${AG}`, when: "every-turn", rate: "once-per-day", until: { ttl: "2d" } });
+      ok(/paid for once a day/.test(ctx.injectedFor({ slot: "smoketest" }, "every-turn")), "a rated item is delivered the first time its moment comes");
+      ok(ctx.injectedFor({ slot: "smoketest" }, "every-turn") === "", "...and NOT the second time, inside the same period");
+      ok(defs.subscriptionsOf("smoketest").some((r) => r.what.includes(noteRate.id)), "...and the row survives the cadence — rate-limited is not spent");
+      // THE LEDGER IS hooks-fired.json, THE SAME ONE A SKILL POINTER SPENDS. Not a second store
+      // with the same job — which is the half of this merge that is checkable from outside.
+      {
+        const st = JSON.parse(fs.readFileSync(FIRED, "utf8"));
+        ok(!!st[`smoketest|sub:note:${noteRate.id}@${AG}`], "the cadence is written to the HOOK rate ledger, not to a parallel one");
+        // AND IT IS PERSISTED, which is what makes a rate longer than a session mean anything —
+        // the bug the hook side already paid for: a Map created per session silently turned every
+        // cadence into once-per-session.
+        st[`smoketest|sub:note:${noteRate.id}@${AG}`].ts = Date.now() - 26 * 3600000;
+        fs.writeFileSync(FIRED, JSON.stringify(st, null, 2));
+      }
+      ok(/paid for once a day/.test(ctx.injectedFor({ slot: "smoketest" }, "every-turn")), "a new day releases it — read from disk, so it survives a restart");
+
+      // ---- `every-turn` CARRIES THE HUMAN'S TEXT, so a condition can read it ----------------
+      clear();
+      sweepLedger();
+      const noteWord = await ctx.remember(subScopes, { text: "check the migration before you deploy", scope: AG, title: "deploy reminder" });
+      ctx.subscribe(subScopes, { what: `note:${noteWord.id}@${AG}`, when: "every-turn", if: { text: { contains: "deploy" } }, until: { ttl: "2d" } });
+      const hit = sessions.sendContent({ slot: "smoketest" }, "can we deploy this tonight?");
+      const miss = sessions.sendContent({ slot: "smoketest" }, "what changed in the renderer?");
+      ok(hit.some((b) => /check the migration/.test(b.text || "")), "the every-turn shelf delivers when the human's own words match the condition");
+      ok(!miss.some((b) => /check the migration/.test(b.text || "")), "...and the most expensive shelf in the system stops being all-or-nothing");
+
+      // ---- THE DOOR STILL REFUSES WHAT IT ALWAYS DID, AND THE NEW AXES TOO -----------------
+      clear();
+      let badOp = "";
+      try { ctx.subscribe(subScopes, { what: `note:${noteIf.id}@${AG}`, when: "post-compaction", if: { trigger: { equalz: "auto" } } }); } catch (e) { badOp = e.message; }
+      ok(/is not an operator/.test(badOp) && /false forever/.test(badOp),
+        "a condition with an operator nothing implements is refused at the door — it would list armed and never fire");
+      let badRate = "";
+      try { ctx.subscribe(subScopes, { what: `note:${noteIf.id}@${AG}`, when: "post-compaction", rate: "cooldown:2weeks" }); } catch (e) { badRate = e.message; }
+      ok(/not a duration I can read/.test(badRate), "a malformed cadence is refused rather than silently meaning no limit");
+      let perSession = "";
+      try { ctx.subscribe(subScopes, { what: `note:${noteIf.id}@${AG}`, when: "post-compaction", rate: "once-per-session" }); } catch (e) { perSession = e.message; }
+      ok(/not a rate an injected item can keep/.test(perSession) && /session-start/.test(perSession),
+        "once-per-session is refused BY NAME, pointing at the moment that already means it: " + perSession.slice(0, 60));
+
+      // ---- `if` AND `rate` SURVIVE THE ROUND TRIP (the whitelist landmine) -----------------
+      // definitions.cleanSubs is a whitelist, and a key missing from it is a key the agent can
+      // write, be told succeeded, and never see again — the same failure `normalize()` dropping
+      // `hooks` caused one layer up, where it presented as "the UI is broken".
+      clear();
+      ctx.subscribe(subScopes, { what: `note:${noteIf.id}@${AG}`, when: "post-compaction", if: { trigger: "auto" }, rate: "once-per-week", until: { ttl: "2d" } });
+      const back = defs.subscriptionsOf("smoketest")[0];
+      ok(back && back.if && back.if.trigger === "auto", "`if` survives the sidecar round trip");
+      ok(back && back.rate === "once-per-week", "`rate` survives it too");
+      const onDisk = JSON.parse(fs.readFileSync(path.join(defs.DIR, "smoketest.subs.json"), "utf8"))[0];
+      ok(onDisk.if && onDisk.rate, "...and they are on DISK, not just in the reader's copy");
+
+      // ---- THE SUBSCRIPTIONS SURFACE DID NOT MOVE ------------------------------------------
+      // His constraint outranks the elegance: everything an agent or the window can see today must
+      // keep reading the same. A row that uses neither new axis must be BYTE-FOR-BYTE what this
+      // harness has written since RFC-013 — which is also why the four subscriptions on his disk
+      // needed no migration and could not be lost.
+      clear();
+      ctx.subscribe(subScopes, { what: `note:${noteIf.id}@${AG}`, when: "post-compaction", until: { ttl: "2d" } });
+      const plain = defs.subscriptionsOf("smoketest")[0];
+      ok(JSON.stringify(Object.keys(plain).sort()) === JSON.stringify(["addedAt", "until", "what", "when"]),
+        "a plain subscription row still has exactly the old four keys: " + Object.keys(plain).sort().join(", "));
+
+      // ---- AN EXISTING ON-DISK SUBSCRIPTION STILL DELIVERS ---------------------------------
+      // Written BY HAND in the exact shape of the rows in ~/.autobot/agents/*.subs.json — a clock
+      // gate, no condition, no cadence — because a fixture built by the writer the reader trusts
+      // proves nothing about the files that were already there.
+      const noteOld = await ctx.remember(subScopes, { text: "written before any of this existed", scope: AG, title: "legacy row" });
+      fs.writeFileSync(path.join(defs.DIR, "smoketest.subs.json"), JSON.stringify([
+        { what: `note:${noteOld.id}@${AG}`, when: ["post-compaction"], until: { untilTs: Date.now() + 864e5 }, addedAt: Date.now() - 864e5 },
+      ], null, 2));
+      ok(/written before any of this existed/.test(ctx.injectedFor({ slot: "smoketest" }, "post-compaction")),
+        "a row in the pre-merge shape delivers unchanged — no condition means every moment, no cadence means every time");
+      ok(defs.subscriptionsOf("smoketest").length === 1, "...and is not deleted, rewritten or migrated by being read");
+
+      // ---- A CONTENT HOOK IN THE SHARED LIBRARY ---------------------------------------------
+      // The half a subscription cannot express: ONE definition carried by MANY agents. It rides
+      // the input queue like any other pointer, through hooks.pointerText — the single place the
+      // "may be declined / may not" branch lives.
+      clear();
+      const LIB = "smoke-content-lib";
+      hooks.save({ name: LIB, on: "compaction.after", do: `note:${noteOld.id}@${AG}`, kind: "context", author: "agent:smoketest", when: { trigger: "auto" }, note: "" });
+      const lib = hooks.list().find((x) => x.name === LIB);
+      ok(!!lib && hooks.isContent(lib), "a hook FILE may carry a content pointer, read back off disk");
+      const delivered = hooks.pointerText(lib, { kind: "compaction.after" }, { slot: "smoketest" });
+      ok(/written before any of this existed/.test(delivered), "and pointerText hands over the CONTENT, not a sentence about it");
+      ok(!/skill applies here/.test(delivered) && /<injected-context/.test(delivered),
+        "...in the same wrapper an injected subscription rides — an agent cannot tell which door its context came through");
+      // SCOPE IS STILL THE READER'S. A library hook pointing into an agent's own scope must not
+      // reach a different agent, or carrying a hook would become a way to read someone's lessons.
+      ok(hooks.pointerText(lib, { kind: "compaction.after" }, { slot: "someone-else" }) === "",
+        "a content hook cannot deliver a scope the carrying agent may not read");
+      // A VANISHED TARGET IS SILENCE, NOT AN EMPTY MESSAGE — there is no def row to delete here,
+      // so the honest answer is to hand over nothing and let the receipt stand alone.
+      ok(hooks.pointerText({ ...lib, do: "note:gone-forever@" + AG }, { kind: "compaction.after" }, { slot: "smoketest" }) === "",
+        "a content hook whose target is gone renders to nothing at all");
+      // THE CAP IS A PROPERTY OF DELIVERING CONTENT, so it is enforced at BOTH doors with one
+      // wording — the subscribe refusal above and this one are the same sentence from the same
+      // function, which is the only way they cannot drift.
+      let libBig = "";
+      try { hooks.save({ name: "smoke-content-big", on: "compaction.after", do: `note:${noteBig.id}@${AG}`, kind: "context", author: "agent:smoketest" }); }
+      catch (e) { libBig = e.message; }
+      ok(/capped at 700/.test(libBig), "an over-sized content hook is refused at the hook door too, naming the same cap: " + libBig.slice(0, 54));
+      try { hooks.remove(LIB); } catch {}
+      try { hooks.remove("smoke-content-big"); } catch {}
+      clear();
+      sweepLedger();
+    }
+
     // cleanup: throwaway def, notes, sidecar keys
     defs.remove("smoketest");
     ok(!fs.existsSync(path.join(defs.DIR, "smoketest.subs.json")), "standing orders die with the agent");

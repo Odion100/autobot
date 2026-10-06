@@ -121,6 +121,74 @@ try {
   ok("carried → fires", hooks.fire(ev, { carries: [HOOK2], fired: new Map() }).some((h) => h.name === HOOK2));
 
   // -------------------------------------------------------------------------------------------
+  // A SUBSCRIPTION IS A CARRIED HOOK WHOSE `do` NAMES CONTENT (settled 2026-10-05). The claims
+  // here are the MECHANISM half — the vocabulary, the classification, and the two writing-door
+  // refusals that need no context store. Delivery, the caps and the `when`/`rate` gates are proved
+  // in tests/context.js, where the notes to point at already exist.
+  console.log("\na subscription is a hook: the three moments ARE events, and `do` names content");
+
+  // THE EVIDENCE THE MERGE IS NATURAL RATHER THAN FORCED. The sharpest subscription moment and a
+  // hook event were already the same moment under two names, before any of this was written.
+  eq("post-compaction IS compaction.after", hooks.MOMENTS["post-compaction"], "compaction.after");
+  ok("...and that event was already declared", hooks.isEvent("compaction.after"));
+  eq("session-start IS session.started", hooks.MOMENTS["session-start"], "session.started");
+  eq("every-turn IS turn.started", hooks.MOMENTS["every-turn"], "turn.started");
+  // A MOMENT THAT MAPS TO AN UNDECLARED EVENT IS THE WORST FAILURE THIS MECHANISM HAS — it would
+  // list correctly and never fire. So every one of the three is checked against the vocabulary.
+  ok("all three moments name events the system really declares",
+    Object.values(hooks.MOMENTS).every((e) => hooks.isEvent(e)));
+  ok("an unknown moment maps to nothing at all, rather than to a plausible event", hooks.eventForMoment("sometimes") === "");
+
+  // THE CLASSIFICATION, which is the one place the difference between the two kinds of pointer
+  // lives: a skill may be declined, content may not.
+  ok("note: is content", hooks.isContent({ do: "note:abc@system" }));
+  ok("corpus: is content", hooks.isContent({ do: "corpus:handbook:a.md#Heading" }));
+  ok("skill: is not", !hooks.isContent({ do: "skill:study" }));
+  ok("job: is not", !hooks.isContent({ do: "job:accounting-close" }));
+  eq("and it is read through the SAME grammar `job:` is", hooks.targetOf({ do: "note:abc@system" }).kind, "note");
+
+  // THE OPERATOR VOCABULARY, CHECKABLE AT A WRITING DOOR. testOne() refuses an operator it does not
+  // know, which is right at fire time and turns a typo into a condition that is false forever —
+  // so the same list is assertable before anything is saved.
+  // THE TWO LISTS MUST AGREE OR THE CHECK IS A LIE. `OPS` is written by hand beside testOne's
+  // switch, so this asserts each declared operator actually MATCHES something — an operator in the
+  // list that the switch does not implement would fall through to `default: return false` and the
+  // door would be blessing a condition that can never be true.
+  {
+    const PASSES = { equals: "x", not: "y", contains: "x", startsWith: "x", endsWith: "x", matches: "^x$", in: ["x"], gt: 1, gte: 5, lt: 9, lte: 5, exists: true };
+    const unimplemented = hooks.OPS.filter((op) => {
+      const field = ["gt", "gte", "lt", "lte"].includes(op) ? "n" : "f";
+      return !hooks.matchesWhen({ [field]: { [op]: PASSES[op] } }, { f: "x", n: 5 });
+    });
+    eq("every operator the door accepts is one the matcher implements", unimplemented, []);
+    ok("...and the list is not quietly short of the switch", hooks.OPS.length === Object.keys(PASSES).length);
+  }
+  eq("a known operator passes the check", hooks.checkWhen({ pct: { gte: 70 } }), "");
+  eq("a bare value is an equality test, not an error", hooks.checkWhen({ trigger: "auto" }), "");
+  eq("no condition at all is fine", hooks.checkWhen(undefined), "");
+  ok("a typo'd operator is NAMED, with the field it is on", /"greaterThan" is not an operator \(on field "pct"\)/.test(hooks.checkWhen({ pct: { greaterThan: 70 } })));
+  ok("...and the refusal says why it matters: false forever, not noisy", /false forever/.test(hooks.checkWhen({ pct: { greaterThan: 70 } })));
+
+  // REFUSED AT THE WRITING DOOR, like the rate and the event name before it.
+  {
+    const tryWhen = (when) => { try { hooks.save({ name: "smoke-when-bad", on: "idle", do: "skill:study", kind: "context", author: "agent:smoke", when }); return false; } catch { return true; } };
+    ok("save refuses a condition with an unknown operator", tryWhen({ quietMin: { atLeast: 3 } }));
+    ok("...and accepts the one that means it", !tryWhen({ quietMin: { gte: 3 } }));
+    try { hooks.remove("smoke-when-bad"); } catch {}
+  }
+
+  // A CONTENT POINTER AT NOTHING IS REFUSED THE WAY A SUBSCRIPTION TO NOTHING IS — one wording,
+  // because context.cjs owns both doors.
+  {
+    let said = "";
+    try { hooks.save({ name: "smoke-content-ghost", on: "compaction.after", do: "note:no-such-note@system", kind: "context", author: "agent:smoke" }); }
+    catch (e) { said = e.message; }
+    ok("a content hook pointing at nothing is refused, saying the target must exist: " + said.slice(0, 48), /must exist/.test(said));
+    ok("...and no file was written for it", !hooks.list().some((h) => h.name === "smoke-content-ghost"));
+    try { hooks.remove("smoke-content-ghost"); } catch {}
+  }
+
+  // -------------------------------------------------------------------------------------------
   // RFC-067 §3 — A HOOK GIVES A JOB, THROUGH THE SAME `do` FIELD.
   //
   // A job is triggered exactly as a skill is: the hook already carries who (whoever ticked it),

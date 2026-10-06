@@ -7,11 +7,19 @@
 // never, and the agent will not think to ask for it because the moment arrives from OUTSIDE. It
 // has to be pushed.
 //
-// A HOOK HOLDS NO CONTENT. It says "this moment happened, and this skill applies" and hands over a
-// POINTER; the agent still decides whether to pull it. That keeps the intended-not-enforced
-// property skills already have, it costs a line instead of a procedure, and — the part that
-// matters most here — a hook can never drift from the skill, because a hook has nothing to drift
-// with. Skills stay the single home of every procedure. The hook is pure wiring.
+// A HOOK POINTING AT A PROCEDURE HOLDS NO CONTENT. It says "this moment happened, and this skill
+// applies" and hands over a POINTER; the agent still decides whether to pull it. That keeps the
+// intended-not-enforced property skills already have, it costs a line instead of a procedure, and
+// — the part that matters most here — a hook can never drift from the skill, because a hook has
+// nothing to drift with. Skills stay the single home of every procedure. The hook is pure wiring.
+//
+// WHICH IS A FACT ABOUT `skill:`, NOT ABOUT HOOKS, and the sentence above used to claim otherwise.
+// A `do` that names CONTENT — `note:<id>@<scope>`, `corpus:<name>:<source>#<heading>` — hands the
+// body over instead, because the whole point of shelving a paragraph for your own compaction is
+// that you will not be in a position to go and fetch it. That is the context-subscription
+// mechanism, merged into this one (see isContent, below): same `on`, same `when`, same `rate`,
+// same `until`, same carrying. A content pointer still holds no content OF ITS OWN — it names
+// something in the store, which is why it cannot drift either.
 //
 // WHICH IS WHY THIS LIVES BESIDE SKILLS. A skill is procedural context whose body loads on use.
 // The only difference is who pulls the trigger: a skill fires when the model judges it relevant, a
@@ -35,6 +43,14 @@ const EVENTS = [
   { name: "session.reinit", what: "the session was re-initialized on current docs", fields: ["resumedFrom", "agentId"] },
   { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"], values: { reason: ["finished", "interrupted", "error"] } },
   { name: "user.prompt", what: "a turn arrived from the human (or a visiting agent)", fields: ["text"] },
+  // THE MOMENT BEFORE THE TURN, and the reason it exists is the merge of subscriptions into hooks:
+  // `every-turn` was one of three moments a subscription could name, and a hook had no way to say
+  // it. Fired through sessions.fireHooks and NOT through emit() — the same choice `idle` makes, for
+  // the same reason: a row in the feed per turn is one row per turn, forever, for a moment the feed
+  // already shows as `user.prompt`. It carries the human's text, so a hook can say "when he
+  // mentions a deploy, point at the deploy skill" — which is the capability a subscription's fixed
+  // vocabulary of three moments could never express.
+  { name: "turn.started", what: "a turn is beginning — `text` is what the human just said. Fired to hooks only, never to the feed (`user.prompt` is the feed's row for the same moment)", fields: ["text"] },
   { name: "assistant.text", what: "the agent spoke", fields: ["text", "done"] },
   { name: "assistant.thinking", what: "the agent thought out loud", fields: ["text", "done"] },
   { name: "tool.call", what: "the agent called a tool", fields: ["tool", "summary", "input.command", "input.file_path"] },
@@ -155,6 +171,30 @@ function targetOf(hook = {}) {
 const isJob = (hook) => targetOf(hook).kind === "job";
 
 // ---------------------------------------------------------------------------------------------
+// A THIRD KIND OF POINTER: ONE THAT NAMES CONTENT. This is the whole of the subscription merge
+// (settled 2026-10-05), and it fits in the field that already existed rather than beside it.
+//
+// A context SUBSCRIPTION had the same five axes this file spends four hundred lines on — a moment,
+// a lifetime, a target, a delivery vehicle — and two of them were missing: no `when`, so it could
+// not say "only when the compaction was automatic", and no `rate`, so it could not say "at most
+// once a day". It had a fixed vocabulary of three moments where a hook has the whole event list. It
+// was a hook with its condition and its cadence amputated, kept apart by one real difference:
+//
+//   a skill pointer is DECLINED OR TAKEN — the agent decides, and the hook holds no content.
+//   a content pointer is INJECTED — the body itself is handed over, so the agent cannot not read it.
+//
+// That difference lands in exactly one place, pointerText(), the same way `job:` lands in exactly
+// one place. Everything above it — `on`, `when`, `rate`, `until`, `deliver`, who carries it — is
+// shared, which is the evidence they were always one mechanism.
+//
+// WHY THE CONTENT IS NOT RESOLVED HERE. A note lives in the context store and a corpus section in a
+// document; both are context.cjs's, along with the per-item size cap and the wrapper the human
+// edits. Reaching into them from here would put the store's rules in two files. So this module
+// classifies and context.cjs renders — the same division hooks/jobs already uses.
+const CONTENT_KINDS = new Set(["note", "corpus"]);
+const isContent = (hook) => CONTENT_KINDS.has(targetOf(hook).kind);
+
+// ---------------------------------------------------------------------------------------------
 // The condition.
 //
 // THIS RUNS ON EVERY EVENT, SO IT HAS TO BE CHEAP — and the argument is a day we already paid for:
@@ -209,6 +249,41 @@ function matchesWhen(when, event) {
   if (!when || typeof when !== "object") return true;
   return Object.entries(when).every(([field, cond]) => testOne(at(event, field), cond));
 }
+
+// THE OPERATORS, NAMED ONCE. testOne's default case refuses an operator it does not know, which is
+// the right firing-time answer — an unknown operator must never silently pass — but it makes a
+// TYPO into a condition that is false forever: a hook that looks correct, lists correctly, and
+// never fires. So the same vocabulary is checkable at a writing door, where somebody is watching.
+// Derived from the switch by hand and kept beside it on purpose; a test asserts they agree.
+const OPS = ["equals", "not", "contains", "startsWith", "endsWith", "matches", "in", "gt", "gte", "lt", "lte", "exists"];
+
+// "" when the condition is usable, otherwise the sentence to refuse with.
+function checkWhen(when) {
+  if (when == null || when === "") return "";
+  if (typeof when !== "object" || Array.isArray(when)) return "a condition is an object of field -> test, like {\"trigger\": \"auto\"}";
+  for (const [field, cond] of Object.entries(when)) {
+    if (cond === null || typeof cond !== "object" || Array.isArray(cond)) continue; // a bare value is an equality test
+    for (const op of Object.keys(cond))
+      if (!OPS.includes(op))
+        return `"${op}" is not an operator (on field "${field}"). A condition with an operator I do not know is false forever — the hook would list correctly and never fire. Operators: ${OPS.join(" ")}`;
+  }
+  return "";
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE THREE MOMENTS, AS EVENTS. A subscription named one of `every-turn | session-start |
+// post-compaction`; a hook names an event. These are the same three moments and this is the map,
+// in one place, so the two vocabularies cannot drift apart.
+//
+// `compaction.after` WAS ALREADY HERE, declared and emitted, before any of this — which is the
+// evidence the merge is natural rather than forced: the sharpest subscription moment and a hook
+// event were already the same moment under two names.
+const MOMENTS = {
+  "every-turn": "turn.started",
+  "session-start": "session.started",
+  "post-compaction": "compaction.after",
+};
+const eventForMoment = (m) => MOMENTS[String(m || "").trim()] || "";
 
 // ---------------------------------------------------------------------------------------------
 // WHEN THE POINTER IS HANDED OVER — RFC-012.
@@ -640,7 +715,16 @@ function fire(event = {}, ctx = {}) {
 // reaches the model, and it is deliberately small enough to read in one breath. It rides the same
 // wrapper convention as a cross-session message (`<context-hook …>`), so the pump can recognise it
 // and the feed can draw it as a thing that HAPPENED rather than as words the human typed.
-function pointerText(hook, event = {}) {
+function pointerText(hook, event = {}, identity = {}) {
+  // CONTENT IS NOT POINTED AT, IT IS HANDED OVER — the one branch the subscription merge needs, and
+  // it is this shape for the same reason the job branch below it is: what changes is not a noun in
+  // a sentence, it is whether the agent may decline. Everything under this line is written for
+  // something optional. Rendering lives in context.cjs (the store's caps and the human's wrapper
+  // are its rules, not this file's); an empty string means the target is gone, and the caller
+  // delivers nothing rather than an empty message.
+  if (isContent(hook)) {
+    try { return require("./context.cjs").contentDelivery(hook, event, identity); } catch { return ""; }
+  }
   // A JOB IS GIVEN, SO ITS POINTER IS NOT THE SKILL POINTER WITH A NOUN SWAPPED. Everything below
   // this branch is built for something the agent may decline — "it is a pointer, not an
   // instruction", "ignore it if it does not apply" — and that paragraph handed to an assigned job
@@ -809,6 +893,21 @@ function save(rec = {}) {
         );
     }
   }
+  // A CONDITION WITH AN OPERATOR I DO NOT KNOW IS REFUSED HERE. Same door, same reason as the rate
+  // and the event name: testOne() correctly refuses an unknown operator at fire time, which turns a
+  // typo into a hook that is false forever and looks perfect in every list.
+  {
+    const bad = checkWhen(rec.when);
+    if (bad) throw new Error(bad);
+  }
+  // A CONTENT POINTER IS CHECKED AGAINST THE SAME GATE A SUBSCRIPTION IS — it must resolve, and it
+  // must be under the per-item cap. The cap is not a nicety: content is INJECTED, so a hook with a
+  // 4000-char note behind it spends that on every carrier at every match, and nobody who reads the
+  // hook file would see the size. context.cjs owns the refusals so there is one wording.
+  {
+    const t = targetOf(rec);
+    if (CONTENT_KINDS.has(t.kind)) require("./context.cjs").checkContent(String(rec.do || "").trim(), null);
+  }
   const inputs = rec.with && typeof rec.with === "object" && !Array.isArray(rec.with) ? rec.with : {};
   // A HOOK THAT POINTS AT A JOB IT CANNOT GIVE WHAT THE JOB DECLARED IS REFUSED HERE, where
   // somebody is watching — the same move as the event name and the rate, and for the same reason.
@@ -939,6 +1038,14 @@ module.exports = {
   // reader of `do` goes through it, so "which kind is this pointer" has exactly one answer.
   targetOf,
   isJob,
+  // THE SUBSCRIPTION MERGE — a `do` that names content instead of a procedure, and the map from
+  // the three moment names to the events they always were. One grammar, one matcher, one ledger.
+  isContent,
+  CONTENT_KINDS,
+  MOMENTS,
+  eventForMoment,
+  OPS,
+  checkWhen,
   // exported for tests and for the UI's "would this have fired?" preview
   parseFrontMatter,
   matchesWhen,

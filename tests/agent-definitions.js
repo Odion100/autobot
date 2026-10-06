@@ -199,6 +199,33 @@ assert.deepEqual(edited.def.tools, ["Read", "Grep"], "...and leaves the fields i
 assert.equal(edited.projectCode, "autobot", "placement survives every shape");
 ok("a save that reads then writes keeps the whole def (both shapes accepted)");
 
+// ---- THE SECOND WHITELIST: the subscription sidecar -----------------------------
+// `cleanSubs` is to the sidecar what `normalize` is to the definition, and it has the same teeth:
+// a key it does not list is a key the writer can set, be told succeeded, and never read back. That
+// is exactly how the profile's hook switch became a lie one layer up, and it presented as "the UI
+// is broken" rather than as a missing key.
+//
+// It matters here because a subscription is now a hook — a `do` that names content instead of a
+// procedure — and the two axes it gained, the condition on the moment (`if`) and the cadence
+// (`rate`), are carried on THIS row and nowhere else.
+definitions.save({ id: "subsrt", name: "SubsRoundTrip" });
+definitions.saveSubscriptions("subsrt", [
+  { what: "note:abc@system", when: ["post-compaction"], until: { ttl: "2d" }, addedAt: 1, if: { trigger: "auto" }, rate: "once-per-day" },
+]);
+const subBack = definitions.subscriptionsOf("subsrt")[0];
+assert.deepEqual(subBack.if, { trigger: "auto" }, "`if` survives — a condition dropped here is a subscription that lists armed and never fires");
+assert.equal(subBack.rate, "once-per-day", "`rate` survives — a cadence dropped here silently becomes no limit at all");
+// AND A ROW USING NEITHER IS BYTE-FOR-BYTE THE OLD ONE. This is why the subscriptions already on
+// disk needed no migration: the new shape is a superset, and an absent key stays absent rather
+// than being written as an empty object nothing can tell from a choice.
+definitions.saveSubscriptions("subsrt", [{ what: "note:xyz@system", when: ["session-start"], until: { untilTs: 9e12 }, addedAt: 2 }]);
+assert.deepEqual(Object.keys(definitions.subscriptionsOf("subsrt")[0]).sort(), ["addedAt", "until", "what", "when"],
+  "a pre-merge row round-trips with exactly its original four keys");
+// A SAVE THAT NEVER MENTIONS SUBSCRIPTIONS MUST NOT DROP THEM — the `hooks` lesson, on the sidecar.
+definitions.save({ id: "subsrt", prompt: "edited elsewhere" });
+assert.equal(definitions.subscriptionsOf("subsrt").length, 1, "an unrelated def edit leaves the standing orders alone");
+ok("the subscription sidecar round-trips `if` and `rate`, and a plain row keeps its old shape");
+
 // ---------------------------------------------------------------------------------------------
 // SKILL SOURCES — his design (2026-10-02). Two hardcoded directories became a LIST, so every
 // provenance is one entry and ours is simply the writable one. What matters here is the two truths

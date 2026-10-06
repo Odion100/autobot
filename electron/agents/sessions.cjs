@@ -434,21 +434,25 @@ function weights(agentId, cwd) {
 // undefined, which the SDK would treat as "set to nothing" for some of them.
 // RFC-013 test seams — the identity mapping and wrapping for the two prompt-side moments,
 // extracted so the boundaries are provable without a live model.
-function startInjection(def = {}) {
+// `ctx` — { fired, event } — is what makes a content hook's `when` and `rate` mean anything at
+// these three moments: the condition needs the moment's own payload to match on, and the cadence
+// needs the session's fire map. Optional at every one of them, because the three test seams below
+// are called without a session and must keep behaving exactly as they did.
+function startInjection(def = {}, ctx = {}) {
   try {
-    const t = context.injectedFor({ projectCode: def.projectCode, slot: def.id }, "session-start");
+    const t = context.injectedFor({ projectCode: def.projectCode, slot: def.id }, "session-start", ctx);
     return t ? t + "\n\n" : "";
   } catch { return ""; }
 }
-function postCompactionInjection(identity = {}) {
+function postCompactionInjection(identity = {}, ctx = {}) {
   try {
-    const t = context.injectedFor(identity, "post-compaction");
+    const t = context.injectedFor(identity, "post-compaction", ctx);
     if (!t) return null;
     return { type: "user", message: { role: "user", content: [{ type: "text", text: t }] }, parent_tool_use_id: null, session_id: "" };
   } catch { return null; }
 }
 
-function sdkOptionsOf(def = {}) {
+function sdkOptionsOf(def = {}, ctx = {}) {
   const o = {};
   // A CUSTOM systemPrompt REPLACES the preset — and per the SDK, `append` has no
   // effect once systemPrompt is a string. So the stamp is composed differently in
@@ -458,7 +462,7 @@ function sdkOptionsOf(def = {}) {
   // RFC-013 — the session-start shelf rides the same composition as presence: not part of the
   // conversation, costs no turn, and survives compaction by construction. Read at open — a fresh
   // mark reaches the NEXT session, which is what "session-start" means.
-  const stamped = presence() + systemContext() + startInjection(def) + STAMP;
+  const stamped = presence() + systemContext() + startInjection(def, ctx) + STAMP;
   o.systemPrompt = def.prompt
     ? `${def.prompt}\n\n${stamped}`
     : { type: "preset", preset: "claude_code", append: stamped };
@@ -589,7 +593,17 @@ function deliverHook(s, h, event) {
   // cannot draw as the human typing) — which left the pointer visible to nobody at all. Hidden
   // from the transcript and available on the row is the behaviour; this is the half that was
   // missing.
-  const pointer = hooks.pointerText(h, event);
+  //
+  // THE IDENTITY RIDES IN, because a content hook's `do` names a note in a SCOPE and whether this
+  // agent may be met by it is a fact about the agent, not about the event. A skill pointer ignores
+  // it entirely.
+  let pointer = "";
+  try { pointer = hooks.pointerText(h, event, { slot: s.agentId, projectCode: s.projectCode }); } catch {}
+  // NOTHING TO HAND OVER IS NOT A DELIVERY. A content hook whose target was deleted renders to
+  // nothing, and pushing an empty user message would start a turn that says nothing, write a
+  // receipt for a delivery that did not happen, and spend the hook's cadence on it — the
+  // recordFired at the foot of this function is exactly that spend.
+  if (!String(pointer || "").trim()) return;
   try {
     s.input.push({
       type: "user",
@@ -1619,8 +1633,19 @@ async function pump(s) {
         // CHOSE to meet itself with on the far side. Same input-queue ride as a hook pointer:
         // a turn from outside, never words the human typed. Read live; delivery is receipted so
         // it is never silent.
+        //
+        // AND IT IS HANDED THE SAME PAYLOAD THE HOOK ON THIS EVENT GETS — `trigger`, `preTokens`,
+        // `postTokens`. An injected item is a hook whose `do` names content, so its `when` matches
+        // on the moment's fields exactly as a skill hook's does: "only when the compaction was
+        // automatic" is now sayable, and it is sayable because this object is the same object.
         try {
-          const inj = postCompactionInjection({ projectCode: s.projectCode, slot: s.agentId });
+          const inj = postCompactionInjection(
+            { projectCode: s.projectCode, slot: s.agentId },
+            {
+              fired: s.hooksFired,
+              event: { trigger: cm.trigger, preTokens: cm.preTokens ?? cm.pre_tokens, postTokens: cm.postTokens ?? cm.post_tokens },
+            }
+          );
           if (inj) {
             s.input.push(inj);
             emit(s, { kind: "context.injected", moment: "post-compaction", chars: inj.message.content[0].text.length, text: inj.message.content[0].text });
@@ -2131,7 +2156,20 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // definition's OWN mcpServers record, so it can never describe a server this agent is
   // not actually wired to: the thing doing the connecting is the thing reporting the
   // connection, which is the presence principle applied one layer down.
-  const wiredMcp = agent ? sdkOptionsOf(agent.def).mcpServers : null;
+  // COMPOSED ONCE PER OPEN, AND THAT IS A FIX, NOT A TIDY-UP. sdkOptionsOf() builds the system
+  // prompt, and building the system prompt DELIVERS the session-start shelf — so calling it three
+  // times in this function (here, in the query options, and again for the mcp record) delivered
+  // three times: a subscription gated `until: { turns: 1 }` was spent before the model had read it
+  // once, and with the merge it would also burn its rate three times per open. Found while wiring
+  // the rate ledger through this path, because the ledger is the first thing that counts.
+  //
+  // The session is handed in, so the composition's `when` can match on this open (`origin` — cold,
+  // reinit or resumed) and its `rate` can be spent against this session's own fire map.
+  const sdkOpts = sdkOptionsOf(agent ? agent.def : {}, {
+    fired: s.hooksFired,
+    event: { origin: s.origin, model: s.requestedModel || null },
+  });
+  const wiredMcp = agent ? sdkOpts.mcpServers : null;
   const discoveryServer = discovery.serverFor(wiredMcp);
   // The third tier: SystemLynx services he has whitelisted, attachable mid-session. Identity
   // rides in (RFC-056): per-agent call sessions — each agent's sign-in cookies are its own.
@@ -2233,7 +2271,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       // perfect and the code read as if it worked. `sdkOptionsOf({})` already handles
       // the no-definition case — preset plus the same composition — so there is one
       // place that composes a system prompt and no second copy to drift.
-      ...sdkOptionsOf(agent ? agent.def : {}),
+      ...sdkOpts,
       // EVERY session gets the worklist — it is harness state, not a capability
       // that touches the repo, so nothing is gained by withholding it. Merged
       // AFTER the definition's options so a definition cannot drop it by accident.
@@ -2243,7 +2281,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       // server an agent may have. A definition naming a server called "worklist"
       // still loses to ours, deliberately.
       mcpServers: {
-        ...(agent ? sdkOptionsOf(agent.def).mcpServers : {}),
+        ...(agent ? sdkOpts.mcpServers : {}),
         [worklist.SERVER]: worklistServer,
         // Same reasoning as the worklist: every agent should be able to ASK what it can
         // do rather than be told. Withholding discovery buys nothing — it exposes no new
@@ -2317,9 +2355,14 @@ function get(key) {
 // block inside the SAME user message, so the feed (which echoes only the human's text) never
 // shows it as words he typed. Extracted so the boundary is testable without a live model —
 // delivery verified by a test, not by reading my own code.
-function sendContent(identity, text, pics = []) {
+function sendContent(identity, text, pics = [], ctx = {}) {
   let turnShelf = "";
-  try { turnShelf = context.injectedFor(identity, "every-turn"); } catch {}
+  // THE MOMENT'S OWN PAYLOAD, so an every-turn item can carry a condition: `turn.started` declares
+  // `text`, which is what the human just said, so {"text": {"contains": "deploy"}} is expressible
+  // and the smallest, most expensive shelf in the system stops being all-or-nothing. Built here
+  // rather than taken from the caller so the one existing caller needs no new argument to be right.
+  const ev = { kind: "turn.started", text: String(text || ""), ...(ctx.event && typeof ctx.event === "object" ? ctx.event : {}) };
+  try { turnShelf = context.injectedFor(identity, "every-turn", { ...ctx, event: ev }); } catch {}
   return [
     ...pics.map((im) => ({
       type: "image",
@@ -2346,7 +2389,14 @@ function send(key, text, images = []) {
     text,
     images: pics.map((im) => ({ name: im.name || "image", mime: im.mime, thumb: im.thumb || "" })),
   });
-  const content = sendContent({ projectCode: s.projectCode, slot: s.agentId }, text, pics);
+  // `turn.started` — THE MOMENT A SUBSCRIPTION CALLED `every-turn`, NOW AN EVENT A HOOK CAN NAME.
+  // Through fireHooks and NOT through emit(), which is the choice `idle` already makes: the feed
+  // has a row for this moment (`user.prompt`, emitted just above) and a second one per turn would
+  // be a row per turn forever for a fact already on the screen. Fired AFTER user.prompt so the
+  // turn-start transition has already been taken, and before the content is composed so a pointer
+  // on it is held for this turn's ending rather than the next one's.
+  try { fireHooks(s, { kind: "turn.started", text }); } catch {}
+  const content = sendContent({ projectCode: s.projectCode, slot: s.agentId }, text, pics, { fired: s.hooksFired });
   if (!content.length) return;
   const turnInj = content.find((b) => b.text && b.text.startsWith('<injected-context moment="every-turn"'));
   if (turnInj) emit(s, { kind: "context.injected", moment: "every-turn", chars: turnInj.text.length, text: turnInj.text });
