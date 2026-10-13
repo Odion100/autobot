@@ -26,6 +26,14 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-defs-"));
 process.env.HOME = scratch;
 os.homedir = () => scratch;
 
+// AND THE WORKLIST STORE TOO, EXPLICITLY. The chore-board claims below reach worklist.cjs — which
+// sweeps closed runs at module load and whose pruneRuns, run against the real store, once deleted
+// the user's live lane records (see the comment at worklist.cjs's DIR). The scratch HOME above
+// would already cover it; this says so out loud, because a janitor reached transitively is still a
+// janitor with the keys.
+process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
+fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
+
 const definitions = require("../electron/agents/definitions.cjs");
 
 let pass = 0;
@@ -242,5 +250,136 @@ const still = definitions.saveSkill("roundtrip", "my-own-thing", "ours", "edited
 assert.equal(still.ok, true, "while a writable source still saves");
 ok("read-only is enforced at the write — and writable still writes");
 
+// ---------------------------------------------------------------------------------------------
+// CHORES — THE BOARD (RFC-067 §4). A per-agent list of lines, each naming a skill or a job and a
+// period, each reading done or not done FOR THIS PERIOD. "Chores" names the list and not a
+// procedure: there is no runner, so the only things to prove are that the list can be SAVED and
+// that the query answers honestly.
+const worklist = require("../electron/agents/worklist.cjs");
+const DAY = 24 * 60 * 60 * 1000;
+const byWhat = (board) => Object.fromEntries(board.map((l) => [l.what, l]));
+
+// THE WHITELIST, which is this file's single most repeated failure: normalize() silently drops an
+// unknown field, and a field it drops is a field the profile cannot save — it presents as "the UI
+// is broken" with no error anywhere. `hooks` learned it the hard way; `chores` learns it here.
+const chored = definitions.save({
+  name: "Chored",
+  projectCode: "chores-test",
+  prompt: "P",
+  chores: [
+    "context-maintenance",                               // a bare name is a skill
+    { what: "skill:doc-maintenance", period: "weekly" },
+    { name: "job:accounting", period: "monthly" },       // a job is a line like any other
+    { what: "skill:doc-maintenance", period: "daily" },  // the same pointer twice
+    { what: "", period: "daily" },                       // not a line at all
+    { what: "skill:unreadable", period: "fortnightly" }, // not a period we know
+  ],
+});
+assert.deepEqual(chored.def.chores, [
+  { what: "skill:context-maintenance", period: "daily" },
+  { what: "skill:doc-maintenance", period: "weekly" },
+  { what: "job:accounting", period: "monthly" },
+  { what: "skill:unreadable", period: "daily" },
+], "a line is a pointer plus a period; bare names become skills, duplicates and blanks are dropped");
+ok("normalize() learns `chores` — the pointer vocabulary is the one runs and hooks already use");
+
+// THE ROUND TRIP the UI actually does: read a record with get(), hand it straight back to save().
+const storedChores = definitions.get("chored");
+assert.deepEqual(storedChores.def.chores, chored.def.chores, "the board reads back off disk");
+assert.deepEqual(definitions.save(storedChores).def.chores, chored.def.chores,
+  "saving a record straight back from get() keeps the board — the nested shape is accepted too");
+assert.deepEqual(definitions.save({ id: "chored", name: "Chored Again" }).def.chores, chored.def.chores,
+  "and a rename-only save does not wipe it");
+ok("chores survive normalize() and the read-then-write round trip, in both shapes");
+
+const now = Date.now();
+
+// NOTHING HAS RUN. "Never" has to be stated, not guessed at.
+let board = byWhat(definitions.boardFor("chored", now));
+assert.equal(board["skill:doc-maintenance"].done, false, "a line with no run is not done");
+assert.equal(board["skill:doc-maintenance"].at, 0, "and `never` is 0, never a date");
+assert.equal(board["skill:doc-maintenance"].period, "weekly", "the line carries its own period");
+assert.equal(board["job:accounting"].kind, "job", "and says whether it points at a skill or a job");
+assert.equal(board["job:accounting"].name, "accounting");
+assert.ok(board["skill:doc-maintenance"].since <= now, "with the boundary it is answering against");
+ok("a line reads unchecked with no run, and states `never` as 0 rather than inventing a date");
+
+// A CLOSED RUN CHECKS THE LINE OFF, and nobody marked it — the run record is the evidence.
+worklist.writeRun(
+  worklist.newRunId(), "session:chores-test:s1",
+  [{ id: "1", text: "tidied the docs", state: "done" }], "skill:doc-maintenance"
+);
+board = byWhat(definitions.boardFor("chored", now));
+assert.equal(board["skill:doc-maintenance"].done, true, "a run with this line's source, closed, checks it");
+assert.ok(board["skill:doc-maintenance"].at >= now, "and the board reports when");
+assert.equal(board["skill:context-maintenance"].done, false, "only the line that actually ran");
+ok("a closed run with the line's source checks the line off — the line checks ITSELF, from the record");
+
+// A PROCEDURE ABANDONED HALFWAY LEAVES IT UNCHECKED, which RFC-067 calls out as correct.
+worklist.writeRun(
+  worklist.newRunId(), "session:chores-test:s1",
+  [{ id: "1", text: "got as far as this", state: "active" }], "skill:context-maintenance"
+);
+assert.equal(byWhat(definitions.boardFor("chored", now))["skill:context-maintenance"].done, false,
+  "a run that died mid-list is the record of where it died, not of a chore done");
+ok("a run that died mid-list never checks a line — only a CLOSE is evidence");
+
+// A CLOSE BEFORE THE CURRENT PERIOD DOES NOT COUNT. Two days ago is not today, and the board has to
+// say so while still knowing exactly when it was.
+const twoDaysAgo = now - 2 * DAY;
+worklist.stampClosed("skill:context-maintenance", "session:chores-test:s1", twoDaysAgo);
+board = byWhat(definitions.boardFor("chored", now));
+assert.equal(board["skill:context-maintenance"].at, twoDaysAgo, "the board knows when it last closed");
+assert.equal(board["skill:context-maintenance"].done, false, "and two days ago is not inside today");
+ok("a run that closed BEFORE the current period does not count — the boundary is a boundary");
+
+// IT DOES NOT STAY CHECKED. Nothing about the record changes; the period moves out from under it.
+board = byWhat(definitions.boardFor("chored", now + 8 * DAY));
+assert.equal(board["skill:doc-maintenance"].done, false, "the weekly line is unchecked a week later");
+assert.ok(board["skill:doc-maintenance"].at > 0, "while still knowing exactly when it last closed");
+assert.ok(board["skill:doc-maintenance"].since > now, "because the BOUNDARY moved, not the record");
+ok("a new period unchecks a previously checked line — the board answers for THIS period only");
+
+// SCOPED TO THE AGENT'S PLACEMENT. A run record names no agent; its session owner names a project,
+// which is the only handle there is — and a line checked off by somebody else's work is a board
+// nobody can trust.
+worklist.writeRun(
+  worklist.newRunId(), "session:somewhere-else:s9",
+  [{ id: "1", text: "did the books", state: "done" }], "job:accounting"
+);
+assert.equal(byWhat(definitions.boardFor("chored", now))["job:accounting"].done, false,
+  "a close in another project is not this agent's chore");
+ok("the board is scoped to the agent's placement — another agent's work cannot check your line");
+
+// THE CHECK IS A QUERY, NOT A STORED TICK: it writes nothing, so nothing it says can disagree with
+// what happened — and it must not touch the definition either, whose mtime is the composition bell.
+const filesBefore = fs.readdirSync(worklist.DIR).sort();
+const defBefore = fs.readFileSync(path.join(definitions.DIR, "chored.json"), "utf8");
+definitions.boardFor("chored", now);
+assert.deepEqual(fs.readdirSync(worklist.DIR).sort(), filesBefore, "reading the board creates no file");
+assert.equal(fs.readFileSync(path.join(definitions.DIR, "chored.json"), "utf8"), defBefore,
+  "and does not touch the definition — an mtime change here would ring the composition bell");
+ok("reading the board writes nothing at all — the check is a query, never a stored tick");
+
+assert.deepEqual(definitions.boardFor("bare"), [], "an agent with no chores has an empty board");
+assert.deepEqual(definitions.boardFor("nope"), [], "and an unknown agent is empty, not a throw");
+ok("no chores is an empty board; an unknown agent is not an error");
+
+// THE 14-DAY PROBLEM, which is the only build chores needed. Done LAST, because the sweep is
+// global. AGAINST THE SCRATCH STORE — see the AUTOBOT_WORKLISTS_DIR note at the top of this file.
+const monthly = worklist.newRunId();
+worklist.writeRun(
+  monthly, "session:chores-test:s1",
+  [{ id: "1", text: "the books", state: "done" }], "job:accounting"
+);
+assert.equal(byWhat(definitions.boardFor("chored", now))["job:accounting"].done, true,
+  "the monthly line is checked by its close");
+assert.ok(worklist.pruneRuns(now + 15 * DAY) >= 1, "two weeks on, the janitor sweeps the closed run");
+assert.deepEqual(worklist.read(worklist.runOwner(monthly)), [], "the run record is gone");
+const swept = byWhat(definitions.boardFor("chored", now))["job:accounting"];
+assert.equal(swept.done, true, "and the monthly line still reads done, not `never`");
+assert.ok(swept.at > 0, "because the close left a stamp the janitor does not sweep");
+ok("a monthly line survives the 14-day sweep — the stamp is the residue a swept run leaves");
+
 fs.rmSync(scratch, { recursive: true, force: true });
-console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip + skill sources\n`);
+console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip + skill sources + the chore board\n`);

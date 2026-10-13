@@ -55,6 +55,12 @@ function normalize(input = {}) {
   // enable switch a lie: the UI wrote `hooks`, save() reported success, and normalize() dropped
   // it, so every hook came back disabled after a re-init with nothing to explain why.
   if (Array.isArray(input.hooks)) def.hooks = input.hooks.map(String);
+  // THE CHORE BOARD — RFC-067 §4. A per-agent list of lines, each naming a skill or a job and a
+  // period. It lives HERE because the list is the whole artifact a chore has: there is no runner,
+  // nothing called `chores` to invoke, and so nowhere else for it to be. Listed in this whitelist
+  // for the reason the line above it was: a field normalize() drops is a field the profile cannot
+  // save, and it presents as "the UI is broken" rather than as a missing key.
+  if (Array.isArray(input.chores)) def.chores = cleanChores(input.chores);
 
   if (Array.isArray(input.mcpServers)) def.mcpServers = input.mcpServers;
   if (input.model) def.model = String(input.model);
@@ -532,4 +538,131 @@ function saveSubscriptions(id, subs) {
   return { ok: true };
 }
 
-module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, skillSources, saveSkill, createSkill, removeSkill, help, saveHelp, subscriptionsOf, saveSubscriptions };
+// ---------------------------------------------------------------------------------------------
+// CHORES — THE BOARD (RFC-067 §4). A per-agent list of lines; each line names a skill or a job and
+// a period, and reads done or not done FOR THIS PERIOD.
+//
+// "CHORES" NAMES THE LIST, NOT A PROCEDURE. There is no runner here and nothing to invoke: a board
+// is read, and an unchecked line is worked by running the thing it points at. A chore contributes
+// the knowledge that something is due and nothing else — `doc-maintenance` off the board is
+// byte-for-byte `doc-maintenance` when he asks for it.
+//
+// THE CHECK IS A QUERY, NEVER A STORED TICK. Nothing below writes anything. A run closes when every
+// item is done and the record carries its source and its time, so the line checks itself off from
+// that evidence — which is why nothing can disagree with what happened, and why nothing can be
+// forgotten while the work still gets done (the one failure a hand-written tick has).
+//
+// AND IT DOES NOT STAY CHECKED: the period boundary is recomputed every read, so a line checked
+// this week is unchecked next week. That is the point — the board answers "did I do this in THIS
+// period", and an agent with no memory has no other way to know it already did.
+const PERIODS = ["daily", "weekly", "monthly"];
+
+// A LINE IS A POINTER PLUS A PERIOD, and the pointer is spelled exactly the way a run's `source`
+// and a hook's `do` are spelled — `skill:<name>` / `job:<id>`. One vocabulary across the three
+// mechanisms, or the board would be matching a scheme of its own against theirs.
+//
+// A BARE NAME READS AS A SKILL, because the three lines today are bare skill names and demanding a
+// prefix would make the common case the wrong one.
+function choreLine(line) {
+  const raw = typeof line === "string" ? { what: line } : line && typeof line === "object" ? line : {};
+  let what = String(raw.what ?? raw.name ?? raw.do ?? "").trim().slice(0, 80);
+  if (!what) return null;
+  if (!/^[a-z][a-z0-9-]*:/.test(what)) what = `skill:${what}`;
+  const given = String(raw.period || "").trim().toLowerCase();
+  // AN UNREADABLE PERIOD FAILS LOUD, not quiet: the shortest period shows a line due more often,
+  // and noise is the recoverable error here while "done" about work nobody did is not.
+  const period = PERIODS.includes(given) ? given : "daily";
+  // RESET — a floor somebody set deliberately, 2026-10-13. His ask: *"give me the ability to reset
+  // a chore from the UI… meaning that if you did it already then I say fuck yeah, I want to reset
+  // it. For example, we could be using that to test job path check over and over."*
+  //
+  // IT IS A FLOOR, NOT A DELETION, and that is the whole design. `done` is derived from CLOSED RUNS
+  // (lastClosedBySource takes the newest of the run records and the stamp file), so the two obvious
+  // implementations are both wrong: clearing the stamp resets nothing, because the closed run record
+  // still reports its time — and deleting the run record would destroy the evidence that the work
+  // happened, to change a tick. The run happened; what he wants is for it to stop counting from now
+  // on. So the line carries its own floor and the comparison takes whichever is later.
+  const resetAt = Number(raw.resetAt) > 0 ? Number(raw.resetAt) : 0;
+  return resetAt ? { what, period, resetAt } : { what, period };
+}
+
+// One line per pointer: the same skill twice with two periods is two rows that cannot both be the
+// answer, so the first wins — the same first-source-wins rule the skill scan uses.
+function cleanChores(lines) {
+  const seen = new Set();
+  const out = [];
+  for (const l of Array.isArray(lines) ? lines : []) {
+    const row = choreLine(l);
+    if (!row || seen.has(row.what)) continue;
+    seen.add(row.what);
+    out.push(row);
+  }
+  return out.slice(0, 40);
+}
+
+// WHEN THE CURRENT PERIOD BEGAN, in LOCAL time — the board is read by an agent working the user's
+// day, so a day is his day and not UTC's. Calendar periods, not rolling windows: "checked this
+// week is unchecked next week" is a boundary, not an age. The week starts Monday (ISO).
+const PERIOD_START = {
+  daily: (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()),
+  weekly: (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)),
+  monthly: (d) => new Date(d.getFullYear(), d.getMonth(), 1),
+};
+function periodStart(period, now = Date.now()) {
+  return (PERIOD_START[period] || PERIOD_START.daily)(new Date(now)).getTime();
+}
+
+function choresOf(id) {
+  const rec = get(id);
+  return rec && rec.def && Array.isArray(rec.def.chores) ? cleanChores(rec.def.chores) : [];
+}
+
+// THE BOARD FOR ONE AGENT — every line with its state, and nothing written. `slot` is the agent
+// DEFINITION id, the same identity `subscriptionsOf` takes.
+//
+// SCOPED BY PLACEMENT, because a run record carries no agent. Its session owner is
+// `session:<projectCode>:<id>`, so the project is the only handle on whose work a close was — and
+// an agent whose line checks itself off because a DIFFERENT agent ran the procedure somewhere else
+// is a board nobody can trust. An agent with no placement scopes to nothing and counts every
+// place, which is the honest degradation. The known cost, stated: placement is a default and not a
+// pin (RFC-003 q1), so an agent pointed at another repo for a turn gets no credit for that turn —
+// it reads due when it was done, which is the direction that fails loud.
+//
+// NOT CALLED FROM ANYWHERE HERE. The surface and the session-start injection are the owner's to
+// wire; this is the function they read from.
+function boardFor(slot, now = Date.now()) {
+  const rec = get(slot);
+  if (!rec) return [];
+  const lines = choresOf(slot);
+  if (!lines.length) return [];
+  // required lazily on purpose: the roster is read by processes that have no business loading the
+  // worklist store, and worklist.cjs sweeps closed runs at module load.
+  const worklist = require("./worklist.cjs");
+  const closed = worklist.lastClosedBySource(rec.projectCode || "");
+  return lines.map((line) => {
+    const since = periodStart(line.period, now);
+    const at = closed[line.what] || 0;
+    // WHICHEVER IS LATER: the period boundary, or a reset somebody asked for inside this period.
+    // Returned alongside `since` so a reader never has to recompute it to explain the verdict —
+    // and so a row can say "reset, due again" rather than looking like the tick machinery broke.
+    const resetAt = Number(line.resetAt) || 0;
+    const floor = Math.max(since, resetAt);
+    const kind = line.what.slice(0, line.what.indexOf(":"));
+    return {
+      what: line.what,
+      kind,
+      name: line.what.slice(kind.length + 1),
+      period: line.period,
+      // the boundary this answer is against, so a reader never has to recompute it to explain itself
+      since,
+      // when it last closed — 0 is NEVER, and the difference between never and "42 days ago" is the
+      // whole reason the stamp in worklist.cjs exists
+      at,
+      resetAt,
+      floor,
+      done: at >= floor,
+    };
+  });
+}
+
+module.exports = { normalize, list, get, save, remove, resolve, adopt, fromSession, renameProject, idOf, DIR, docs, docPaths, saveDoc, skills, skillSources, saveSkill, createSkill, removeSkill, help, saveHelp, subscriptionsOf, saveSubscriptions, choresOf, boardFor, periodStart, PERIODS };

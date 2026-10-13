@@ -204,6 +204,23 @@ function register(surfaceOf) {
   });
   ipcMain.handle("agent:hook-remove", (_e, name) => hooks.remove(name));
 
+  // THE CHORE BOARD, READ (RFC-067 §4). `boardFor` has existed with one caller — the agent's own
+  // `chores` verb — and definitions.cjs says so in a comment: *"NOT CALLED FROM ANYWHERE HERE. The
+  // surface and the session-start injection are the owner's to wire."* This is the surface half.
+  //
+  // READ-ONLY ON PURPOSE, and it is the whole design: done/not-done is a QUERY over closed run
+  // records, never a stored tick. There is no write verb here to add, because there is nothing to
+  // write — the LINES are saved with the definition like every other field.
+  ipcMain.handle("agent:board", (_e, agentId) => {
+    try {
+      const rec = agentId ? definitions.resolve(agentId) : null;
+      if (!rec) return { rows: [], error: "no such agent" };
+      return { rows: definitions.boardFor(rec.id), periods: definitions.PERIODS };
+    } catch (err) {
+      return { rows: [], error: String(err?.message || err) };
+    }
+  });
+
   // STATISTICS — the half of the context system that says what gets USED, not just what exists.
   // Two measurements that must not share a table: RETRIEVAL (notes — is this earning its place?)
   // and WEIGHT (the always-loaded layers — never retrieved, so size is the whole story).

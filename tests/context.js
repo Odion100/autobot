@@ -21,6 +21,30 @@ const require = createRequire(import.meta.url);
 // fixture into everybody's unnamed search. Same lesson as the throwaway scopes above.
 const CORPORA = path.join(os.tmpdir(), "corpora-smoke-" + process.pid + ".json");
 process.env.AUTOBOT_CORPORA = CORPORA;
+// A SCRATCH ~/.autobot FOR JOBS.CJS ONLY, pinned before anything loads it. jobs.cjs resolves its
+// DIR from os.homedir() at module load, once — so the job claims at the bottom of this file would
+// otherwise create and delete fixtures in his REAL ~/.autobot/jobs. Same lesson as the throwaway
+// scopes above, and the same technique tests/agent-definitions.js uses.
+//
+// ONLY jobs.cjs IS PINNED. Its three dependencies are required first, against the real homedir, so
+// the definitions/hooks/worklist the rest of this file exercises keep pointing where they always
+// did; by the time jobs.cjs loads they are already in require.cache and the override cannot reach
+// them. The override is then put back immediately, so nothing else in the process ever sees it.
+require("../electron/agents/definitions.cjs");
+require("../electron/agents/hooks.cjs");
+require("../electron/agents/worklist.cjs");
+const JOBS_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "jobs-smoke-"));
+const realHomedir = os.homedir;
+os.homedir = () => JOBS_HOME;
+const jobsMod = require("../electron/agents/jobs.cjs");
+os.homedir = realHomedir;
+if (!jobsMod.DIR.startsWith(JOBS_HOME)) {
+  // LOUD, and before a single write: if the pin failed, the job claims below would be running
+  // against the live store. This file has wiped his real context twice; it does not get a third.
+  console.error("FAIL jobs.cjs is pointing at " + jobsMod.DIR + " — the scratch home did not take");
+  process.exit(1);
+}
+
 const ctx = require("../electron/agents/context.cjs");
 const docs = require("../electron/agents/docs.cjs");
 const vectors = require("../electron/apps/vectors.cjs");
@@ -337,6 +361,257 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     defs.remove("smoketest");
     ok(!fs.existsSync(path.join(defs.DIR, "smoketest.subs.json")), "standing orders die with the agent");
     fs.rmSync(ctx.place(AG).dir, { recursive: true, force: true });
+  }
+
+  // ── RFC-067 §3 — THE TWO JOB VERBS ──────────────────────────────────────────────────────
+  // Through the REAL TOOL HANDLERS out of toolsFor(), never the module underneath. Everything
+  // claimed here IS the tool layer: that the verbs exist at all, that the list is a label and not
+  // the documents, and that an absent job is a refusal an agent reads rather than a blank success.
+  // A test that called jobs.list()/jobs.doc() directly would pass on the day both tools were
+  // deleted — the `markBroughtIn` lesson again.
+  //
+  // FIXTURES ARE WRITTEN BY HAND, as directories, under the scratch home pinned at the top of this
+  // file. By hand rather than through jobs.save() because the claim is "jobsList returns what is ON
+  // DISK": a fixture built by the same writer the reader trusts proves less.
+  {
+    const tools = ctx.toolsFor({ slot: "smoketest", projectCode: "smoketest-sys" });
+    const jobsList = tools.find((t) => t.name === "jobsList");
+    const jobsLoad = tools.find((t) => t.name === "jobsLoad");
+    const said = (r) => (r.content || []).map((c) => c.text).join("");
+
+    // A VERB NOBODY CAN CALL IS NOT A VERB — and jobs are the one context layer `Skill` cannot
+    // reach, so if these two are missing there is no door to a job at all.
+    ok(!!jobsList && !!jobsLoad, "jobsList and jobsLoad are present in toolsFor's output");
+    ok(ctx.TOOL_NAMES.includes("mcp__context__jobsList") && ctx.TOOL_NAMES.includes("mcp__context__jobsLoad"),
+      "...and both are in TOOL_NAMES, which is what sessions.cjs hands the SDK as allowedTools");
+    ok(jobsLoad.inputSchema.name && !jobsLoad.inputSchema.name.isOptional(), "jobsLoad takes a required `name`");
+
+    // STATED ABSENCE BEFORE ANYTHING EXISTS. An empty directory must read as "there are no jobs",
+    // not as an empty list an agent can mistake for a failed call.
+    const none = await jobsList.handler({}, {});
+    ok(!none.isError && /No jobs exist yet/.test(said(none)), "with nothing on disk, jobsList SAYS there are none: " + said(none).split("(")[0].trim());
+    const nothingToLoad = await jobsLoad.handler({ name: "anything" }, {});
+    ok(nothingToLoad.isError && /No jobs exist at all yet/.test(said(nothingToLoad)),
+      "...and jobsLoad refuses rather than answering blank");
+
+    // ---- the fixtures ----------------------------------------------------------------------
+    const mk = (id, { doc, json }) => {
+      const dir = path.join(jobsMod.DIR, id);
+      fs.mkdirSync(dir, { recursive: true });
+      if (doc != null) fs.writeFileSync(path.join(dir, "job.md"), doc);
+      if (json != null) fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify(json, null, 2));
+      return dir;
+    };
+    const CLOSE_DOC =
+      "# Accounting close\n\n" +
+      "Reconcile last month's invoices against the bank export and file the summary. It takes a month.\n\n" +
+      "## what it must never do\n\nIt must never email the client directly.\n";
+    mk("accounting-close", {
+      doc: CLOSE_DOC,
+      json: { id: "accounting-close", name: "Accounting close", enabled: true, updatedAt: 2,
+              trigger: { on: "schedule.due" }, definition: { prompt: "close the month" } },
+    });
+    mk("inbox-sweep", {
+      doc: "- a bullet is scaffolding, not a sentence\n\nSort the shared inbox into the three folders.\n",
+      json: { id: "inbox-sweep", name: "inbox-sweep", enabled: false, updatedAt: 1, definition: {} },
+    });
+    // A PROJECTION WITH NO AGREEMENT — the hand-edited case jobs.save() refuses to create.
+    mk("ghost-job", { json: { id: "ghost-job", name: "ghost", enabled: true, updatedAt: 0, definition: {} } });
+
+    // ---- jobsList: a label, never the documents ---------------------------------------------
+    const listed = await jobsList.handler({}, {});
+    const text = said(listed);
+    ok(!listed.isError && /accounting-close/.test(text) && /inbox-sweep/.test(text),
+      "jobsList returns what is on disk — both jobs, read from the folder");
+    ok(/Reconcile last month's invoices against the bank export and file the summary\./.test(text),
+      "the aim is the document's opening SENTENCE — the `# heading` above it is the name again, not an aim");
+    ok(!/It takes a month/.test(text), "...one sentence only, not the opening paragraph");
+    ok(/Sort the shared inbox into the three folders\./.test(text),
+      "a leading bullet is skipped — the aim is the first line that reads as a sentence");
+    ok(!/must never email the client/.test(text),
+      "NAMES AND AIMS ONLY — the body stays out of the list, or the list is an injection with extra steps");
+    ok(/inbox-sweep · DISABLED/.test(text), "a disabled job is labelled disabled");
+    ok(/\("Accounting close"\)/.test(text), "the human name prints beside the id, because that is the form he says it in");
+    ok(/given, not chosen/i.test(text), "the list says out loud that it is a directory and not a menu");
+
+    // ---- jobsLoad: the document, whole -------------------------------------------------------
+    const loaded = await jobsLoad.handler({ name: "accounting-close" }, {});
+    ok(!loaded.isError && said(loaded).trim() === CLOSE_DOC.trim(),
+      "jobsLoad returns the document WHOLE — a bound that only arrives in a retrieved chunk is a bound that does not exist at 3am");
+
+    // He says "the Accounting close one", not a slug. Resolved through the folder's own rule.
+    const byName = await jobsLoad.handler({ name: "Accounting Close" }, {});
+    ok(!byName.isError && /Reconcile last month/.test(said(byName)),
+      "a human name resolves through the same slug rule the directory uses");
+
+    const dis = await jobsLoad.handler({ name: "inbox-sweep" }, {});
+    ok(!dis.isError && /^NOTE: "inbox-sweep" is DISABLED/.test(said(dis)) && /Sort the shared inbox/.test(said(dis)),
+      "a disabled job still loads, with the fact said FIRST — it changes whether to proceed at all");
+
+    // ---- an absent job is a refusal that SAYS SO --------------------------------------------
+    const missing = await jobsLoad.handler({ name: "payroll-run" }, {});
+    ok(missing.isError, "an absent job is an ERROR, never an empty success");
+    ok(/No job named "payroll-run"/.test(said(missing)) && /jobsList/.test(said(missing)),
+      "...the refusal names what was asked for and where to get the real names: " + said(missing).slice(0, 80));
+
+    const nearMiss = await jobsLoad.handler({ name: "accounting" }, {});
+    ok(nearMiss.isError && /closest name that exists is "accounting-close"/.test(said(nearMiss)),
+      "a near-miss name is NAMED in the refusal — cheap, and it is the whole reason jobsList was called");
+
+    const empty = await jobsLoad.handler({ name: "   " }, {});
+    ok(empty.isError && /needs the name of a job/.test(said(empty)), "an empty name refuses out loud too");
+
+    // The document IS the job; job.json is a projection of it. So a directory with only the
+    // projection has nothing to load, and the refusal has to say which half is missing — "no such
+    // job" would send an agent looking for a name that is right there in jobsList.
+    const ghost = await jobsLoad.handler({ name: "ghost-job" }, {});
+    ok(ghost.isError && /no readable job\.md/.test(said(ghost)) && /document IS the job/.test(said(ghost)),
+      "a job with a projection and no agreement is refused by NAMING which half is missing");
+    ok(!/No job named/.test(said(ghost)), "...and is not reported as a job that does not exist");
+
+    // ── jobsWrite — the door that did not exist ─────────────────────────────────────────────
+    // `jobs.save` had three kinds of caller before 2026-10-08: the suites, an IPC handler the
+    // window never called, and nothing else. So `job-authoring` could write a document and had
+    // nowhere to put it but the hand, which is the one move that breaks the guarantee job.json
+    // agrees with job.md. Through the REAL handler, like the two verbs above, for the same reason.
+    // THE AIM IS THE LABEL, so the label must not be the front matter. Caught the first time two
+    // real jobs existed: a document declaring `requires: ["project"]` listed its own demand where
+    // its name belonged, in the one place whose entire purpose is answering "which job is this?".
+    // And markdown WRAPS, so reading one line cut every aim at the author's wrap column.
+    const aimed = ctx.toolsFor({ slot: "smoketest", projectCode: "smoketest-sys" });
+    const aimWrite = aimed.find((t) => t.name === "jobsWrite");
+    await aimWrite.handler({
+      id: "ctx-aimed",
+      doc:
+        '---\nrequires: ["project"]\n---\n\n# Aimed\n\nFind the one thing worth doing in a named\n' +
+        'project and leave a proposal. Then a second sentence nobody asked for.\n',
+    }, {});
+    const aimRow = said(await jobsList.handler({}, {}));
+    ok(!/requires: \["project"\]/.test(aimRow.split("ctx-aimed")[1].split("\n")[0]),
+      "a job's aim is its opening SENTENCE, never its front matter");
+    ok(/Find the one thing worth doing in a named project and leave a proposal\./.test(aimRow),
+      "...and the wrapped paragraph is joined into one sentence, not cut at the author's wrap column");
+    ok(!/Then a second sentence/.test(aimRow), "one sentence only — a label is read at a glance");
+    jobsMod.remove("ctx-aimed");
+
+    const jobsWrite = tools.find((t) => t.name === "jobsWrite");
+    ok(!!jobsWrite, "jobsWrite is on the context MCP, beside jobsList and jobsLoad");
+    ok(ctx.TOOL_NAMES.includes("mcp__context__jobsWrite"),
+      "...and in TOOL_NAMES, or the SDK never offers it however well it is written");
+    ok(jobsWrite.inputSchema.doc && !jobsWrite.inputSchema.doc.isOptional(),
+      "`doc` is REQUIRED — there is no way to create a job without its document");
+
+    const wrote = await jobsWrite.handler({
+      id: "ctx-written",
+      doc: '---\nrequires: ["period"]\n---\n\n# A job written through the door\n',
+      name: "Written through the door",
+    }, {});
+    ok(/Wrote job "ctx-written"/.test(said(wrote)), "it writes the job and says where it landed");
+    ok(/demands: period/.test(said(wrote)),
+      "it reads what the job demands OUT OF THE DOCUMENT and says so back");
+    ok(/refuses by name/.test(said(wrote)), "...and says what happens when a hook cannot supply it");
+    ok(/fires for nobody/.test(said(wrote)),
+      "it states the job is INERT — writing one is a proposal, never an arming");
+
+    const back = jobsMod.get("ctx-written");
+    ok(!!back && back.doc.includes("written through the door"), "the document is on disk, whole");
+    ok(back.requires.length === 1 && back.requires[0] === "period",
+      "and the demand came from the document's front matter, not from a parameter on this verb");
+
+    const noDoc = await jobsWrite.handler({ id: "ctx-nodoc", doc: "" }, {});
+    ok(noDoc.isError === true, "a job with no document is REFUSED — the document IS the job");
+    ok(!jobsMod.get("ctx-nodoc"), "...and the refused attempt left nothing on disk");
+
+    const second = await jobsWrite.handler({ id: "ctx-written", doc: "# replaced\n" }, {});
+    ok(/Updated job/.test(said(second)), "writing an existing id updates it, and says which it did");
+    ok(jobsMod.get("ctx-written").requires.length === 0,
+      "dropping requires: from the document drops the demand that same afternoon — a projection cannot outlive it");
+
+    fs.rmSync(JOBS_HOME, { recursive: true, force: true });
+  }
+
+  // ── hooksCarry — AN AGENT ARMS ITS OWN HOOKS ──────────────────────────────────────────────
+  // His call, 2026-10-12: an agent sent out to watch something has to be able to put a hook down
+  // and arm it, without a human press it never needed. Before this there was NO VERB AT ALL — the
+  // absence read as a guardrail and was a missing door.
+  {
+    const defsMod = require("../electron/agents/definitions.cjs");
+    const hooksMod = require("../electron/agents/hooks.cjs");
+    const said = (r) => (r.content || []).map((c) => c.text).join("");
+    const SLOT = "ctxcarry-agent";
+    const HOOK = "ctxcarry-hook";
+    const tools = ctx.toolsFor({ slot: SLOT, projectCode: "smoketest-sys" });
+    const carry = tools.find((t) => t.name === "hooksCarry");
+    ok(!!carry, "the verb exists at all — an agent can reach its own carry list");
+
+    try { hooksMod.remove(HOOK); } catch {}
+    // EXPLICITLY EMPTY, because save() MERGES. The fixture used to omit `hooks` and rely on the
+    // field being absent — which held only until a failed run left the slot on disk carrying one,
+    // and then the first claim below read "already armed" and failed for a reason that had nothing
+    // to do with arming. A fixture that depends on absence depends on the last run having passed.
+    defsMod.save({ id: SLOT, name: "carry probe", prompt: "throwaway", skills: ["study"], hooks: [] });
+    hooksMod.save({ name: HOOK, on: "usage", when: { pct: { gte: 60 } }, do: "skill:study",
+                    kind: "context", author: `agent:${SLOT}`, rate: "once-per-rise" });
+
+    // A NAME NOTHING ANSWERS TO is the failure this mechanism fears most: it would sit in the
+    // definition looking armed and never fire.
+    const ghost = await carry.handler({ name: "ctxcarry-nope" }, {});
+    ok(ghost.isError === true && /nothing to arm/.test(said(ghost)),
+      "arming a hook that does not exist is refused, not written");
+
+    const armed = await carry.handler({ name: HOOK }, {});
+    ok(/Armed/.test(said(armed)), "arming says so, and says what will now fire");
+    ok(/no restart/.test(said(armed)), "...and says it is live, because that was the whole complaint");
+    ok((defsMod.resolve(SLOT).def.hooks || []).includes(HOOK), "IT IS ON DISK — read back, not reported from the input");
+
+    // SAVE() MERGES. An earlier version of that function emptied agents silently on a one-field
+    // write, so this is the claim that a carry write cannot cost an agent its definition.
+    ok(defsMod.resolve(SLOT).def.prompt === "throwaway", "the rest of the definition survived the write");
+    ok((defsMod.resolve(SLOT).def.skills || []).includes("study"), "...skills included");
+
+    const again = await carry.handler({ name: HOOK }, {});
+    ok(/already armed/.test(said(again)), "arming twice is reported as a no-op rather than written again");
+
+    const off = await carry.handler({ name: HOOK, carry: false }, {});
+    ok(/Disarmed/.test(said(off)), "disarming says so");
+    ok(!(defsMod.resolve(SLOT).def.hooks || []).includes(HOOK), "...and it is off disk");
+
+    // A SESSION THAT IS NOT AN AGENT has no carry list to write — said plainly, not crashed.
+    const noSlot = ctx.toolsFor({ projectCode: "smoketest-sys" }).find((t) => t.name === "hooksCarry");
+    const nope = await noSlot.handler({ name: HOOK }, {});
+    ok(nope.isError === true && /no agent slot/.test(said(nope)),
+      "a session with no agent slot is told there is no carry list, rather than writing one");
+
+    // A DEAD CARRY MUST BE REMOVABLE. Found 2026-10-13, within an hour of shipping this verb:
+    // three carries sat on the real systemview-test profile with no hook files behind them
+    // (`test-hook`, `probe-turn-end`, `probe-idle`), and the guard above ran BEFORE `want` was
+    // consulted — so the one verb that could remove them refused on the grounds that they do not
+    // exist. A carry list that can accumulate entries it will not let you delete only ever grows,
+    // and every reader then has to guess which names are real.
+    {
+      defsMod.save({ id: SLOT, name: "carry probe", prompt: "throwaway", hooks: ["ctxcarry-ghost", HOOK] });
+      const gone = await carry.handler({ name: "ctxcarry-ghost", carry: false }, {});
+      ok(!gone.isError && /NO SUCH HOOK EXISTS/.test(said(gone)),
+        "a carried name with no hook behind it CAN be disarmed, and is named as the dead entry it was");
+      ok(!(defsMod.resolve(SLOT).def.hooks || []).includes("ctxcarry-ghost"), "...and it is off the list");
+      ok((defsMod.resolve(SLOT).def.hooks || []).includes(HOOK), "...without disturbing the real carry beside it");
+
+      const armGhost = await carry.handler({ name: "ctxcarry-ghost", carry: true }, {});
+      ok(armGhost.isError === true, "but ARMING a name with no hook is still refused — the asymmetry is the point");
+      // Leave the carry list as the next block expects to find it: empty, so arming reports an
+      // arm rather than a no-op. A fixture that quietly changes shared state is how a claim below
+      // starts failing for a reason that has nothing to do with what it is testing.
+      defsMod.save({ id: SLOT, name: "carry probe", prompt: "throwaway", hooks: [] });
+    }
+
+    // A PARKED HOOK still fires for nobody, and arming it must not imply otherwise.
+    hooksMod.save({ name: HOOK, on: "usage", when: { pct: { gte: 60 } }, do: "skill:study",
+                    kind: "context", author: `agent:${SLOT}`, rate: "once-per-rise", enabled: false });
+    const parked = await carry.handler({ name: HOOK }, {});
+    ok(/PARKED/.test(said(parked)), "arming a parked hook says it still fires for nobody");
+
+    try { hooksMod.remove(HOOK); } catch {}
+    try { defsMod.remove(SLOT); } catch {}
   }
 
   console.log("\nALL " + n + " CLAIMS PASS");

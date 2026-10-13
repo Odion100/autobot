@@ -102,6 +102,185 @@ try {
   ok("carried → fires", hooks.fire(ev, { carries: [HOOK2], fired: new Map() }).some((h) => h.name === HOOK2));
 
   // -------------------------------------------------------------------------------------------
+  // RFC-067 §3 — A HOOK GIVES A JOB, THROUGH THE SAME `do` FIELD.
+  //
+  // A job is triggered exactly as a skill is: the hook already carries who (whoever ticked it),
+  // when (its event and rate) and what (`do`), so there is no second field and no second matcher.
+  // What is new is the half a hook could not carry — `with:`, the inputs the job declared in part 2
+  // — and the consequence of a job being GIVEN rather than chosen: given too little, it REFUSES BY
+  // NAME, and nothing runs.
+  //
+  // EVERY CLAIM HERE GOES THROUGH `hooks.fire()`, the door sessions.cjs actually calls. A check
+  // that called jobs.check() directly would prove the function works and prove nothing about
+  // whether a firing hook ever reaches it — which is how `markBroughtIn` once shipped defined,
+  // exported and "tested" while being reachable by nothing.
+  console.log("\na hook's `do` names a job by the same grammar it names a skill");
+  {
+    const jobs = require("../electron/agents/jobs.cjs");
+    const worklist = require("../electron/agents/worklist.cjs");
+    const JOB = "smoke-hooks-job";
+    const JHOOK = "smoke-hooks-gives-job";
+    const SESSION = "session:smoke-hooks:1";
+    const docFor = (...names) => `---\nrequires: ${JSON.stringify(names)}\n---\n\n# smoke job\n\n` +
+      `## 2 · What it must be given\n${names.map((n) => `- \`${n}\` — a missing one is a refusal.\n`).join("")}`;
+    const opened = [];
+    try {
+      jobs.save({ id: JOB, name: "smoke job", doc: docFor("period") });
+
+      eq("job: parses", hooks.targetOf({ do: `job:${JOB}` }), { kind: "job", name: JOB });
+      eq("skill: still parses the same way", hooks.targetOf({ do: "skill:study" }), { kind: "skill", name: "study" });
+      eq("a bare pointer has no kind, and is not guessed at", hooks.targetOf({ do: "study" }), { kind: "", name: "study" });
+      ok("and `isJob` reads that one grammar, so nothing re-derives it", hooks.isJob({ do: `job:${JOB}` }) && !hooks.isJob({ do: "skill:study" }));
+
+      console.log("\n`with:` round-trips through the file — a hook could not carry inputs before");
+      hooks.save({ name: JHOOK, on: "idle", when: { quietMin: { gte: 5 } }, do: `job:${JOB}`,
+                   with: { period: "2026-09", dry: true }, author: "agent:smoke", note: "throwaway" });
+      const back = hooks.list().find((h) => h.name === JHOOK);
+      eq("read back as the same object", back && back.with, { period: "2026-09", dry: true });
+      ok("and it is in the front matter, not invented on read",
+        /^with: \{"period":"2026-09","dry":true\}$/m.test(fs.readFileSync(back.file, "utf8")));
+      eq("a skill hook carries an empty one rather than an absence", (hooks.list().find((h) => h.name === HOOK2) || {}).with, {});
+
+      // THE BUG THIS FOUND, and it is older than jobs: `index()` rebuilds on the DIRECTORY's mtime,
+      // which does not move when a file inside it is rewritten. So an EDITED hook kept firing on its
+      // old condition, with its old `do` and its old inputs, until something unrelated happened to
+      // touch the folder — and every surface reads list(), so every surface agreed with the edit
+      // while the firing path did not. An edit to `with:` would have been the loudest possible
+      // version of it: the job given the values you replaced.
+      console.log("\nAN EDIT TAKES EFFECT ON THE NEXT FIRE — the writer invalidates the index");
+      hooks.save({ name: JHOOK, on: "idle", when: { quietMin: { gte: 5 } }, do: `job:${JOB}`,
+                   with: { period: "1999-01" }, author: "agent:smoke", note: "throwaway" });
+      eq("the edited value is what fires",
+        (hooks.fire({ kind: "idle", quietMin: 9 }, { carries: [JHOOK], fired: new Map(), cleared: new Map(), turn: 1 })[0] || {}).with,
+        { period: "1999-01" });
+      hooks.save({ name: JHOOK, on: "idle", when: { quietMin: { gte: 5 } }, do: `job:${JOB}`,
+                   with: { period: "2026-09", dry: true }, author: "agent:smoke", note: "throwaway" });
+
+      console.log("\nfiring it resolves the job and reports what it was given");
+      const hit = hooks.fire({ kind: "idle", quietMin: 9 }, { carries: [JHOOK], fired: new Map(), cleared: new Map(), turn: 1 });
+      eq("one hook fired", hit.length, 1);
+      eq("and it names the job", hit[0].job, JOB);
+      ok("given everything it declared → no refusal", hit[0].given === true && hit[0].refusal === "");
+      // THE INDEX IS SHARED. These objects are handed to every session carrying the hook, so a
+      // verdict attached to the cached one would leak this session's refusal into the next match.
+      ok("the verdict rode a COPY — the cached index is not poisoned",
+        !("given" in (hooks.list().find((h) => h.name === JHOOK) || {})));
+
+      console.log("\nthe pointer for a job says GIVEN, and offers no way out of it");
+      const ptr = hooks.pointerText(hit[0], { kind: "idle" });
+      ok("it names the job and says it was given", new RegExp(`\`${JOB}\` job has been GIVEN`).test(ptr));
+      ok("it lists what it was given, by name and value", /`period`: "2026-09"/.test(ptr));
+      ok("it names the run source the job must open", new RegExp(`source: "job:${JOB}"`).test(ptr));
+      // THE WHOLE REASON A JOB DOES NOT REUSE THE SKILL POINTER. "ignore it if it does not apply"
+      // handed to assigned work is a licence to drop it, and "a pointer, not an instruction" is
+      // true of something CHOSEN and false of something GIVEN.
+      ok("and it does NOT tell the agent to ignore it if it does not apply", !/ignore it if it does not/i.test(ptr));
+      ok("nor call itself a pointer rather than an instruction", !/pointer, not an instruction/i.test(ptr));
+
+      console.log("\nwith a session named, the fire path OPENS the run — and it is the worklist's");
+      const withRun = hooks.fire({ kind: "idle", quietMin: 9 },
+        { carries: [JHOOK], fired: new Map(), cleared: new Map(), turn: 1, session: SESSION });
+      if (withRun[0] && withRun[0].runId) opened.push(withRun[0].runId);
+      ok("a run id came back", !!(withRun[0] || {}).runId);
+      eq("sourced with the job's own owner", (withRun[0] || {}).runSource, `job:${JOB}`);
+      eq("and the run is on disk, open, with one pending item",
+        worklist.read(worklist.runOwner(withRun[0].runId)).map((i) => i.state), ["pending"]);
+      ok("the pointer says the run is already open rather than telling it to open one",
+        /run is already open/.test(hooks.pointerText(withRun[0], { kind: "idle" })));
+      // A SECOND MATCH IS THE SAME WORK. Minting a second run id would leave a corpse reading
+      // died-at-step-1 for a job that simply got nudged twice.
+      const twice = hooks.fire({ kind: "idle", quietMin: 9 },
+        { carries: [JHOOK], fired: new Map(), cleared: new Map(), turn: 2, session: SESSION });
+      eq("a second fire resumes that same run", (twice[0] || {}).runId, withRun[0].runId);
+
+      // -----------------------------------------------------------------------------------------
+      // THE REFUSAL, AT FIRE TIME, AND WHY IT IS NOT REDUNDANT WITH THE WRITE-DOOR CHECK: the
+      // document is the job and it is edited between runs. A hook written correctly in September
+      // against a job that gained an input in October is the real case, and nobody re-saves the
+      // hook. Only the fire-time check can catch it.
+      console.log("\nthe job gains an input, and the hook that cannot supply it REFUSES BY NAME");
+      jobs.save({ id: JOB, name: "smoke job", doc: docFor("period", "ledger") });
+      const refused = hooks.fire({ kind: "idle", quietMin: 9 },
+        { carries: [JHOOK], fired: new Map(), cleared: new Map(), turn: 3, session: SESSION });
+      eq("it still FIRES — a hook that silently never runs is the worst failure this has", refused.length, 1);
+      eq("but it was not given", (refused[0] || {}).given, false);
+      eq("and the missing input is named, not counted", (refused[0] || {}).missing, ["ledger"]);
+      ok("the refusal text names it too", /`ledger`/.test((refused[0] || {}).refusal || ""));
+      eq("NO RUN WAS OPENED for it", (refused[0] || {}).runId, "");
+      const rptr = hooks.pointerText(refused[0], { kind: "idle" });
+      ok("the pointer is the refusal, naming the job and the missing input",
+        /REFUSED/.test(rptr) && /`ledger`/.test(rptr) && new RegExp(JOB).test(rptr));
+      ok("and it forbids filling the gap in — the guess part 2 exists to stop",
+        /Do not fill in the missing value/.test(rptr));
+
+      console.log("\nand the writing door refuses it too, where somebody is watching");
+      let msg = "";
+      try {
+        hooks.save({ name: JHOOK, on: "idle", do: `job:${JOB}`, with: { period: "p" }, author: "agent:smoke" });
+      } catch (e) { msg = String(e.message || e); }
+      ok("a hook that cannot supply what the job declares is refused at save", /ledger/.test(msg));
+      // A HOOK WRITTEN BEFORE ITS JOB IS NOT AN ERROR — refusing would make the two orderings of
+      // the same two writes behave differently.
+      let ordering = true;
+      try { hooks.save({ name: JHOOK, on: "idle", do: "job:smoke-job-not-written-yet", author: "agent:smoke" }); }
+      catch { ordering = false; }
+      ok("but a hook pointing at a job nobody has written yet saves fine", ordering);
+
+      console.log("\na job hook persists against its OWN source — `until: run` needed no new vocabulary");
+      const persisting = { name: JHOOK, on: "idle", do: `job:${JOB}`, until: "run" };
+      eq("cleared by a run sourced job:<id>", hooks.clearedBy(persisting), `job:${JOB}`);
+      {
+        const fired = new Map();
+        const ev = { kind: "idle", quietMin: 9 };
+        hooks.save({ name: JHOOK, on: "idle", when: { quietMin: { gte: 5 } }, do: `job:${JOB}`,
+                     with: { period: "p", ledger: "l" }, until: "run", rate: "once-per-session", author: "agent:smoke" });
+        ok("it fires while the job has not run", hooks.fire(ev, { carries: [JHOOK], fired, cleared: new Map(), turn: 1 }).length === 1);
+        const done = new Map([[`job:${JOB}`, Date.now() + 1000]]);
+        ok("and a closed run carrying the job's source clears it",
+          hooks.fire(ev, { carries: [JHOOK], fired, cleared: done, turn: 2 }).length === 0);
+      }
+
+      // -----------------------------------------------------------------------------------------
+      // AND NOW THROUGH THE WHOLE DOOR. Everything above calls hooks.fire() — the function
+      // sessions.cjs calls — but the thing that has to be true is that a job pointer reaches an
+      // AGENT. `markBroughtIn` once shipped defined, exported and "tested" while being reachable by
+      // nothing, because the test called the module function instead of the handler. So: the real
+      // fireHooks, the real turn-end hold, the real flush, and the pointer read off the queue.
+      console.log("\na given job reaches the agent through sessions.fireHooks — the real path");
+      {
+        const sessions = require("../electron/agents/sessions.cjs");
+        hooks.save({ name: JHOOK, on: "idle", when: { quietMin: { gte: 5 } }, do: `job:${JOB}`,
+                     with: { period: "2026-09", ledger: "main" }, author: "agent:smoke", note: "throwaway" });
+        const s = {
+          key: "smoke:hooks-job", sessionId: "smoke", projectCode: "smoke", cwd: process.cwd(), model: "",
+          events: [], subs: new Set(), toolsInFlight: 0, sent: [],
+          hooksFired: new Map(), pendingHooks: new Map(), runsDone: new Map(),
+          turnSeq: 0, turnActive: false, turnEndTimer: null, carriesHooks: [JHOOK],
+        };
+        s.input = { push(m) { s.sent.push(m.message.content[0].text); } };
+        sessions.fireHooks(s, { kind: "idle", quietMin: 9 });
+        await new Promise((r) => setTimeout(r, sessions.TURN_SETTLE_MS + 250));
+        eq("one pointer was pushed to the agent", s.sent.length, 1);
+        ok("and it is the job being GIVEN, not a skill being offered",
+          new RegExp(`\`${JOB}\` job has been GIVEN`).test(s.sent[0] || ""));
+        // THE RECEIPT, so an unattended giving is never silent — the feed row says which job.
+        const receipt = s.events.find((e) => e.kind === "hook.fired");
+        eq("the feed receipt names the job as the target", receipt && receipt.to, `job:${JOB}`);
+      }
+
+      console.log("\na skill hook is untouched by any of it");
+      const skillHit = hooks.fire({ kind: "usage", pct: 90 }, { carries: [HOOK2], fired: new Map(), cleared: new Map(), turn: 1 });
+      ok("no job verdict is attached to one", skillHit.length === 1 && !("given" in skillHit[0]) && !("job" in skillHit[0]));
+      ok("and its pointer still reads as the choice it is",
+        /pointer, not an instruction|ignore it if it does not/i.test(hooks.pointerText(skillHit[0], { kind: "usage" })));
+    } finally {
+      for (const id of opened) { try { worklist.deleteRun(id); } catch {} }
+      try { hooks.remove(JHOOK); } catch {}
+      try { jobs.remove(JOB); } catch {}
+    }
+  }
+
+  // -------------------------------------------------------------------------------------------
   // RFC-012 — WHEN THE POINTER LANDS, AND WHETHER IT COMES BACK.
   //
   // The bug behind all of this: a pointer was pushed the instant its event matched, which put it
@@ -334,6 +513,63 @@ try {
 
       try { hooks.remove(RATE); } catch {}
       if (keep == null) { try { fs.unlinkSync(FIRED); } catch {} } else fs.writeFileSync(FIRED, keep);
+    }
+
+    // ── ONCE-PER-RISE — ONCE PER CROSSING, AND THE FALL IS WHAT RE-ARMS IT ───────────────────
+    // His report, 2026-10-12: *"two times in a row context maintenance did not fire."* He was
+    // right. `context-maintenance` is `on: usage, when: pct >= 60` with `once-per-session`: it
+    // fired at the first crossing and then never again for that session's whole life, because
+    // `s.hooksFired` is created at session birth and NOTHING clears it — not even a compaction.
+    // So the pass ran once, he compacted, the window refilled, and every later crossing was eaten.
+    {
+      console.log("\nonce-per-rise — the falling edge is the whole mechanism");
+      const RISE = "smoke-hooks-rise";
+      try { hooks.remove(RISE); } catch {}
+      hooks.save({ name: RISE, on: "usage", when: { pct: { gte: 60 } }, do: "skill:context-maintenance",
+                   kind: "context", author: "agent:smoke", rate: "once-per-rise", note: "throwaway" });
+
+      // ONE Map across the whole sequence — that is what makes it one session's life, which is
+      // exactly the condition the old rate could not survive.
+      const fired = new Map();
+      const at = (pct) => hooks.fire({ kind: "usage", pct }, { agentId: "agent:smoke", carries: [RISE], fired, cleared: new Map(), turn: 1 });
+
+      eq("below the line it does not fire", at(40).length, 0);
+      eq("the crossing fires it", at(72).length, 1);
+      eq("held high, it stays quiet — a rise is not a clock", at(80).length, 0);
+      eq("...and quiet however long it stays up there", at(95).length, 0);
+      // THE FALL. This is the line that distinguishes this rate from once-per-session: under the
+      // old rate everything below this point was silent forever.
+      eq("the fall re-arms it, and is itself silent", at(25).length, 0);
+      eq("THE SECOND CROSSING FIRES — the bug he reported", at(66).length, 1);
+      eq("and it is one per crossing, not one per event above the line", at(67).length, 0);
+      eq("a third crossing, after a third fall", (at(10), at(88)).length, 1);
+
+      // NOT PERSISTED. A rise is about one context's life; a restart is a new one, and a restart
+      // that found it still "fired" would stay silent on a fresh window — the original failure.
+      hooks.recordFired({ name: RISE, rate: "once-per-rise" }, { agentId: "agent:smoke" });
+      const st = (() => { try { return JSON.parse(fs.readFileSync(FIRED, "utf8")); } catch { return {}; } })();
+      ok("nothing durable was written for it", !st[`agent:smoke|${RISE}`]);
+      eq("so a fresh session is ARMED, not silenced",
+        hooks.fire({ kind: "usage", pct: 90 }, { agentId: "agent:smoke", carries: [RISE], fired: new Map(), cleared: new Map(), turn: 1 }).length, 1);
+
+      // ONLY ITS OWN EVENT KIND CAN RE-ARM IT. If any event lacking `pct` counted as a fall, an
+      // idle tick between two usage reports would re-arm it and it would fire on every message.
+      const f2 = new Map();
+      const usage = (pct) => hooks.fire({ kind: "usage", pct }, { agentId: "agent:smoke", carries: [RISE], fired: f2, cleared: new Map(), turn: 1 });
+      usage(70);
+      hooks.fire({ kind: "idle", quietMin: 30 }, { agentId: "agent:smoke", carries: [RISE], fired: f2, cleared: new Map(), turn: 1 });
+      eq("an unrelated event does not count as a fall", usage(75).length, 0);
+
+      // REFUSED AT THE WRITING DOOR: with no `when` there is nothing to cross, so it would mean
+      // once-per-session — the exact bug, wearing the new name.
+      let refused = false;
+      try {
+        hooks.save({ name: "smoke-rise-nowhen", on: "compaction.after", do: "skill:context-retrieval",
+                     kind: "context", author: "agent:smoke", rate: "once-per-rise" });
+      } catch { refused = true; }
+      ok("once-per-rise with no `when` is refused where somebody is watching", refused);
+      try { hooks.remove("smoke-rise-nowhen"); } catch {}
+      try { hooks.remove(RISE); } catch {}
     }
   })();
 } finally {

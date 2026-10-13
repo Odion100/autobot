@@ -45,7 +45,7 @@ Operators: `equals · not · contains · startsWith · endsWith · matches · in
 
 ## The fire rate is a different axis from the condition, and it is persisted
 
-Two families, because people mean both:
+Three families, because people mean all three:
 
 - **`cooldown:<duration>`** — sliding: no sooner than N since the last fire. This is how you say
   "twice weekly" (`cooldown:3d12h`).
@@ -53,6 +53,37 @@ Two families, because people mean both:
   the periods fall. Fire at 11pm Monday and a sliding day blocks all Tuesday daytime; "once per day"
   does not, and the calendar one is what the words mean.
 - **`once-per-session`** — scoped to the session, so the session's own memory is the right store.
+- **`once-per-rise`** — EDGE: once per **crossing** of the hook's own `when`, re-armed the moment the
+  condition goes false again. Neither a clock nor a calendar — a fact about the condition's shape.
+
+## `once-per-rise` — for a hook on a threshold, which is most of them
+
+Added 2026-10-12, from a report that the context-maintenance hook *"did not fire, two times in a
+row."* It had not. `on: usage, when: pct >= 60` with `once-per-session` fires at the **first**
+crossing of 60% and then never again for that session's entire life: the pass runs, the human
+compacts, the window drops to 25%, it climbs straight back past 60% — and the guard eats every one
+of those crossings, in silence. `s.hooksFired` is created once at session birth and **nothing**
+clears it, not even a compaction.
+
+No existing rate could say it. A cooldown re-fires at sustained high usage whether or not anything
+changed; a calendar is blind to the window entirely. `once-per-session` was always standing in for
+*once per context*, and that proxy broke the moment sessions started outliving their windows — which
+is now normal.
+
+**The falling edge is the whole mechanism.** `fire()` is the only place in the file where a
+*non*-match does work: when `when` stops matching, a `once-per-rise` hook's fired entry is deleted,
+so "is there an entry" means "has it fired since the last fall". Two properties follow and both are
+load-bearing:
+
+- **Only its own event kind can re-arm it.** The hooks being iterated came from `index().get(kind)`,
+  so every one is `on` this event — a `usage` hook can never be re-armed by an `idle` tick that
+  simply has no `pct` field. Without that it would fire on every message.
+- **It is session-scoped and never persisted.** A restart is a new context and should find the hook
+  **armed**; a persisted rise would come back still "fired" and stay silent on a fresh window, which
+  is the original failure wearing a new hat.
+
+**A `once-per-rise` with no `when` is refused at the writing door.** With nothing to go false it can
+never re-arm, so it would silently mean `once-per-session` — exactly the bug it exists to end.
 
 Durations are `30m`, `24h`, `3d12h`, `2w`. **Bare digits still mean seconds**, so hooks written before
 durations existed keep their meaning.
@@ -117,12 +148,29 @@ and `rate:` names the repetition. Three consequences worth knowing:
 Idle ticks reach hooks only, never the feed: a session sitting quiet for a week must not write ten
 thousand rows about its own silence into anyone's log.
 
-## Writing a hook is the proposal; carrying it is the approval
+## Writing a hook is not arming it — and an agent arms its own
 
-`hooksWrite` creates a hook that fires for **nobody**. It arms only when a human ticks it onto an
-agent's profile, and that tick is the agent's opt-in exactly like a skill. `scope:` is a suggestion
-the editor pre-fills from, not a targeting rule. So an agent can propose a standing behaviour for
-everyone and change nothing until someone agrees.
+`hooksWrite` creates a hook that fires for **nobody**. Carrying it is what arms it, and the carry
+list lives on the agent (`def.hooks`). `scope:` is a suggestion the editor pre-fills from, not a
+targeting rule.
+
+**Who may carry what, settled 2026-10-12:**
+
+| | |
+|---|---|
+| **on yourself** | `hooksCarry({name, carry})` — your own context, your own continuation, no press required. It takes effect immediately: the carry list is read per fire, not snapshotted when the session opened |
+| **on another agent** | the human's. It imposes standing behaviour on context somebody else pays for every turn, which is a different act — the verb refuses it by name rather than being silently unable |
+
+**The old rule was "a human ticks it", and it was wrong.** His argument: an agent sent out to watch
+something has to be able to put a hook down and arm it — *"you might see a sign, put a hook down for
+later."* Nobody else's attention is spent by that. And the rule manufactured the exact failure this
+file calls the worst one it has — a hook that looks correct, appears in every list, and silently
+never runs: `run-the-path-check` sat written, correct and inert for four days waiting for a tick.
+
+What actually protected anything was never the press. It is the **writing door**: an event that does
+not exist, a malformed rate, a `once-per-rise` with no `when`, a job hook that cannot supply what the
+job declares — all refused where somebody is watching. And every fire is a feed row carrying who
+wired it, so an armed hook was never invisible. Gating it was solving visibility with a lock.
 
 `hook.fired` is emitted as a receipt but is deliberately **not hookable** — a hook on it would deliver
 a pointer, which writes a receipt, which fires the hook, at input-queue speed.

@@ -103,6 +103,13 @@ const DIR = process.env.AUTOBOT_WORKLISTS_DIR || path.join(os.homedir(), ".autob
 const fileFor = (owner) =>
   path.join(DIR, `${String(owner || "unowned").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(-90)}.json`);
 
+// SIDECARS ARE DOTFILES, and the rule is enforced in one place so it cannot rot: `all()` reads
+// every .json in this directory as a worklist, so anything else living here has to be excluded by
+// SHAPE rather than by name. A leading dot is a shape fileFor() cannot produce — it strips every
+// character outside [a-zA-Z0-9] to a dash and then strips leading dashes — so no owner, however
+// it is spelled, can ever collide with a sidecar or be hidden by this filter.
+const isSidecar = (name) => name.startsWith(".");
+
 function readFile(owner) {
   try {
     return JSON.parse(fs.readFileSync(fileFor(owner), "utf8")) || {};
@@ -129,11 +136,12 @@ function save(owner, patch) {
     // (a set() that clobbered the board made the two features enemies). `broughtIn` was the first
     // passenger; `selfDirected` (RFC-066) is the newest, and it rides for the same reason: it is
     // stamped once at a run's birth, so every later list write is a write that does not know it.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, selfDirected: cur.selfDirected, ...patch, updatedAt: Date.now() };
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, selfDirected: cur.selfDirected, ...patch, updatedAt: Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
     if (!next.broughtIn) delete next.broughtIn;
+    if (!next.status) delete next.status;
     // FALSE IS ABSENT, ON PURPOSE. Every run record already on disk is commissioned work, so
     // "no key" and "false" must be the same answer — which is what makes this need no migration.
     if (!next.selfDirected) delete next.selfDirected;
@@ -186,6 +194,114 @@ function pruneRuns(now = Date.now()) {
 }
 try { pruneRuns(); } catch {}
 
+// ---------------------------------------------------------------------------------------------
+// LAST DONE — the residue a swept run leaves behind (RFC-067 §4, the one build chores needed).
+//
+// THE PROBLEM: the board asks "did a run with this line's source close inside the current period",
+// and pruneRuns deletes closed runs after fourteen days. A MONTHLY line therefore has no run left
+// to find and reads "never" when the truth is "42 days ago" — wrong in exactly the case the board
+// exists for.
+//
+// WHY NOT AN EXCEPTION IN THE JANITOR, which was the other candidate:
+//   1. A run only exists BECAUSE a source was given — writeRun is the sole writer of run files and
+//      is never called without one. So "sourced runs" is every run there is, and an exception for
+//      them is pruneRuns repealed.
+//   2. Narrowing it to "sources that are on somebody's board" makes the janitor read the agent
+//      registry. This module is deliberately registry-free (see `checkSource`, injected by
+//      sessions.cjs for precisely that reason).
+//   3. Even narrowed it keeps WHOLE records — items, whiteboard, receipt — one per execution,
+//      forever, for the sources that fire most often. A daily line is 365 files a year nobody will
+//      ever read, which is the pile the janitor exists to prevent.
+//
+// SO: ONE INTEGER PER (PROCEDURE, PLACE), written at the moment a run closes. It cannot grow with
+// time, only with the number of distinct procedures — and pruneRuns is not reopened, which matters
+// for the one function here that has already destroyed the user's live records once.
+//
+// IT IS NOT A SECOND TRUTH, it is the same truth at lower resolution: the run record is PROOF and
+// outranks the stamp wherever it still exists (see lastClosedBySource — both are read and the
+// NEWEST wins, so they can only ever agree or the record can only ever be fresher). The stamp
+// answers alone only for a period the janitor has already cleared.
+//
+// THE ONE PLACE THEY CAN DIFFER, stated rather than hidden: the user's 🗑 unlinks a run file and
+// does not touch the stamp, so a deleted lane record leaves its "last done" standing. That is
+// correct — deleting a record is not undoing the work — but it is the seam.
+const STAMPS = path.join(DIR, ".chore-stamps.json");
+
+function readStamps() {
+  try {
+    const r = JSON.parse(fs.readFileSync(STAMPS, "utf8"));
+    return r && typeof r === "object" ? r : {};
+  } catch {
+    return {};
+  }
+}
+
+// WHERE a run ran. A run's session owner is `session:<projectCode>:<sessionId>` (the same scheme
+// laneRuns reads), and the project is the only handle a run record carries on whose work it was —
+// nothing on it names an agent. "-" for an owner with no project in it, which is a real case
+// (`session:<key>` from the terminal door) and not an error.
+const placeOf = (session) => {
+  const m = /^session:([^:]+):/.exec(String(session || ""));
+  return m ? m[1] : "-";
+};
+
+// Called at a close and nowhere else. Monotone: a stamp never moves backwards, so an out-of-order
+// write cannot age a line that was done more recently.
+function stampClosed(source, session, ts = Date.now()) {
+  const src = sourceOf(source);
+  const when = Number(ts) || 0;
+  if (!src || when <= 0) return null;
+  const place = placeOf(session);
+  try {
+    fs.mkdirSync(DIR, { recursive: true });
+    const all = readStamps();
+    const byPlace = all[src] && typeof all[src] === "object" ? all[src] : {};
+    if ((Number(byPlace[place]) || 0) >= when) return Number(byPlace[place]);
+    byPlace[place] = when;
+    all[src] = byPlace;
+    fs.writeFileSync(STAMPS, JSON.stringify(all, null, 2));
+    return when;
+  } catch {
+    return null;
+  }
+}
+
+// WHEN EACH PROCEDURE LAST CLOSED, as one map from one pass — because the board asks this per line
+// and a per-line scan of the whole store would read every file three times over.
+//
+// READS NOTHING INTO EXISTENCE. This is the query half of the board and it writes nothing at all,
+// which is the property that makes the board unable to disagree with what happened.
+//
+// `place` scopes it to one project; "" counts every place, which is the honest answer for a caller
+// that has no placement to scope by.
+function lastClosedBySource(place = "") {
+  const out = {};
+  const bump = (src, ts) => {
+    if (src && ts > (out[src] || 0)) out[src] = ts;
+  };
+  for (const r of all()) {
+    if (!r.owner.startsWith("run:") || !r.source) continue;
+    if (place && placeOf(r.session) !== place) continue;
+    // A CLOSE, NOT A VISIT: a run that died mid-list is the record of where it died, and it must
+    // never check a line off. RFC-067: "a line checks off a CLOSED run, so a procedure abandoned
+    // halfway leaves it unchecked — which is correct."
+    if (!allDone(r.items)) continue;
+    bump(r.source, r.updatedAt || 0);
+  }
+  const stamps = readStamps();
+  for (const [src, byPlace] of Object.entries(stamps)) {
+    if (!byPlace || typeof byPlace !== "object") continue;
+    for (const [p, ts] of Object.entries(byPlace)) {
+      if (place && p !== place) continue;
+      bump(src, Number(ts) || 0);
+    }
+  }
+  return out;
+}
+
+// One line's answer. 0 means never — an absence, never a guess at one.
+const lastClosed = (source, place = "") => lastClosedBySource(place)[sourceOf(source)] || 0;
+
 let runSeq = 0;
 const newRunId = () => `r${Date.now().toString(36)}${(runSeq++ % 1296).toString(36).padStart(2, "0")}`;
 const runOwner = (id) => `run:${id}`;
@@ -221,6 +337,10 @@ function writeRun(id, session, items, source, { selfDirected } = {}) {
     session,
     ...(born ? { selfDirected: selfDirected === true } : {}),
   });
+  // THE CLOSE IS THE ONLY MOMENT THIS IS KNOWN (RFC-067 §4). Nothing new observes anything: the
+  // stamp rides the same `allDone` the board's checked/unchecked already depends on, written in
+  // the one place run files are written, so a run cannot close without leaving its residue.
+  if (allDone(items)) stampClosed(source, session);
   return items;
 }
 
@@ -234,6 +354,30 @@ function laneRuns(projectCode) {
   return all().filter(
     (r) => r.owner.startsWith("run:") && r.source.startsWith("lane:") && r.session.startsWith(pre)
   );
+}
+
+// IS THIS BRANCH REGISTERED AS A LANE — asked of the BRANCH, across every run on disk, and
+// deliberately not project-scoped (2026-10-08).
+//
+// `laneRuns` above is scoped to a project because the STRIP is: a lane row belongs to the
+// conversation that owns it. Registration is a different question on a different axis. The run that
+// registers a lane is written by whichever session did the work, and the branch lives in whichever
+// repo the work was IN — and those are routinely not the same project. Every lane branch in the
+// autobot repo today was registered by a systemview-test session, because that is the conversation
+// that delegated them. Scoping this read by project answered "none registered" for all five.
+//
+// THE COLLISION IS ACCEPTED AND IT IS THE SMALL SIDE. Two repos both holding a branch called
+// `lane/x` would cross-register, so a row could appear in the second. The repo half of the answer
+// comes from git in that repo, which is what keeps that merely untidy — and the alternative, hiding
+// five real lanes holding real work, is the failure this whole surface exists to prevent.
+function registeredLanes() {
+  const out = new Set();
+  for (const r of all()) {
+    if (!r.owner.startsWith("run:")) continue;
+    const src = String(r.source || "");
+    if (src.startsWith("lane:")) out.add(src.slice(5));
+  }
+  return out;
 }
 
 // FINDING A LANE'S RUN BY ITS BRANCH. The worklist indexes its own files, because the alternative is
@@ -291,6 +435,54 @@ function deleteRun(id) {
 //
 // A RUN THAT IS NOT THERE IS NOT STAMPED. save() would happily create the file, which would mint a
 // lane record out of a receipt for a lane nobody ran — the one way this could accumulate.
+// ---------------------------------------------------------------------------------------------
+// WHAT IS HAPPENING IN THIS LANE — said by whoever is doing it, in their own words.
+//
+// HIS RULING, 2026-10-06, and it reverses the ordering RFC-063 shipped with: *"the whole point is
+// these lanes tell me shit and they lie, because you always try to derive it… it should say what is
+// the correct thing. I could go away and come back and say, boom, this is what's happening in this
+// lane. It's not about the system automatically telling me what it is."*
+//
+// DERIVATION WAS NEVER PROOF, which is the premise that failed. Matching blobs against the tree is a
+// guess about residue: it reported `in · committed` for a branch holding nothing (a branch with no
+// commits is trivially merged), and `can't tell, 4/11` for a lane that had been applied and then
+// reversed — a thing the actor knew exactly and had no way to say. The old hierarchy called that
+// guess "proof" and the actor's own account "testimony". For ACTS it is the other way round: an
+// agent knows what it did; derivation only sees what is left behind.
+//
+// SO A STATUS IS FREE TEXT. Not an enum — he was explicit that it could be anything: "brought in,
+// tests green", "applied then reversed, not landed", "waiting on review", "needs a rebase",
+// "abandoned, keeping the branch for the test". An enum would be this system deciding in advance
+// which situations a lane can be in, which is the same mistake as deriving the answer.
+//
+// It carries `by` and `ts` so the row can say WHO said it and WHEN — that is what makes a statement
+// checkable rather than authoritative. Derivation does not go away; it becomes the cross-check
+// printed beside this, so a disagreement is visible instead of ranked.
+function markStatus(id, { text = "", tone = "", by = "", ts = 0 } = {}) {
+  const owner = runOwner(String(id || ""));
+  const t = String(text || "").trim();
+  try {
+    if (!fs.existsSync(fileFor(owner))) return null;
+  } catch {
+    return null;
+  }
+  // AN EMPTY STATUS CLEARS IT, deliberately: a wrong statement must be retractable by whoever made
+  // it — the half the receipt never had, since a bring-in could be recorded and never undone.
+  if (!t) {
+    save(owner, { status: null });
+    return { cleared: true };
+  }
+  const status = {
+    ts: Number(ts) > 0 ? Number(ts) : Date.now(),
+    // Long enough for a sentence, short enough to stay a row. A status that wraps is a report.
+    text: t.slice(0, 160),
+    tone: ["ok", "warn", "note"].includes(String(tone)) ? String(tone) : "note",
+    by: String(by || "").trim().slice(0, 80),
+  };
+  save(owner, { status });
+  return status;
+}
+
 function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
   const owner = runOwner(String(id || ""));
   try {
@@ -315,7 +507,10 @@ function all() {
   let names = [];
   try { names = fs.readdirSync(DIR); } catch { return []; }
   const out = [];
-  for (const n of names.filter((f) => f.endsWith(".json"))) {
+  // NOT THE SIDECARS: `.chore-stamps.json` lives in this dir too, and a glob on .json would push
+  // it into the rows as a worklist owned by "chore-stamps" — the same bug the definitions roster
+  // had with `<id>.subs.json`.
+  for (const n of names.filter((f) => f.endsWith(".json") && !isSidecar(f))) {
     try {
       const r = JSON.parse(fs.readFileSync(path.join(DIR, n), "utf8"));
       const items = normalize(r.items || []);
@@ -333,6 +528,9 @@ function all() {
         // the lane strip is drawn from what comes back here. null, never undefined — "no receipt" is
         // an answer the row renders, not a key it has to guess about.
         broughtIn: r.broughtIn && typeof r.broughtIn === "object" ? r.broughtIn : null,
+        // THE HEADLINE, when one was set. null — never undefined — so a surface can render the
+        // ABSENCE of a statement, which is the ordinary case for a lane nobody has spoken about.
+        status: r.status && typeof r.status === "object" && r.status.text ? r.status : null,
         // ABSENT READS FALSE. No migration: every record written before this existed was
         // commissioned by a human asking for it.
         selfDirected: r.selfDirected === true,
@@ -482,4 +680,8 @@ function serverFor(...wiring) {
   return createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: toolsFor(...wiring) });
 }
 
-module.exports = { serverFor, toolsFor, normalize, DIR, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, deleteRun, runIdForLane, markBroughtIn, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+// `lastClosed` / `lastClosedBySource` are the board's read half (RFC-067 §4) — definitions.cjs
+// joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
+// able to put an OLD close on the record without a time machine; nothing else should call it, the
+// close in writeRun is the only writer.
+module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

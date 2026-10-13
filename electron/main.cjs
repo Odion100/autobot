@@ -20,6 +20,8 @@ const supervisor = require("./agents/supervisor.cjs");
 // here is the same module instance, not a second one.
 const pageEvents = require("./apps/pageEvents.cjs");
 const jobs = require("./agents/jobs.cjs");
+const hooks = require("./agents/hooks.cjs");
+const defs = require("./agents/definitions.cjs");
 const sessions = require("./agents/sessions.cjs");
 
 const CDP_PORT = process.env.AUTOBOT_CDP_PORT || "9223";
@@ -192,22 +194,46 @@ function wireContextMenu(wc) {
           label: `${w.label}${w.lastValue != null ? ` — ${String(w.lastValue).slice(0, 24)}` : ""}`,
           submenu: [
             { label: "Stop watching", click: () => pageEvents.remove(w.id) },
-            // POINT IT AT A JOB. This is the other half of §7.1, and it needs no new wiring: a job
-            // already carries its own trigger, and `page.value-changed` is in the vocabulary, so
-            // aiming one at a watch is one field on the job — not a hook, not a rule, not a rung.
+            // POINT IT AT A JOB — BY WRITING A HOOK (corrected 2026-10-07). This used to set a
+            // `trigger` field on the job itself, and the comment here claimed it "needs no new
+            // wiring: a job already carries its own trigger". That was false in the only way that
+            // matters: nothing ever fired it. A job matched straight off an event has no SESSION,
+            // and `jobs.given` refuses without one — so the field could arm and never run.
+            //
+            // A hook can do it because a hook answers WHO: the carry. So this writes the same
+            // condition as a hook pointing at the job, which is the one path that fires
+            // (RFC-067 §3). And it is still only a PROPOSAL — a hook fires for nobody until
+            // somebody ticks it onto an agent's profile, so the label says when that has not
+            // happened rather than leaving a tick that looks armed and is not.
             ...(jobs.list().length
-              ? [{ type: "separator" }, ...jobs.list().map((j) => ({
-                  label: `Run job: ${j.name}`,
-                  type: "checkbox",
-                  checked: !!(j.trigger && j.trigger.on === "page.value-changed" &&
-                              j.trigger.when && j.trigger.when.watch &&
-                              j.trigger.when.watch.equals === w.id),
-                  click: () => {
-                    try {
-                      jobs.save({ ...j, doc: j.doc, trigger: { on: "page.value-changed", when: { watch: { equals: w.id } } } });
-                    } catch {}
-                  },
-                }))]
+              ? [{ type: "separator" }, ...jobs.list().map((j) => {
+                  const hookName = `watch-${w.id}-${j.id}`.replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+                  const existing = hooks.list().find((h) => h.name === hookName);
+                  const carried = existing
+                    ? defs.list().filter((d) => ((d.def && d.def.hooks) || []).includes(hookName)).length
+                    : 0;
+                  return {
+                    label: existing && !carried
+                      ? `Run job: ${j.name} — hook written, nobody carries it yet`
+                      : `Run job: ${j.name}`,
+                    type: "checkbox",
+                    checked: !!existing,
+                    click: () => {
+                      try {
+                        if (existing) return void hooks.remove(hookName);
+                        hooks.save({
+                          name: hookName,
+                          on: "page.value-changed",
+                          when: { watch: { equals: w.id } },
+                          do: `job:${j.id}`,
+                          kind: "context",
+                          author: "user",
+                          note: `"${w.label}" changed on ${w.url} — the ${j.name} job is for exactly this.`,
+                        });
+                      } catch {}
+                    },
+                  };
+                })]
               : []),
           ],
         })),

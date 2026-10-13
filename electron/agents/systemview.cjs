@@ -176,7 +176,24 @@ function renderRun(r) {
 function renderLanes(projectCode, r) {
   if (r && r.error) return r.error;
   const rows = r.lanes || [];
-  if (!rows.length) return `${projectCode}: no lanes standing.`;
+  // A BRANCH THAT IS NOT REGISTERED IS NAMED, NOT HIDDEN. It may hold real work; saying nothing
+  // about it is how a branch becomes invisible to every door at once. It is reported as what it
+  // is — a branch — with the one call that makes it a lane.
+  const stray = Array.isArray(r.unregistered) ? r.unregistered : [];
+  const strayLine = stray.length
+    ? `\n${stray.length} lane/* branch${stray.length === 1 ? "" : "es"} not registered: ${stray.join(", ")}` +
+      `\n   A branch is not a lane until a run is written against it — \`worklist set\` with ` +
+      `source "lane:<branch>". Until then it has no row and nobody is watching it.`
+    : "";
+  if (!rows.length) return `${projectCode}: no lanes standing.${strayLine}`;
+  // WHAT SOMEBODY SAID COMES FIRST, and the derived word follows it in brackets as the cross-check.
+  // Reversed from how this shipped, because the derivation is a guess about residue and the person
+  // who acted knows what they did (2026-10-06, his ruling). A disagreement is PRINTED, not ranked:
+  // he can see "brought in, suites green  (files say: can't tell)" and judge it himself.
+  const said = (l) =>
+    l.status && l.status.text
+      ? `${l.status.text}${l.status.by ? ` — ${l.status.by}` : ""}, ${new Date(l.status.ts).toISOString().slice(0, 10)}`
+      : "";
   const WORD = {
     in: (l) => (l.committed ? "in · committed" : "in · uncommitted"),
     out: () => "OUT — proven not in this tree",
@@ -185,14 +202,24 @@ function renderLanes(projectCode, r) {
   const out = [`${projectCode} — ${rows.length} lane${rows.length === 1 ? "" : "s"} standing`];
   for (const l of rows) {
     const word = (WORD[l.verdict] || (() => String(l.verdict || "?")))(l);
-    const counts = l.total ? `  ${l.matching}/${l.total} files match` : "";
-    // A receipt is a RECORD, never proof — said here too, so a reader of this tool cannot mistake it
-    // for the disk's answer.
-    const rcpt = l.broughtIn ? `  · receipt: brought in ${new Date(l.broughtIn.ts).toISOString().slice(0, 10)}${l.broughtIn.by ? ` by ${l.broughtIn.by}` : ""} (a record, not proof)` : "";
-    out.push(`   ${String(l.branch).padEnd(30)} ${word}${counts}${rcpt}`);
+    const counts = l.total ? ` ${l.matching}/${l.total} match` : "";
+    const statement = said(l);
+    // A receipt stays, because it carries something a sentence does not: the BASE it was applied
+    // against, which is checkable against history. It is detail under the statement, not the answer.
+    const rcpt = l.broughtIn ? `  · applied ${new Date(l.broughtIn.ts).toISOString().slice(0, 10)}${l.broughtIn.base ? ` at ${l.broughtIn.base}` : ""}` : "";
+    out.push(
+      statement
+        ? // SAID FIRST, DERIVED SECOND AND LABELLED AS SUCH. He can see the two disagree and decide;
+          // neither is presented as authority over the other.
+          `   ${String(l.branch).padEnd(30)} ${statement}\n   ${" ".repeat(30)} files say: ${word}${counts}${rcpt}`
+        : // NOBODY HAS SPOKEN, so the derived word is all there is — and it says so, rather than
+          // reading as a verdict somebody stands behind.
+          `   ${String(l.branch).padEnd(30)} (nobody has said) · files say: ${word}${counts}${rcpt}`
+    );
   }
   if (r.notIn) out.push(`\n⚠ ${r.notIn} lane${r.notIn === 1 ? "" : "s"} PROVEN not in this tree — that work exists nowhere else. Bring it in before anyone clears it.`);
   else out.push(`\nnotIn: 0 — no lane's work is provably outside this tree.`);
+  if (strayLine) out.push(strayLine);
   return out.join("\n");
 }
 
@@ -291,17 +318,28 @@ function renderStats(r) {
 
 // ---- the server ----
 
-function serverFor(identity = {}) {
+// THE TOOLS, APART FROM THE SERVER THAT CARRIES THEM — the same split context.cjs and worklist.cjs
+// already made, and for the reason they made it: a handler only reachable through the SDK is a
+// handler nothing can call in a test. The lane verbs decide whether work that exists nowhere else
+// can be deleted, and whether a row tells the truth about where work landed, and both shipped with
+// no claim on them at all because there was no door to hold.
+function toolsFor(identity = {}) {
   const who = identity.slot || identity.projectCode || null;
   // sessions.cjs requires this file, so this file cannot require it back. The git half of clearing a
   // lane is the hub's; the RECORD and the announce are the session host's, and they arrive here as a
   // function rather than an import.
   const onLaneRemoved = typeof identity.onLaneRemoved === "function" ? identity.onLaneRemoved : null;
   const onLaneBroughtIn = typeof identity.onLaneBroughtIn === "function" ? identity.onLaneBroughtIn : null;
-  return createSdkMcpServer({
-    name: SERVER,
-    version: "1.0.0",
-    tools: [
+  // A FILED REPORT IS AN EVENT THE SESSION CARES ABOUT (2026-10-08). Same shape and same reason as
+  // the two above: the host knows whether a JOB's run is open in this session and this file must not
+  // require sessions.cjs back to ask. `show` files a document; if that document is a job's account
+  // of itself, the run points at it from then on.
+  const onReportFiled = typeof identity.onReportFiled === "function" ? identity.onReportFiled : null;
+  // WHICH LANES ARE REGISTERED. The hub answers from git — `branch --list lane/*` — and the
+  // registrations are run records, which live on this side. Injected rather than imported for the
+  // same reason as the three above: sessions.cjs requires this file and cannot be required back.
+  const laneRunsFor = typeof identity.laneRuns === "function" ? identity.laneRuns : null;
+  const built = [
       tool(
         "runTests",
         "Run the project's saved SystemView tests and get the results. Filter with namespace " +
@@ -369,7 +407,11 @@ function serverFor(identity = {}) {
           "forward cleanly, so there is nothing of it here); `unknown` means the files it touched moved " +
           "on since it was cut, so neither direction is clean and the lane may already be in. Read it " +
           "before reporting delegated work as finished and before telling the user a lane is safe to " +
-          "delete. Pass `remove` with a branch to clear that lane — worktree, branch, run record, and an " +
+          "delete. BRINGING ONE IN REQUIRES SAYING WHAT HAPPENED: pass `broughtIn` together with " +
+          "`status` in the same call — did it land as a commit or as changes, did the suite run — " +
+          "because derivation on its own has read \"in · committed\" for a branch holding nothing. " +
+          "Use `branch` with `status` to speak about a lane you are NOT bringing in. " +
+          "Pass `remove` with a branch to clear that lane — worktree, branch, run record, and an " +
           "announce so his strip drops the row without him pressing anything — or `remove: \"all\"` for " +
           "every lane whose work is verifiably in. A lane reading `out` or `unknown` is REFUSED and " +
           "named: that is work nothing here can prove exists anywhere else.",
@@ -398,12 +440,99 @@ function serverFor(identity = {}) {
                 "so the row still says so after the files move on. Stamp it at the moment you bring " +
                 "a lane in; derivation goes blind the moment anyone edits those files again."
             ),
+          // SAY WHAT IS HAPPENING, IN YOUR OWN WORDS — his ruling 2026-10-06, and it outranks the
+          // derived verdict rather than feeding it. Derivation was never proof: it called a branch
+          // with no commits `in · committed`, and a lane that was applied and then reversed
+          // `can't tell, 4/11`. The actor knew both exactly and had nothing to say them with.
+          status: z
+            .string()
+            .optional()
+            .describe(
+              "what is happening in this lane, in your own words — it becomes the row's headline, " +
+                "dated and attributed to you, and derivation prints beside it as a cross-check. " +
+                "Anything true and useful: \"brought in, suites green\", \"applied then reversed — " +
+                "NOT landed\", \"waiting on your review\", \"needs a rebase\". Pass an empty string " +
+                "to clear one you got wrong — a statement nobody can retract is worse than none."
+            ),
+          branch: z
+            .string()
+            .optional()
+            .describe(
+              "which lane a `status` is about, when you are not also bringing it in. Say it with " +
+                "`branch` whenever the statement is not \"I applied this\" — waiting on review, " +
+                "needs a rebase, applied then reversed."
+            ),
+          tone: z
+            .enum(["ok", "warn", "note"])
+            .optional()
+            .describe("how it should read: ok = safe, warn = needs your eyes, note = neutral (default)"),
         },
-        async ({ projectCode, remove, broughtIn }) => {
+        async ({ projectCode, remove, broughtIn, status, tone, branch }) => {
           try {
             const st = await hub("SystemView", "lanes", [projectCode]);
+            // ─── A BRANCH IS NOT A LANE UNTIL IT IS REGISTERED (his ruling, 2026-10-08) ───────
+            //
+            // Two doors used to answer "what lanes exist" from two different stores: this one from
+            // `git branch --list lane/*`, and his strip from run records sourced `lane:`. So a
+            // branch anybody cut was a lane to every agent and invisible to him, and a record with
+            // no branch was a row for him that git knew nothing about. One question, two answers.
+            //
+            // THE RECORD WINS, and the unregistered branches are NAMED rather than dropped. Hiding
+            // them would be the worse half of the same bug — a branch holding real work that no
+            // door mentions. So they are listed as what they are: branches, not lanes, one call
+            // away from being either.
+            if (laneRunsFor && st && Array.isArray(st.lanes)) {
+              let registered = null;
+              try {
+                const rows = await laneRunsFor();
+                registered = new Set((Array.isArray(rows) ? rows : []).map(String));
+              } catch { registered = null; }
+              // A FAILED READ IS NOT AN EMPTY ONE. If the registrations cannot be read, every lane
+              // would read unregistered and the list would come back empty — so the filter is
+              // skipped and the rows are reported as git saw them, which is the older behaviour and
+              // never a false absence.
+              if (registered) {
+                st.unregistered = st.lanes.filter((l) => !registered.has(l.branch)).map((l) => l.branch);
+                st.lanes = st.lanes.filter((l) => registered.has(l.branch));
+                st.notIn = st.lanes.filter((l) => l.verdict === "out").length;
+              }
+            }
             if (!st || st.ok === false) return text(`lanes: ${(st && st.error) || "the hub said no"}`);
             const rows = st.lanes || [];
+            // ─── SAYING AND RECORDING ARE ONE CALL NOW, AND BRINGING IN REQUIRES SAYING ──────
+            //
+            // TWO BUGS LIVED HERE. First, `status` returned before `broughtIn` was ever read — so
+            // `{ broughtIn, status }`, the single most natural call at the moment work lands, set
+            // the headline and silently recorded no receipt. Second, `status` had no branch of its
+            // own: it borrowed `broughtIn`, which MEANS "I applied this", so saying "waiting on your
+            // review" required passing the field that claims the opposite.
+            //
+            // AND HIS ASK, 2026-10-09: *"I prefer the agent to leave a note whether it was brought
+            // in and committed."* So a bring-in with nothing said is refused. Not out of ceremony —
+            // the alternative is a row reading "(nobody has said) · files say: in · committed",
+            // where the only voice is a derivation that has been wrong in both directions: it called
+            // a branch with zero commits `in · committed`, and a lane applied-then-reversed
+            // `can't tell 4/11`. The actor knew exactly what happened both times. This is the field
+            // for it, and the moment work lands is the moment to spend it.
+            const about = String(branch || broughtIn || remove || "").trim();
+            if (broughtIn && status === undefined)
+              return text(
+                `${String(broughtIn).trim()}: not recorded. Say what happened, in your own words — ` +
+                  `pass \`status\` with the bring-in. Did it land as a COMMIT or as changes? Did the ` +
+                  `suite run? Without it the row's only voice is derivation, which has read ` +
+                  `"in · committed" for a branch holding nothing and "can't tell" for work that was ` +
+                  `applied and reversed. You know which it was; the row cannot work it out.`
+              );
+            if (status !== undefined) {
+              if (!about)
+                return text(
+                  "a status is about a lane — name it with `branch` (or with `broughtIn`, if you are " +
+                    `also recording that you applied it). Lanes standing: ${rows.map((l) => l.branch).join(", ") || "(none)"}`
+                );
+              if (!rows.find((l) => l.branch === about))
+                return text(`no lane on ${about} in ${projectCode}. Standing: ${rows.map((l) => l.branch).join(", ") || "(none)"}`);
+            }
+
             if (broughtIn) {
               const b = String(broughtIn).trim();
               const row = rows.find((l) => l.branch === b);
@@ -415,20 +544,52 @@ function serverFor(identity = {}) {
               // The base is the tree the work landed IN, which is the only thing that makes a stale
               // receipt checkable later: "brought in against THIS commit" can be verified; a bare
               // date cannot.
+              //
+              // AND IT HAS TO BE A COMMIT. For as long as receipts have existed it was a BRANCH
+              // NAME: `gitState` returns no `head` and no `sha` — it returns `branch` and
+              // `log[0].sha` — so the chain `g.head || g.sha || g.branch` fell through to the
+              // branch on every single call. Every receipt on disk reads `base: "ElementLocator"`
+              // or `base: "main"`: a name that MOVES, which is the one thing a base must not be,
+              // and it reads verifiable while being worthless. Found 2026-10-10 by stamping one and
+              // reading the run file — not by reading this code, which looks right — and the test
+              // that covered it stubbed `{ head: "abc1234" }`, a field the real hub has never
+              // returned. So no base at all is better than a branch name here: an empty base says
+              // "unverifiable" out loud, where `main` lies about being checkable.
               const g = await hub("SystemView", "gitState", [projectCode]);
-              const base = (g && (g.head || g.sha || (g.branch ? String(g.branch) : ""))) || "";
+              const base = (g && (g.head || g.sha || (g.log && g.log[0] && g.log[0].sha))) || "";
+              const onto = g && g.branch ? String(g.branch) : "";
               const rec = onLaneBroughtIn(b, { base, repo: projectCode });
               if (!rec || !rec.ts)
                 return text(
                   `${b}: nothing recorded — no run file for this lane (its record may have been swept). ` +
                     `The branch and worktree are still there; derivation is all the row has.`
                 );
+              // THE NOTE RIDES THE SAME CALL. It is refused above when absent, so by here there is
+              // always something to say — and the row's headline is set in the same breath as the
+              // receipt rather than in a second call somebody has to remember.
+              const said = await hub("SystemView", "laneStatus", [projectCode, { branch: b, text: status, tone, by: who }]);
               return text(
                 [
-                  `recorded: ${b} brought in${base ? ` at ${base}` : ""} in ${projectCode}`,
-                  `   the row will say so even after these files move on — derivation is now a cross-check.`,
+                  `recorded: ${b} brought in${base ? ` at ${base}` : ""}${onto ? ` on ${onto}` : ""} in ${projectCode}`,
+                  ...(base
+                    ? []
+                    : [`   NO BASE RECORDED — the hub could not name a commit, so this receipt is a date and nothing more.`]),
+                  said && said.ok !== false
+                    ? `   and you said: "${String(status).trim()}" — that is the row's headline; derivation prints beside it.`
+                    : `   BUT THE NOTE DID NOT LAND: ${(said && said.error) || "the hub said no"}. The receipt is there and the row has no voice — say it again.`,
                   `   it is a RECORD, not proof: a derived \`out\` still overrules it, and it dies with the lane.`,
                 ].join("\n")
+              );
+            }
+
+            // A STATUS ON ITS OWN — the lane is not being brought in, it is being spoken about.
+            if (status !== undefined) {
+              const said = await hub("SystemView", "laneStatus", [projectCode, { branch: about, text: status, tone, by: who }]);
+              if (!said || said.ok === false) return text(`status: ${(said && said.error) || "the hub said no"}`);
+              return text(
+                String(status).trim()
+                  ? `${about}: "${String(status).trim()}" — said by ${who}. It is the row's headline now; derivation reads beside it.`
+                  : `${about}: status cleared. The row falls back to what the files say.`
               );
             }
             if (!remove) return text(renderLanes(projectCode, st));
@@ -555,7 +716,19 @@ function serverFor(identity = {}) {
         async ({ projectCode, text: md, reportPath, clear }) => {
           try {
             const r = await hub("Agent", "show", { projectCode, text: md, reportPath, clear, as: who });
-            return text(r && r.ok ? (clear ? "TV cleared." : "The show is up.") : "The show did not go up.");
+            // THE PATH IS THE POINT. `Agent.show` files the document and answers with where it
+            // landed, which until now was thrown away — so a job's own account of itself existed
+            // on disk with nothing connecting it to the run that produced it.
+            if (r && r.ok && r.path && onReportFiled) {
+              try { onReportFiled({ path: r.path, label: r.label || "" }); } catch {}
+            }
+            return text(
+              r && r.ok
+                ? clear
+                  ? "TV cleared."
+                  : `The show is up.${r.path ? ` Filed as ${r.path}.` : ""}`
+                : "The show did not go up.",
+            );
           } catch (e) { return fail(e); }
         }
       ),
@@ -721,8 +894,14 @@ function serverFor(identity = {}) {
           } catch (e) { return fail(e); }
         }
       ),
-    ],
-  });
+    ];
+  return built;
 }
 
-module.exports = { SERVER, TOOL_NAMES, serverFor };
+// ONE DEFINITION, TWO READERS: `serverFor` wraps these for the SDK, and a test holds the handler and
+// calls it. Built fresh per call because each carries this identity's injected doors.
+function serverFor(identity = {}) {
+  return createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: toolsFor(identity) });
+}
+
+module.exports = { SERVER, TOOL_NAMES, serverFor, toolsFor };

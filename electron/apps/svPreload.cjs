@@ -147,6 +147,9 @@ const FULL = {
     // never the procedure itself). hooks() also returns the event VOCABULARY, which is what the
     // picker is built from: you can only hook a moment the system actually announces.
     hooks: () => ipcRenderer.invoke("agent:hooks"),
+    // The chore board, computed: each line plus whether it is done FOR THIS PERIOD. A read; the
+    // lines themselves ride the definition through saveDef.
+    board: (agentId) => ipcRenderer.invoke("agent:board", agentId),
     saveHook: (rec) => ipcRenderer.invoke("agent:hook-save", rec),
     removeHook: (name) => ipcRenderer.invoke("agent:hook-remove", name),
     // STATISTICS — { store: { since, notes[], readers, totals }, weight: { rows[], totalTokens } }.

@@ -30,6 +30,10 @@ module.exports = (ipcRenderer) => ({
         wanted.find((m) => MediaRecorder.isTypeSupported(m))) || "";
 
       let rec = null, chunks = [], spoke = false, quietSince = null;
+      // WHICH SENTENCE THE AUDIO IN `chunks` BELONGS TO. Bumped when a segment's buffer is spent;
+      // read by the draft timer across its own await, because a draft is only about the sentence
+      // that was recording when it started.
+      let generation = 0;
       let draftBusy = false, stopped = false, cancelled = false, closing = false;
       let pipeline = Promise.resolve(); // keeps segment commits ordered
 
@@ -59,6 +63,15 @@ module.exports = (ipcRenderer) => ({
         const held = chunks;
         const hadSpeech = spoke;
         chunks = []; spoke = false; quietSince = null;
+        // AND THE GENERATION ADVANCES HERE, with the buffer it belongs to. Clearing `chunks` fixed
+        // the draft timer STARTING on spent audio; it did nothing for a draft already DECODING it.
+        // See the draft timer below: the only guard there was `!stopped`, so a decode that began on
+        // sentence N and resolved after N committed repainted the live line with the sentence that
+        // had just landed in the input — and then `input + draft` on send sent it twice. A time
+        // window cannot close that (the client tried: 700ms, and a draft decode routinely exceeds
+        // it, which is exactly why the doubling was intermittent). The generation can: it is the
+        // causal fact the timer was approximating.
+        generation += 1;
         if (!hadSpeech && !forced) return ""; // pure silence — nothing to commit
         const blob = new Blob(held, { type: mime || "audio/webm" });
         if (blob.size < 2000) return "";
@@ -107,13 +120,18 @@ module.exports = (ipcRenderer) => ({
       const draftTimer = setInterval(async () => {
         if (stopped || draftBusy || !spoke || !chunks.length) return;
         draftBusy = true;
+        // THE SENTENCE THIS DRAFT IS ABOUT, taken before the decode. A draft is a preview of the
+        // sentence being spoken; once that sentence has committed, the preview is not stale
+        // decoration, it is a SECOND COPY of text already in the input.
+        const mine = generation;
         try {
           const blob = new Blob(chunks, { type: mime || "audio/webm" });
           if (blob.size >= 2000) {
             const bytes = new Uint8Array(await blob.arrayBuffer());
             const res = await ipcRenderer.invoke("dictation:transcribe", bytes, blob.type, { draft: true });
             const t = (res?.text ?? "").trim();
-            if (t && !stopped) onDraft?.(t);
+            if (t && !stopped && mine === generation) onDraft?.(t);
+            else if (t) _debug?.("draft-dropped-stale-generation");
           }
         } catch { /* a failed draft is just a skipped repaint */ } finally { draftBusy = false; }
       }, draftMs);

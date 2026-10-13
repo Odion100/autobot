@@ -41,7 +41,6 @@ try {
       name: "smoke job",
       doc: DOC,
       definition: { prompt: "do the thing", model: "sonnet", skills: ["context-retrieval"], nonsense: "dropped" },
-      trigger: { on: "page.value-changed", when: { watch: { equals: "w1" } } },
       confirmation: "the file exists",
       evaluation: "was it worth reading?",
     });
@@ -57,32 +56,12 @@ try {
     assert.ok(!("nonsense" in j.definition), "a field an AgentDefinition cannot express is dropped");
     ok("the definition half is an AgentDefinition — ADOPTED, not paralleled (RFC-003)");
 
-    assert.equal(j.onMissed, "skip", "§2.3 — skip by default for anything periodic");
-    ok("downtime defaults to skip; catching up is something a job has to ask for");
-  }
+    assert.ok(!("trigger" in j), "a job carries no trigger of its own");
+    assert.ok(!("onMissed" in j), "and no downtime policy, which only a scheduler could honour");
+    ok("A JOB CARRIES NO TRIGGER (2026-10-07). It used to carry `trigger` + `onMissed`, validated on save and matched by a `due()` nothing ever called — the pre-RFC design. It was removed rather than wired because it could not be wired: `given()` refuses without a session and an event carries none, so the field could arm and never run. The hook answers WHO by its carry, and that is the one path that fires (RFC-067 §3)");
 
-  // ---- the trigger is checked where it is WRITTEN ---------------------------------------------
-  {
-    assert.throws(() => jobs.save({ id: ID, doc: DOC, trigger: { on: "page.exploded" } }), /never fire/);
-    ok("a trigger on an event nobody emits is refused — a silent job is the failure we are avoiding");
-
-    const j = jobs.save({ id: ID, doc: DOC, trigger: { on: "schedule.due", when: { job: { equals: ID } } } });
-    assert.equal(j.trigger.on, "schedule.due");
-    ok("the clock and external arrivals are allowed ahead of their emitters — listed, not waved through");
-  }
-
-  // ---- matching reuses the hooks matcher (§1) --------------------------------------------------
-  {
-    jobs.save({ id: ID, doc: DOC, trigger: { on: "page.value-changed", when: { watch: { equals: "w1" } } } });
-    assert.equal(jobs.due({ kind: "page.value-changed", watch: "w1" }).length, 1, "the matching job is due");
-    assert.equal(jobs.due({ kind: "page.value-changed", watch: "w2" }).length, 0, "a different watch is not");
-    assert.equal(jobs.due({ kind: "session.started" }).length, 0, "a different event is not");
-    ok("a job trigger and a hook condition mean the same thing by the same JSON — one matcher, not two");
-
-    jobs.save({ id: ID, doc: DOC, enabled: false, trigger: { on: "page.value-changed", when: { watch: { equals: "w1" } } } });
-    assert.equal(jobs.due({ kind: "page.value-changed", watch: "w1" }).length, 0);
-    ok("a disabled job matches nothing");
-    jobs.save({ id: ID, doc: DOC, enabled: true, trigger: { on: "page.value-changed", when: { watch: { equals: "w1" } } } });
+    assert.equal(typeof jobs.due, "undefined", "the second matcher is gone, not merely uncalled");
+    ok("one dispatch path, and nothing left beside it that looks like one");
   }
 
   // ---- §2.4 the run record, and §5 the rating -------------------------------------------------
@@ -116,6 +95,109 @@ try {
     ok("a job's progress model IS the worklist — owned by the job, not by whatever session ran it");
   }
 
+  // ---- RFC-067 §2 part 2 — WHAT IT MUST BE GIVEN, and the refusal -----------------------------
+  //
+  // The one requirement the design calls worthless if it is not enforced: a missing input is a
+  // REFUSAL, not a guess. Which means it has to be computable — a declaration that lives only in a
+  // paragraph is a refusal nobody can ever compute, so it is a refusal nobody ever gets. These
+  // claims are about the declaration being machine-readable, the refusal naming what was missing,
+  // and — the one with teeth — no run existing for a job that was given too little.
+  {
+    const NEEDY = `---\nrequires: ["period", "ledger"]\n---\n\n# needs two things\n\n## 2 · What it must be given\n` +
+      `- \`period\` — the month to close. A missing one is a refusal, not a guess.\n- \`ledger\` — which book.\n`;
+    jobs.save({ id: ID, name: "needy job", doc: NEEDY });
+
+    assert.deepEqual(jobs.get(ID).requires, ["period", "ledger"]);
+    ok("a job's declared inputs are read off its document — part 2 in the one form a refusal can be computed from");
+
+    const none = jobs.check(ID, {});
+    assert.equal(none.ok, false);
+    assert.deepEqual(none.missing, ["period", "ledger"]);
+    assert.match(none.refusal, /`period`/);
+    assert.match(none.refusal, /`ledger`/);
+    assert.match(none.refusal, /not a guess/);
+    ok("a job given nothing is refused BY NAME — every missing input said out loud, not a count");
+
+    assert.deepEqual(jobs.check(ID, { period: "2026-09" }).missing, ["ledger"]);
+    ok("and the refusal names only what is actually missing — one input short is still a refusal");
+
+    assert.deepEqual(jobs.check(ID, { period: "   ", ledger: "main" }).missing, ["period"]);
+    ok("an empty value is a MISSING value — a blank is the guess wearing a key, not a supplied input");
+
+    assert.equal(jobs.check(ID, { period: "2026-09", ledger: "main", extra: 1 }).ok, true);
+    ok("given everything it declared, it passes — an extra the job never asked for is not an error");
+
+    const ghost = jobs.check("smoke-job-nobody-wrote", {});
+    assert.equal(ghost.ok, false);
+    assert.match(ghost.refusal, /smoke-job-nobody-wrote/);
+    ok("a job nobody authored is a refusal that names it, not a crash and not a silent pass");
+
+    // THE DOCUMENT IS THE JOB, so it is also the live answer to what the job demands. A job whose
+    // part 2 gained an input this morning must refuse for it this afternoon — waiting for someone
+    // to re-save would make the projection the authority, which is the inversion §2.1 forbids.
+    fs.writeFileSync(path.join(jobs.dirOf(ID), "job.md"), `---\nrequires: ["period"]\n---\n\n# now needs one\n`);
+    assert.deepEqual(jobs.get(ID).requires, ["period"]);
+    assert.equal(jobs.check(ID, { period: "2026-09" }).ok, true);
+    ok("editing the document changes what the job demands, with nobody re-saving — the projection is not the authority");
+
+    jobs.save({ id: ID, name: "needy job", doc: `# declares nothing\n` });
+    assert.deepEqual(jobs.get(ID).requires, []);
+    assert.equal(jobs.check(ID, {}).ok, true);
+    ok("a job that declares nothing needs nothing — a real answer, and not a licence to guess for one that does");
+  }
+
+  // ---- §3 / RFC-067 §3 — THE RUN OPENS AND CLOSES, and it is the worklist's run ----------------
+  //
+  // Not a second run store. `allDone` is already how completion is OBSERVED rather than declared,
+  // and `job:<id>` is already the source the job document tells the agent to write — so giving a
+  // job opens THAT run, at the moment it is given, and the agent's own first write continues it.
+  {
+    const SESSION = "session:smoke-jobs:1";
+    jobs.save({ id: ID, name: "needy job", doc: `---\nrequires: ["period"]\n---\n\n# needs a period\n` });
+
+    const refused = jobs.given(ID, { session: SESSION, inputs: {} });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.runId, undefined, "a refused job has no run");
+    assert.equal(worklist.all().filter((r) => r.source === `job:${ID}`).length, 0);
+    ok("A REFUSED JOB OPENS NO RUN — there can be no record of work for a job that was given too little");
+
+    assert.equal(jobs.given(ID, { inputs: { period: "p" } }).ok, false);
+    ok("and neither does one with no session to open it against — a run is joined by source AND session");
+
+    const g = jobs.given(ID, { session: SESSION, inputs: { period: "2026-09" }, why: "the smoke test gave it" });
+    try {
+      assert.equal(g.ok, true);
+      assert.equal(g.source, `job:${ID}`, "sourced with the job's own owner — the source clearedBy resolves");
+      const items = worklist.read(worklist.runOwner(g.runId));
+      assert.equal(items.length, 1, "one pending item — a run with none could never be all-done, so never close");
+      assert.equal(items[0].state, "pending");
+      ok("giving a job OPENS a run in the worklist store, sourced `job:<id>` — no second store minted");
+
+      const again = jobs.given(ID, { session: SESSION, inputs: { period: "2026-09" } });
+      assert.equal(again.runId, g.runId, "the same run, not a rival");
+      assert.equal(again.resumed, true);
+      ok("a second giving in the same session RESUMES that run — the join the agent's own write uses");
+
+      const rec = jobs.runsOf(ID).find((r) => r.id === g.runId);
+      assert.ok(rec && /gave it/.test(rec.why), "the job's own record carries why");
+      ok("the run's birth records WHY it ran — §4: you must be able to answer that at 3am");
+
+      // COMPLETION IS OBSERVED. A job that says it finished with an item still pending has not.
+      worklist.writeRun(g.runId, SESSION, [{ id: "1", text: "step", state: "active" }], g.source);
+      assert.equal(jobs.done(ID, g.runId), false, "mid-flight is not done");
+      assert.equal((jobs.runsOf(ID).find((r) => r.id === g.runId) || {}).status, "running");
+      ok("a job that died mid-list does NOT close, and nothing tidies it — where it died is the record");
+
+      worklist.writeRun(g.runId, SESSION, [{ id: "1", text: "step", state: "done" }], g.source);
+      assert.equal(jobs.done(ID, g.runId), true);
+      assert.equal((jobs.runsOf(ID).find((r) => r.id === g.runId) || {}).status, "finished");
+      ok("every item done CLOSES it — observed off the run record, with no flag an agent could lie with");
+    } finally {
+      // the run lives in the real worklist store, not under the job — it goes back by hand
+      if (g.runId) worklist.deleteRun(g.runId);
+    }
+  }
+
   // ---- deleting takes the worklist with it ------------------------------------------------------
   {
     jobs.remove(ID);
@@ -143,6 +225,22 @@ try {
 
     const full = caps.build(FULL, ["jobs:read", "jobs:write"]);
     assert.ok(full.jobs.save && full.jobs.rate && full.watches.save, "both grants compose into one namespace");
+
+    // THE GRANT HAS TO BE ON THE APP THAT READS JOBS, or the capability table is correct and the
+    // surface is blind. SystemView shipped a Jobs section before it was granted `jobs:read`: the
+    // preload handed over no `jobs` namespace at all, the list came back empty, and the section
+    // printed "No jobs exist yet" while two jobs sat on disk — a surface testifying instead of
+    // reading state. Asserted here rather than in the window, because the grant lives here.
+    const registry = require("../electron/apps/registry.cjs");
+    const sv = registry.APPS.find((a) => a.id === "systemview");
+    assert.ok(sv, "the systemview app is in the registry");
+    assert.ok(sv.capabilities.includes("jobs:read"),
+      "systemview is granted jobs:read — without it `window.systemview.jobs` is never exposed");
+    const svHas = caps.build({ jobs: { list() {}, get() {}, runs() {}, rate() {}, save() {} } }, sv.capabilities);
+    assert.ok(svHas.jobs && svHas.jobs.list && svHas.jobs.runs,
+      "...and the namespace it actually receives can list and read runs");
+    assert.ok(svHas.jobs.rate, "and rate, which is how a run is scored where its report is read");
+    ok("the IDE is GRANTED jobs:read — a surface without it cannot tell an empty list from a blind one");
     assert.ok(!full.files, "and nothing leaks in that was not asked for");
     ok("jobs:write adds defining and rating, and brings no files with it");
 

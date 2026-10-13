@@ -47,7 +47,7 @@ const SERVER = "context";
 // separation at all. So `context` answers with both halves, labelled, and takes `kind` to narrow.
 // What remains here is MANAGEMENT — listing, planning cuts, indexing, dropping — which is not
 // retrieval and has no context-store equivalent to merge with.
-const TOOL_NAMES = ["remember", "context", "list", "forget", "subscribe", "unsubscribe", "subscriptions", "docsList", "docsPlan", "docsIndex", "docsDrop", "hooksList", "hooksWrite", "hooksDrop"]
+const TOOL_NAMES = ["remember", "context", "list", "forget", "subscribe", "unsubscribe", "subscriptions", "docsList", "docsPlan", "docsIndex", "docsDrop", "hooksList", "hooksWrite", "hooksDrop", "hooksCarry", "jobsList", "jobsLoad", "jobsWrite", "chores"]
   .map((t) => `mcp__${SERVER}__${t}`);
 const ROOT = path.join(os.homedir(), ".autobot", "context");
 
@@ -552,6 +552,80 @@ async function search(scopes, { question, scope, k = 5, by = null }) {
   bumpUsage(hits.map((h) => h.id), by || (scopes && scopes.by) || null);
   if (failed) hits.failed = failed;
   return hits;
+}
+
+// ---------------------------------------------------------------------------------------------
+// JOBS — RFC-067 §3. A job's label, derived rather than stored.
+//
+// A JOB'S AIM IS A LABEL, NOT AN AD. A skill's description sells — *use when…*, with a `Do NOT`
+// clause to stop it stealing a neighbour's turn. A job's exists so a NAME CAN BE RESOLVED: it
+// answers "which one is this?", never "when should you reach for this?". So it is not a separate
+// field. The aim is the document's opening sentence (§2 part 1) — one sentence, two readers:
+// whoever opens job.md, and the directory below. A second `description` field would be the half
+// that drifts, and it would be the ad.
+const AIM_MAX = 200;
+
+// One sentence, demarkdowned, capped. A label is read at a glance or it is not a label.
+function oneSentence(text) {
+  const s = String(text || "").replace(/[*_`]/g, "").trim();
+  const cut = s.search(/[.!?](\s|$)/);
+  const one = cut > 0 ? s.slice(0, cut + 1) : s;
+  return one.length > AIM_MAX ? one.slice(0, AIM_MAX - 1).trimEnd() + "…" : one;
+}
+
+function jobAim(job = {}) {
+  // `aim` is not a field jobs.cjs writes today. Read it if it ever becomes one, so the document's
+  // opening line stays the fallback rather than becoming a second source of truth.
+  if (typeof job.aim === "string" && job.aim.trim()) return oneSentence(job.aim);
+  // FRONT MATTER IS NOT THE AIM, and it was being read as one (caught 2026-10-08 the first time two
+  // real jobs existed): a document declaring `requires: ["project"]` listed its own demand where
+  // its name should be, in the one place whose whole purpose is to answer "which job is this?".
+  // Stripped by position — an opening `---` fence and everything to its closing `---` — rather than
+  // by guessing at YAML, because the only thing needed here is to get past it.
+  const body = (() => {
+    const raw = String(job.doc || "");
+    if (!/^\s*---\s*\n/.test(raw)) return raw;
+    const end = raw.indexOf("\n---", raw.indexOf("\n") + 1);
+    return end === -1 ? raw : raw.slice(end + 4);
+  })();
+  // THE FIRST PARAGRAPH, JOINED — not the first line. Markdown wraps, so a one-line read cut every
+  // aim at whatever column the author happened to wrap at ("...and leave an account" / "of what
+  // each surface actually showed."), which reads as truncation rather than as a label. The sentence
+  // is what is wanted; the line break is typography.
+  const lines = body.split("\n").map((l) => l.trim());
+  const scaffolding = (l) => !l || l.startsWith("#") || /^[-*>|]/.test(l) || l.startsWith("```");
+  let i = lines.findIndex((l) => !scaffolding(l));
+  let line = "";
+  if (i !== -1) {
+    const para = [];
+    for (; i < lines.length && !scaffolding(lines[i]); i += 1) para.push(lines[i]);
+    line = para.join(" ");
+  }
+  // STATED ABSENCE, never a fabricated summary. A one-line precis of a document nobody read is
+  // exactly the kind of confident wrong label this whole mechanism exists to avoid.
+  return line ? oneSentence(line) : "(no aim stated — its document opens with no sentence)";
+}
+
+// The closest existing name, cheaply — containment, then shared prefix and shared slug tokens. No
+// edit-distance table for a list that is a handful of names long, and no fuzzy MATCH either: this
+// only ever decorates a refusal, so a bad guess costs a word and never loads the wrong job.
+function nearestJob(want, ids) {
+  const w = String(want || "");
+  if (!w) return null;
+  const toks = (s) => s.split(/[-._]/).filter(Boolean);
+  const wt = toks(w);
+  const scored = ids
+    .filter((id) => id !== w)
+    .map((id) => {
+      if (id.includes(w) || w.includes(id)) return { id, score: 50 + Math.min(id.length, w.length) };
+      let i = 0;
+      while (i < id.length && i < w.length && id[i] === w[i]) i++;
+      const shared = toks(id).filter((t) => wt.includes(t)).length;
+      return { id, score: i + shared * 3 };
+    })
+    .filter((x) => x.score >= 3)
+    .sort((a, b) => b.score - a.score);
+  return scored.length ? scored[0].id : null;
 }
 
 // THE TOOLS, APART FROM THE SERVER THAT CARRIES THEM. One definition, two readers: serverFor wraps
@@ -1154,12 +1228,14 @@ function toolsFor(identity = {}) {
       ),
       tool(
         "hooksWrite",
-        "Propose a context hook: when THIS moment happens, point an agent at THIS skill. Use it " +
+        "Propose a hook: when THIS moment happens, point an agent at THIS procedure. Use it " +
           "when you find a procedure that is needed rarely and urgently, and that the agent will " +
           "not think to ask for because the moment arrives from outside. A hook holds no content " +
-          "— it carries a POINTER to a skill, so it can never drift from the procedure. Call " +
-          "hooksList first: the event must be one the system really emits. Writing a hook does " +
-          "NOT arm it — it stays inert until a human carries it on an agent.",
+          "— it carries a POINTER, so it can never drift from the procedure. `do` names a SKILL " +
+          "(`skill:<name>`, offered — the agent decides) or a JOB (`job:<name>`, GIVEN — and then " +
+          "`with:` must supply every input that job's document declares, or it refuses on every " +
+          "match). Call hooksList first: the event must be one the system really emits. Writing a " +
+          "hook does NOT arm it — it stays inert until a human carries it on an agent.",
         {
           name: z.string().describe("short kebab-case name; it is the filename and the identity"),
           on: z.string().describe("the event it fires on — must be one from hooksList"),
@@ -1182,11 +1258,25 @@ function toolsFor(identity = {}) {
                 'work = something RUNS unattended. Say "work" only when you mean it — it is a ' +
                 "different level of trust and a human should be told so in the note"
             ),
-          guard: z
+          rate: z
             .string()
             .optional()
-            .describe('"once-per-session" or "cooldown:<seconds>" — a hook with no guard on a ' +
-              "frequent event fires forever, which is a context leak"),
+            .describe(
+              'how often it may fire once it HAS fired: "once-per-session" | "once-per-day" | ' +
+                '"once-per-week" | "once-per-month" | "cooldown:<duration>" (30m, 24h, 3d12h, 2w — ' +
+                "bare digits still mean seconds). It is a throttle AFTER the fact, never a delay " +
+                "before: a hook with no rate on a frequent event fires forever, which is a context leak"
+            ),
+          with: z
+            .record(z.any())
+            .optional()
+            .describe(
+              "the inputs a JOB declared in its document's `requires:` — the one thing a hook's " +
+                "`when` cannot express, because matching an event says nothing about what to run it " +
+                "WITH. Required in practice for `do: job:<name>`: a hook that cannot supply what the " +
+                "job declares is refused here rather than refusing silently on every match. Ignored " +
+                "for a skill pointer, which takes no inputs"
+            ),
           until: z
             .string()
             .optional()
@@ -1221,12 +1311,20 @@ function toolsFor(identity = {}) {
                   `Call hooksList for the vocabulary.` }],
                 isError: true,
               };
+            // A JOB POINTER IS WRITABLE HERE (2026-10-07). This accepted `skill:` ONLY, which meant
+            // the engine could fire `do: job:<name>` — it has since RFC-067 §3 — while the one
+            // agent-facing door refused to write one. A capability with no door is a capability
+            // nobody has, and hand-writing the file was the workaround, which is exactly what
+            // creation-through-the-system exists to stop.
             const pointer = String(args.do || "").trim();
-            if (!/^skill:.+/.test(pointer))
+            const target = hooks.targetOf({ do: pointer });
+            if (!["skill", "job"].includes(target.kind) || !target.name)
               return {
                 content: [{ type: "text", text:
-                  `\`do\` must be a pointer of the form "skill:<name>". A hook names a procedure and ` +
-                  `never carries one — that is what keeps it from drifting out of date.` }],
+                  `\`do\` must be a pointer — "skill:<name>" (offered: the agent decides) or ` +
+                  `"job:<name>" (given: it carries a contract and must be supplied with what that ` +
+                  `document declares). A hook names a procedure and never carries one — that is what ` +
+                  `keeps it from drifting out of date.` }],
                 isError: true,
               };
             // A MISTYPED CONFIG KEY IS A SILENT HOOK, which is this mechanism's worst failure —
@@ -1261,23 +1359,40 @@ function toolsFor(identity = {}) {
                   `them or the human change it.` }],
                 isError: true,
               };
-            const skill = pointer.slice(6).trim();
             const saved = hooks.save({ ...args, author: me });
-            const warn = fs.existsSync(path.join(os.homedir(), ".claude", "skills", skill))
-              ? ""
-              : `\nNOTE: no skill named "${skill}" under ~/.claude/skills — fine if it is a plugin or ` +
-                `bundled skill, but check the name if it is meant to be one of yours.`;
+            const jobs = require("./jobs.cjs"); // lazily, like the job verbs below — jobs requires hooks
+            // THE WARNING IS ABOUT THE TARGET, so it has to know which kind of target it is. Run
+            // against a job name this checked ~/.claude/skills and always missed, so every job hook
+            // would have carried a note telling the author to check a name that was correct.
+            const warn =
+              target.kind === "job"
+                ? jobs.get(target.name)
+                  ? ""
+                  : `\nNOTE: no job named "${target.name}" in ${jobs.DIR} yet. The hook saves — a trigger ` +
+                    `written before its job is legitimate — but it cannot be given until the document ` +
+                    `exists, and the inputs it declares are checked against your \`with:\` then.`
+                : fs.existsSync(path.join(os.homedir(), ".claude", "skills", target.name))
+                  ? ""
+                  : `\nNOTE: no skill named "${target.name}" under ~/.claude/skills — fine if it is a ` +
+                    `plugin or bundled skill, but check the name if it is meant to be one of yours.`;
             return {
               content: [{ type: "text", text:
                 `Wrote ${saved.file}\n` +
                 `  on ${saved.on}${Object.keys(saved.when).length ? ` when ${JSON.stringify(saved.when)}` : ""}` +
-                ` → ${saved.do} (${saved.kind}${saved.guard ? `, ${saved.guard}` : ""})\n` +
+                ` → ${saved.do} (${saved.kind}${saved.rate ? `, ${saved.rate}` : ""}` +
+                `${Object.keys(saved.with || {}).length ? `, with ${Object.keys(saved.with).join(", ")}` : ""})\n` +
                 // Read back the RESOLVED behaviour, not the fields as typed: `deliver` is usually
                 // left empty, and the whole question an author has is where the pointer lands.
                 `  delivered ${hooks.deliverAt(saved)}` +
                 `${hooks.persists(saved) ? `, and it repeats each turn until a run sourced "${hooks.clearedBy(saved)}" is all-done` : ""}\n` +
-                `It is INERT. It fires for nobody until a human ticks it onto an agent in that ` +
-                `agent's profile. Tell them it is there and what it is for.${warn}` }],
+                // IT NO LONGER TAKES A HUMAN, and this string said it did for a day after that
+                // stopped being true (2026-10-12, `hooksCarry`). A tool describing a permission
+                // the system does not have is worse than silence: it teaches the agent to go and
+                // ask for something it could have done, which is exactly the bottleneck the verb
+                // was added to remove.
+                `It is INERT — written is not armed. Arm it on YOURSELF with \`hooksCarry\`; ` +
+                `another agent's carry list is the human's. Either way say it is there and what ` +
+                `it is for.${warn}` }],
             };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
@@ -1303,6 +1418,370 @@ function toolsFor(identity = {}) {
             };
           hooks.remove(name);
           return { content: [{ type: "text", text: `Removed ${name}.` }] };
+        },
+        { alwaysLoad: true }
+      ),
+      // -----------------------------------------------------------------------------------------
+      // ARMING YOUR OWN HOOKS — his call, 2026-10-12, and it is a correction of a design we built
+      // deliberately and got wrong.
+      //
+      // The rule was: writing a hook makes it exist for everybody and fire for NOBODY, until a
+      // human ticks it onto an agent. The reasoning recorded in hooks.cjs is about where the carry
+      // LIST lives (on the agent, not on the hook) — it fixed a targeting bug. "And a human does
+      // the carrying" rode in beside it and was never argued for. Worse, there was no verb at all,
+      // so the absence looked like a guardrail and was really just a missing door.
+      //
+      // HIS ARGUMENT, which is the right one: *"the point of web automation and the system I'm
+      // creating is I might send you out there. You might be navigating the web. You might see
+      // [a] sign, put a hook down for later. So I don't know why you don't think [an] agent is
+      // supposed to make their own hooks."* An agent arranging its own next turn is not asking
+      // anyone's permission for anything — nobody else's attention is spent, nobody else's context
+      // is touched. And the thing the press felt like it protected — something running unseen —
+      // was never a permission problem: every fire is a feed row, every pointer says who wired it.
+      // That was solving visibility with a lock.
+      //
+      // ALSO, THE OLD RULE MANUFACTURED THE EXACT FAILURE hooks.cjs calls the worst one it has:
+      // "a hook that looks correct, appears in the list, and silently never runs." `run-the-path-
+      // check` sat written, correct, and inert for four days waiting for a tick.
+      //
+      // SELF ONLY, FOR NOW. Arming another agent imposes standing behaviour on context somebody
+      // else pays for every turn, which is a different act and needs its own say-so. It is refused
+      // BY NAME here rather than being impossible, so the boundary is legible instead of absent.
+      tool(
+        "hooksCarry",
+        "Arm or disarm a hook ON YOURSELF — add it to, or remove it from, the hooks this agent " +
+          "carries. A hook exists for everybody the moment it is written and fires for nobody " +
+          "until somebody carries it, and this is how you carry one: your own context, your own " +
+          "continuation, no press required. Use it when you have written a hook you intend to act " +
+          "on, or when you need to be woken later by something you noticed now — put the hook " +
+          "down and arm it in the same breath. It takes effect immediately; nothing needs a " +
+          "restart. ANOTHER AGENT'S carry list is not yours to write: that imposes standing " +
+          "behaviour on context they pay for every turn, so it is refused and left to the human.",
+        {
+          name: z.string().describe("the hook's name, as hooksList shows it"),
+          carry: z
+            .boolean()
+            .optional()
+            .describe("true to arm it on yourself (the default), false to disarm it"),
+        },
+        async ({ name, carry }) => {
+          try {
+            const defs = require("./definitions.cjs");
+            if (!scopes.slot)
+              return {
+                content: [{ type: "text", text:
+                  `This session has no agent slot, so there is no carry list to write. A hook is ` +
+                  `carried BY an agent; a session that is not one cannot hold it.` }],
+                isError: true,
+              };
+            const want = carry !== false;
+            const h = hooks.list().find((x) => x.name === name);
+            // THE HOOK MUST EXIST TO BE ARMED — arming a name nothing answers to is the precise
+            // failure this mechanism fears: it would sit in the definition looking armed and never
+            // fire. Refused with the list, so a typo is one call from being fixed.
+            //
+            // BUT DISARMING A GHOST MUST ALWAYS WORK, and the first version of this guard ran
+            // before `want` was consulted, so it refused both directions. Found within the hour,
+            // 2026-10-13: three dead carries sat on this very profile — `test-hook`,
+            // `probe-turn-end`, `probe-idle`, carried with no hook files behind them — and the one
+            // verb for removing them refused on the grounds that they do not exist. A carry list
+            // that can accumulate entries it will not let you delete is a list that only ever
+            // grows, and every reader of it then has to guess which names are real.
+            if (!h && want)
+              return {
+                content: [{ type: "text", text:
+                  `No hook named "${name}", so there is nothing to arm — a carried name that ` +
+                  `matches no hook would look armed and never fire. Written hooks: ` +
+                  `${hooks.list().map((x) => x.name).join(", ") || "none"}` }],
+                isError: true,
+              };
+            // A GHOST IS REPORTED AS WHAT IT IS, so removing one does not read like removing a
+            // working hook.
+            const ghost = !h;
+            const rec = defs.resolve(scopes.slot);
+            if (!rec)
+              return { content: [{ type: "text", text: `No agent definition for "${scopes.slot}".` }], isError: true };
+            const had = Array.isArray(rec.def && rec.def.hooks) ? rec.def.hooks.map(String) : [];
+            if (want === had.includes(name))
+              return {
+                content: [{ type: "text", text:
+                  `${name} is already ${want ? "armed" : "not armed"} on ${rec.id}. Nothing written.` }],
+              };
+            const next = want ? [...had, name] : had.filter((n) => n !== name);
+            // save() MERGES (it spreads the previous record and its def before the input), so a
+            // write of one field cannot empty the rest — checked, because an earlier version of
+            // that function did exactly that and silently emptied agents.
+            defs.save({ id: rec.id, hooks: next });
+            const back = defs.resolve(rec.id);
+            const now = Array.isArray(back && back.def && back.def.hooks) ? back.def.hooks : [];
+            // READ BACK FROM DISK, never reported from the value we sent. The definition
+            // whitelist has dropped a field before while save() reported success, and the profile's
+            // enable switch was a lie for exactly that reason. Say what the file holds.
+            if (want !== now.includes(name))
+              return {
+                content: [{ type: "text", text:
+                  `The write did not stick: ${name} is still ${now.includes(name) ? "armed" : "not armed"} ` +
+                  `on disk. Nothing is carrying it; do not report it as armed.` }],
+                isError: true,
+              };
+            const what = (h && h.do) || "(no pointer)";
+            return {
+              content: [{ type: "text", text: want
+                ? `Armed ${name} on ${rec.id} — live now, no restart.
+` +
+                  `  it fires on ${h && h.on}${Object.keys((h && h.when) || {}).length ? ` when ${JSON.stringify(h.when)}` : ""}` +
+                  `${h.rate || h.guard ? `, ${h.rate || h.guard}` : ""} → ${what}
+` +
+                  `  delivered ${hooks.deliverAt(h)}.` +
+                  `${h.enabled === false ? `
+  BUT IT IS PARKED (enabled: false), so it still fires for nobody.` : ""}`
+                : ghost
+                  ? `Removed ${name} from ${rec.id}'s carry list — NO SUCH HOOK EXISTS, so this was a dead entry carrying nothing. Nothing stopped firing, because nothing was firing.`
+                  : `Disarmed ${name} on ${rec.id} — it no longer fires for you. It still exists for everyone else.` }],
+            };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      // -----------------------------------------------------------------------------------------
+      // JOBS — RFC-067 §3. Two verbs, and what matters most is the third thing that is NOT here.
+      //
+      // A JOB IS NEVER INJECTED. Its description does not ride in the system prompt, because an
+      // always-loaded description costs every turn of every session whether or not it is used and
+      // exists to make a model REACH for something unprompted. A job must never be CHOSEN by an
+      // agent — it is GIVEN, by a hook that names it or by the human asking for it.
+      //
+      // BUT NOT INJECTED IS NOT THE SAME AS NOT FINDABLE. He talks in names — "go do this job right
+      // now", "do the accounting one", "what jobs do I have?" — and a partial name cannot be
+      // resolved against nothing. A list verb costs nothing until it is called, and every call of
+      // it is an agent ANSWERING HIM rather than shopping. An ad, versus a directory: refusing the
+      // ad does not mean refusing the directory.
+      //
+      // AND `Skill` CANNOT REACH A JOB AT ALL. skillSources.cjs's skillDirs() resolves four
+      // patterns and not one of them is ~/.autobot/jobs, so loading a job by name needs its own
+      // verb or it has no door.
+      //
+      // WHY ON THIS SERVER: the same argument that moved the docs and hooks tools here. A job is a
+      // system-level definition beside hooks, presence and the context store, and a second MCP for
+      // one family would be a second place to look.
+      tool(
+        "jobsList",
+        "The jobs that exist on this machine — each one's name and its aim, one line each. Call it " +
+          "to RESOLVE A NAME somebody said: \"do the accounting one\", \"what jobs do I have?\". It is " +
+          "a directory, not a menu — a job is given to you by a hook or by the human, never picked " +
+          "off this list because it looked relevant. Names and aims only; jobsLoad reads the body.",
+        {},
+        async () => {
+          try {
+            const jobs = require("./jobs.cjs");
+            const rows = jobs.list();
+            // NAMES AND AIMS ONLY. The whole documents here would make this an injection with extra
+            // steps — and a job document is loaded WHOLE, when it is given, or not at all.
+            if (!rows.length)
+              return { content: [{ type: "text", text:
+                `No jobs exist yet (${jobs.DIR} holds none). A job is written there with a human by ` +
+                `job-authoring, so there is no name to resolve until one is.` }] };
+            const body = rows
+              .map((j) =>
+                `  ${j.id}${j.name && j.name !== j.id ? ` ("${j.name}")` : ""}` +
+                `${j.enabled === false ? " · DISABLED" : ""}` +
+                `${j.trigger ? ` · on ${j.trigger.on}` : ""}` +
+                ` — ${jobAim(j)}`
+              )
+              .join("\n");
+            return { content: [{ type: "text", text:
+              `JOBS that exist (${rows.length}) — the name, and the aim that tells you which one is which:\n${body}\n\n` +
+              `Load one with jobsLoad ONCE SOMEBODY HAS NAMED IT. A job is given, not chosen.` }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
+        "jobsLoad",
+        "Load a job's document by name — the whole written agreement: what it is for, what it must " +
+          "be given, its procedure, where its output lands, what it must never do, and what to do " +
+          "when it is unsure. Call it when a job has been GIVEN to you — a hook pointed at it, or " +
+          "the human named it — and read the whole thing before starting; a job document is loaded " +
+          "whole on purpose, because a bound that only turned up in a chunk nobody retrieved is a " +
+          "bound that does not exist at 3am. Resolve a partial name with jobsList first.",
+        {
+          name: z
+            .string()
+            .describe("the job's id as jobsList prints it — a human name resolves too, through the same slug rule the folder uses"),
+        },
+        async ({ name }) => {
+          try {
+            const jobs = require("./jobs.cjs");
+            const refuse = (text) => ({ content: [{ type: "text", text }], isError: true });
+            const want = String(name || "").trim();
+            if (!want)
+              return refuse(`jobsLoad needs the name of a job. Call jobsList for the names that exist.`);
+            // The slug rule is the FOLDER's, read back off dirOf rather than retyped here — a second
+            // copy of it would be a second answer to "which directory is this name".
+            const id = path.basename(jobs.dirOf(want));
+            const rec = jobs.get(id); // null when there is no job.json
+            const text = rec ? rec.doc : jobs.doc(id);
+
+            // AN ABSENT JOB IS A REFUSAL THAT SAYS SO, never an empty success. A blank answer here
+            // reads as "the job says nothing", and an agent that was GIVEN work would then do
+            // nothing and report that it ran.
+            if (!String(text || "").trim()) {
+              const rows = jobs.list();
+              if (rec)
+                return refuse(
+                  `"${id}" has a job.json but no readable job.md in ${rec.dir}. The document IS the job ` +
+                  `and job.json is only a projection of it, so there is nothing to load and nothing ` +
+                  `saying what this job must never do. It has to be written before the job can run.`
+                );
+              const near = nearestJob(id, rows.map((j) => j.id));
+              return refuse(
+                `No job named "${want}"${id !== want ? ` (which resolves to "${id}")` : ""} under ${jobs.DIR}. ` +
+                (near
+                  ? `The closest name that exists is "${near}" — call jobsLoad with that if it is the one meant, and ask if you are not sure.`
+                  : rows.length
+                    ? `${rows.length} job${rows.length === 1 ? "" : "s"} exist — call jobsList for their names.`
+                    : `No jobs exist at all yet, so nothing can be loaded by any name.`)
+              );
+            }
+
+            // Disabled is said BEFORE the document, because it changes whether to proceed at all.
+            // Everything else about the job is the document's to say — this verb adds no framing.
+            const head = rec && rec.enabled === false
+              ? `NOTE: "${id}" is DISABLED — it fires for nobody on its own. Run it only because ` +
+                `somebody just asked you to, and say so in the report.\n\n`
+              : "";
+            return { content: [{ type: "text", text: head + String(text).trim() + "\n" }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        },
+        { alwaysLoad: true }
+      ),
+      // ---------------------------------------------------------------------------------------
+      // THE CHORE BOARD IS A VERB, NOT AN INJECTION (RFC-067 §4, his call 2026-10-05). The first
+      // build injected it at session start, which was wrong by the same rule that keeps a job out
+      // of the system prompt: it would cost every session whether or not chores were ever
+      // considered. An agent calls this when it is time to consider them — `proactive-work` names
+      // the step, so nothing has to be loaded for the agent to know the board exists.
+      //
+      // IT IS A READ. `boardFor` derives each line's state from CLOSED RUN RECORDS and writes
+      // nothing, so this is state rather than testimony — and no line can be checked off by
+      // announcing it.
+      // WRITING ONE. Symmetric with `hooksWrite` and for the same reason: an agent may PROPOSE, and
+      // the proposal is inert until a human arms it. A job created here fires for nobody — it has no
+      // trigger of its own (RFC-067 §3: one trigger path, the hook's), so something must name it in
+      // a `do: job:<id>` AND a human must tick that hook onto an agent before a single step runs.
+      //
+      // IT EXISTS BECAUSE NOTHING COULD CREATE A JOB AT ALL (2026-10-08). `jobs.save` had exactly
+      // three kinds of caller: the test suites, an IPC handler the window never called, and nothing
+      // else. So `job-authoring` could write a document and had nowhere to put it but the hand —
+      // which is the one move that breaks the guarantee job.json agrees with job.md.
+      //
+      // THE DOCUMENT IS THE ARGUMENT, and `save()` enforces it: no document, no job. Everything a
+      // job demands is read back out of that document's front matter, so there is no `requires`
+      // parameter here and there must never be one — a projection that can outlive its document is
+      // the inversion the whole design refuses.
+      tool(
+        "jobsWrite",
+        "Write a job to ~/.autobot/jobs/<id>/ — the document IS the job and there is no way to " +
+          "create one without it. Pass the whole `doc` every time; it replaces what was there, and " +
+          "job.json is derived from it (what the job demands is read from the document's " +
+          "`requires:` front matter, never from a parameter here). A job written this way fires for " +
+          "NOBODY: it carries no trigger, so a hook must name it with `do: job:<id>` and a human " +
+          "must carry that hook before anything runs. Follow `job-authoring` — a document missing " +
+          "the job parts is un-assignable or its result un-checkable, and both fail at 3am rather " +
+          "than here.",
+        {
+          id: z.string().describe("the job's id — lowercase, dashes; it is the folder name and the identity"),
+          doc: z.string().describe("the WHOLE job document (markdown, with `requires:` front matter when it declares inputs)"),
+          name: z.string().optional().describe("a human name; defaults to the id"),
+          enabled: z.boolean().optional().describe("false parks it — it stays loadable by name and matches nothing"),
+        },
+        async ({ id, doc, name, enabled }) => {
+          try {
+            const jobs = require("./jobs.cjs");
+            const before = jobs.get(id);
+            const rec = jobs.save({ id, doc, name, enabled });
+            const req = (rec.requires || []).join(", ");
+            return {
+              content: [{ type: "text", text:
+                `${before ? "Updated" : "Wrote"} job "${rec.id}" at ${rec.dir}.\n` +
+                (req
+                  ? `It demands: ${req}. A hook must supply every one of those in its \`with:\` or the job ` +
+                    `refuses by name and opens no run.\n`
+                  : `It declares no inputs, so it takes its target from the moment that fired it.\n`) +
+                `It fires for nobody yet — write a hook whose \`do\` is "job:${rec.id}" and have it ` +
+                `carried on an agent's profile.` }],
+            };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
+        }
+      ),
+      tool(
+        "chores",
+        "Your chores — the standing list of procedures you are expected to keep current, and " +
+          "whether each one is done FOR THIS PERIOD. Call it when it is time to consider chores: " +
+          "before taking on self-directed work, or when asked what is outstanding. A line is " +
+          "checked off by a RUN of the thing it names closing — nothing is ticked by hand and " +
+          "nothing can be marked done by saying so. A line does not stay checked: it comes due " +
+          "again next period, which is why this is a read and not a memory.",
+        {},
+        async () => {
+          try {
+            const defs = require("./definitions.cjs");
+            if (!scopes.slot) return { content: [{ type: "text", text: "This session has no agent slot, so it carries no chores." }] };
+            const rows = defs.boardFor(scopes.slot);
+            // ABSENT, NOT EMPTY — an agent carrying none is told so plainly rather than shown a
+            // heading over a blank list, which reads as an invitation to invent some.
+            if (!rows.length) return { content: [{ type: "text", text: "No chores are on your definition. Nothing is expected of you on a schedule." }] };
+            // THE DATE IS LOCAL, BECAUSE THE VERDICT IS. Found 2026-10-13 by a subagent working a
+            // real board, which is the only way this shows up: `periodStart` is deliberately local
+            // ("a day is his day and not UTC's"), while this line formatted `at` with
+            // toISOString(). A run that closed 20:38 local on the 12th is 00:38Z on the 13th, so
+            // the row read "NOT DONE — last ran 2026-10-13" — overdue today AND ran today, in one
+            // sentence. The verdict was right and the row contradicted it, which sends a reader
+            // after the tick mechanism instead of the formatter. Any evening run at a negative UTC
+            // offset printed this.
+            const day = (ms) => {
+              const d = new Date(ms);
+              const p2 = (n) => String(n).padStart(2, "0");
+              return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+            };
+            // AND THE PERIOD READS AS ENGLISH. `period.replace(/ly$/, "")` turned "weekly" into
+            // "week" and "daily" into "dai" — the same regex, in the window's own period picker,
+            // is how he found it there.
+            const THIS = { daily: "today", weekly: "this week", monthly: "this month" };
+            const line = (r) => {
+              // A RESET IS SAID OUT LOUD. Without this an agent that just closed a run and finds
+              // the line due again has every reason to suspect the tick mechanism — the one thing
+              // that must stay trustworthy here. "Last ran today, reset since" is the honest row.
+              const reset = r.resetAt && r.resetAt > (r.at || 0) ? `, reset ${day(r.resetAt)} — due again` : "";
+              const when = r.done
+                ? `done ${THIS[r.period] || `this ${r.period}`}`
+                : r.at
+                  ? `NOT DONE — last ran ${day(r.at)}${reset}`
+                  : "NOT DONE — no run on record";
+              return `  [${r.done ? "x" : " "}] ${r.what}  (${r.period}) — ${when}`;
+            };
+            const owed = rows.filter((r) => !r.done);
+            const out = [
+              owed.length
+                ? `${owed.length} of ${rows.length} chore${rows.length === 1 ? "" : "s"} NOT DONE this period:`
+                : `All ${rows.length} chore${rows.length === 1 ? "" : "s"} current.`,
+              "",
+              ...rows.map(line),
+              "",
+              "Read off closed run records, never a stored tick. An unchecked line is worked by running what it names — there is nothing called `chores` to invoke.",
+            ];
+            return { content: [{ type: "text", text: out.join("\n") }] };
+          } catch (e) {
+            return { content: [{ type: "text", text: e.message }], isError: true };
+          }
         },
         { alwaysLoad: true }
       ),

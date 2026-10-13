@@ -119,6 +119,29 @@ function parseFrontMatter(text) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// WHAT A HOOK POINTS AT. `do` is a POINTER and `<kind>:<name>` is its whole grammar — one field,
+// so a hook never has two places to say what it runs and no surface has to decide which wins.
+//
+// `skill:` and `job:` are the two kinds that resolve today, and they are the SAME FIELD on purpose
+// (RFC-067 §3): a hook already carries who (whoever ticked it), when (its event and rate) and what
+// (`do`), which is everything needed to hand work to an agent, so a job is triggered exactly as a
+// skill is and there is nothing else to sit between the two. A second field — `job:` beside
+// `skill:` — would be two grammars for one thing, where one of them inevitably gets a feature the
+// other does not and a hook behaves differently depending on which shelf it was filed on. That is
+// the same argument `until` won against being a second kind of hook.
+//
+// The difference is not in the pointer, it is in what the pointer MEANS: a skill is advertised and
+// CHOSEN, so its pointer may be declined; a job is GIVEN, so its pointer may not. pointerText()
+// is where that lands.
+function targetOf(hook = {}) {
+  const raw = String((hook && hook.do) || "").trim();
+  const m = /^([a-z][a-z0-9-]*):(.+)$/.exec(raw);
+  return m ? { kind: m[1], name: m[2].trim() } : { kind: "", name: raw };
+}
+
+const isJob = (hook) => targetOf(hook).kind === "job";
+
+// ---------------------------------------------------------------------------------------------
 // The condition.
 //
 // THIS RUNS ON EVERY EVENT, SO IT HAS TO BE CHEAP — and the argument is a day we already paid for:
@@ -291,9 +314,16 @@ function list() {
       on: String(meta.on).trim(),
       when: meta.when && typeof meta.when === "object" ? meta.when : {},
       scope: String(meta.scope || "every-agent").trim(),
-      // `do` is a POINTER — "skill:<name>" today. The value is carried verbatim so a future kind
-      // (doc:, hook:, run:) needs no change here, only a resolver that understands it.
+      // `do` is a POINTER — "skill:<name>" or "job:<name>" (targetOf is the grammar). The value is
+      // carried verbatim so a future kind (doc:, hook:, run:) needs no change here, only a resolver
+      // that understands it.
       do: String(meta.do || "").trim(),
+      // WHAT THE JOB IS GIVEN (RFC-067 §3). The one thing a hook could not carry: `when` matches the
+      // event payload, and nothing on a hook said *run this WITH these*. It is an object and it is
+      // stored as JSON in the front matter, which the small parser already reads — the same way
+      // `when` avoided inventing nested-YAML support. Empty for a skill hook, and empty is the
+      // honest value rather than an absence: a job that declares no inputs needs none.
+      with: meta.with && typeof meta.with === "object" && !Array.isArray(meta.with) ? meta.with : {},
       // context = a pointer arrives and the agent decides. work = something RUNS. The branch is
       // where the trust level changes, so it is recorded explicitly and defaults to the quiet one.
       kind: String(meta.kind || "context").trim(),
@@ -374,18 +404,34 @@ function index() {
 // interfering, which is the test that they were ever separate axes. `guard` is the old name and
 // still reads; `rate` is what it is.
 //
-// TWO FAMILIES, because people mean both and only one existed:
+// THREE FAMILIES, because people mean all three and only two existed:
 //   cooldown:<duration>  sliding — "no sooner than N since the last fire". How you say twice-weekly.
 //   once-per-day|week|month  CALENDAR — once within each period, however the periods fall. Fire at
 //                            11pm Monday and a sliding day blocks all Tuesday daytime; "once per
 //                            day" does not, and the calendar one is what the words mean.
+//   once-per-rise        EDGE — once per CROSSING of its own `when`, re-armed when the condition
+//                            goes false again. Neither a clock nor a calendar: a fact about the
+//                            condition's shape.
+//
+// WHY THE EDGE FAMILY EXISTS (found 2026-10-12, from his report: *"two times in a row context
+// maintenance did not fire"*). `context-maintenance` is `on: usage, when: pct >= 60` with
+// `once-per-session`. It fired at the first crossing and then NEVER AGAIN for that session's whole
+// life: the pass runs, he compacts, the window drops to 25%, it climbs back past 60% — and the
+// guard eats every one of those crossings, silently, forever. `s.hooksFired` is created once at
+// session birth and nothing clears it, not even a compaction.
+//
+// The old rates could not express it. A clock re-fires at sustained high usage whether or not
+// anything changed; a calendar is blind to the window entirely. `once-per-session` was always
+// standing in for ONCE PER CONTEXT, and that proxy broke the moment sessions started outliving
+// their windows — which is now normal. A threshold hook wants to fire once per crossing, which is
+// hysteresis, which needs the FALL to be observed. That is the whole mechanism: see fire().
 //
 // AND IT IS PERSISTED, which is the bug the rest of this fixes. Fire history lived in a Map created
 // per session, so every rate longer than one session's life silently degraded to once-per-session —
 // a 3.5-day cadence in a session restarted daily fired daily. `once-per-session` was the only one
 // that ever worked, because it is the only one whose scope IS the thing it was stored in.
 const STATE_FILE = path.join(os.homedir(), ".autobot", "hooks-fired.json");
-const RATE_FORMS = /^(once-per-session|once-per-day|once-per-week|once-per-month|cooldown:.+)$/;
+const RATE_FORMS = /^(once-per-session|once-per-rise|once-per-day|once-per-week|once-per-month|cooldown:.+)$/;
 
 // Durations people write: 30m, 24h, 3d12h, 2w — and bare digits, which `cooldown:` has always
 // meant as SECONDS, so old hooks keep their meaning.
@@ -437,6 +483,11 @@ function rateAllows(hook, fired, ctx = {}) {
   if (!g) return true;
   // SESSION-SCOPED, so the session's own map is exactly the right store.
   if (g === "once-per-session") return !seen;
+  // ARMED UNTIL IT FIRES; RE-ARMED BY THE FALL. The falling edge is observed in fire(), which
+  // deletes this entry when `when` stops matching — so "is there an entry" IS "has it fired since
+  // the last fall". Session-scoped on purpose: a fresh session is a fresh context and therefore
+  // armed, which is the behaviour you want when the harness restarts at 80% full.
+  if (g === "once-per-rise") return !seen;
 
   const st = readFiredState();
   const last = st[firedKey(hook, ctx)];
@@ -460,7 +511,10 @@ function rateAllows(hook, fired, ctx = {}) {
 // the agent's daily allowance.
 function recordFired(hook, ctx = {}) {
   const g = rateOf(hook);
-  if (!g || g === "once-per-session") return; // nothing durable to remember
+  // NOTHING DURABLE TO REMEMBER for either session-scoped rate. Persisting a rise would be worse
+  // than useless: a restart would find it still "fired" and stay silent on a window that is a
+  // fresh context, which is the exact failure this rate exists to end.
+  if (!g || g === "once-per-session" || g === "once-per-rise") return;
   const st = readFiredState();
   st[firedKey(hook, ctx)] = { ts: Date.now(), hook: hook.name };
   writeFiredState(st);
@@ -469,8 +523,67 @@ function recordFired(hook, ctx = {}) {
 // the old name, kept so nothing that calls it has to care which axis it was asking about
 const guardAllows = rateAllows;
 
+// ---------------------------------------------------------------------------------------------
+// GIVING A JOB — the one thing that happens between a job hook matching and its pointer going out,
+// and the reason it happens HERE rather than in the pointer text: a refusal has to be a fact about
+// the fire, not a sentence somebody rendered. The returned hook carries the verdict, so every
+// surface downstream — the pointer, the `hook.fired` receipt, a panel — reads one answer instead of
+// each re-deriving it and two of them disagreeing.
+//
+// THE MISSING INPUT IS NAMED AND NOTHING RUNS. This is the requirement RFC-067 §2 calls worthless
+// if it is not enforced, and the shape of the enforcement matters as much as its existence:
+//
+//   - the hook is still RETURNED, carrying its refusal. Dropping it would make a hook that looks
+//     correct, appears in every list, and silently never runs — which this file already calls the
+//     worst failure the mechanism has. A refusal that reaches nobody is the same failure wearing a
+//     better excuse.
+//   - no run is opened. `jobs.given` is the only door that opens one and it is behind the same
+//     gate, so there can be no run record for a job that was given too little.
+//
+// THE RUN OPENS ONLY IF THE CALLER NAMED THE SESSION. A run is joined to its continuation by
+// (source, session) — that is what lets the agent's own first `worklist.set({ source: "job:<id>" })`
+// continue THIS run instead of minting a rival — so a caller that cannot name the session cannot
+// honestly open one, and pretending otherwise would mint exactly the orphan corpse it was supposed
+// to prevent. With no session the hook still fires and the pointer still tells the agent which
+// source to open; the agent's own write is then the birth, through the door that already exists.
+function resolveJob(hook, event, ctx) {
+  const t = targetOf(hook);
+  if (t.kind !== "job") return hook;
+  const inputs = hook.with && typeof hook.with === "object" ? hook.with : {};
+  // A COPY, ALWAYS. These objects come out of the cached index and are handed to every session that
+  // carries the hook; attaching this run's verdict to them would leak one session's refusal into
+  // the next match, for everybody.
+  let gate = { ok: false, refusal: "", missing: [], declared: [] };
+  try {
+    const jobs = require("./jobs.cjs"); // lazily — jobs.cjs requires this module
+    const session = String(ctx.session || "").trim();
+    gate = session ? jobs.given(t.name, { session, inputs, why: whyOf(hook, event), event }) : jobs.check(t.name, inputs);
+  } catch (err) {
+    gate = { ok: false, missing: [], declared: [], refusal: `The \`${t.name}\` job could not be read, so it was not run: ${String(err && err.message) || err}` };
+  }
+  // EXPLICIT, NOT A SPREAD OF THE VERDICT. `jobs.check` answers with the whole job record on it —
+  // document and worklist included — and spreading that would both overwrite `job` with an object
+  // and hang a copy of every job document off every fired hook.
+  return {
+    ...hook,
+    job: t.name,
+    with: inputs,
+    given: gate.ok === true,
+    missing: Array.isArray(gate.missing) ? gate.missing : [],
+    declared: Array.isArray(gate.declared) ? gate.declared : [],
+    refusal: String(gate.refusal || ""),
+    runId: String(gate.runId || ""),
+    runSource: String(gate.source || ""),
+  };
+}
+
+// WHY DID THIS RUN? — the question §4 says you must always be able to answer at 3am, and the hook
+// is the only thing that knows. Carried onto the job's own run record at birth.
+const whyOf = (hook, event = {}) => `hook "${hook.name}" matched ${event.kind || hook.on}`;
+
 // Which hooks apply to this event, for this agent, right now. Returns [] fast and often.
-// `ctx`: { agentId, projectCode, carries: [names opted into], fired: Map, cleared: Map, turn: n }
+// `ctx`: { agentId, projectCode, carries: [names opted into], fired: Map, cleared: Map, turn: n,
+//          session: the worklist owner a job's run belongs to — absent means no run is opened here }
 function fire(event = {}, ctx = {}) {
   const kind = String(event.kind || "");
   // A hook's own receipt is not a hook point. Without this a hook on `hook.fired` would deliver a
@@ -482,7 +595,15 @@ function fire(event = {}, ctx = {}) {
   const out = [];
   for (const h of hooks) {
     if (!inScope(h, ctx)) continue;
-    if (!matchesWhen(h.when, event)) continue;
+    if (!matchesWhen(h.when, event)) {
+      // THE FALLING EDGE — the only place in this file where a NON-match does work. A
+      // `once-per-rise` hook is re-armed the moment its condition stops holding, so the next
+      // crossing fires. Safe to key on "being in this loop": `hooks` came from
+      // `index().get(kind)`, so every hook here is `on` this event kind, and a usage hook can
+      // never be re-armed by some unrelated event that simply lacks a `pct` field.
+      if (rateOf(h) === "once-per-rise") fired.delete(h.name);
+      continue;
+    }
     if (!guardAllows(h, fired, ctx)) continue;
     const prev = fired.get(h.name);
     const now = Date.now();
@@ -490,7 +611,10 @@ function fire(event = {}, ctx = {}) {
     // later fire — a persisting hook rewrites this record every turn, and overwriting the first
     // sighting would make "the run finished after the pointer went out" unanswerable.
     fired.set(h.name, { ts: now, firstTs: prev ? prev.firstTs || prev.ts : now, turn: ctx.turn, count: ((prev || {}).count || 0) + 1 });
-    out.push(h);
+    // A SKILL HOOK IS UNTOUCHED BY THIS AND PAYS NOTHING FOR IT — resolveJob returns the same
+    // object it was handed unless `do` names a job, so the hot path is one regex on a string the
+    // index already parsed.
+    out.push(resolveJob(h, event, ctx));
   }
   return out;
 }
@@ -500,6 +624,12 @@ function fire(event = {}, ctx = {}) {
 // wrapper convention as a cross-session message (`<context-hook …>`), so the pump can recognise it
 // and the feed can draw it as a thing that HAPPENED rather than as words the human typed.
 function pointerText(hook, event = {}) {
+  // A JOB IS GIVEN, SO ITS POINTER IS NOT THE SKILL POINTER WITH A NOUN SWAPPED. Everything below
+  // this branch is built for something the agent may decline — "it is a pointer, not an
+  // instruction", "ignore it if it does not apply" — and that paragraph handed to an assigned job
+  // is a licence to drop work nobody else is going to do. The template is his and it says what it
+  // says; a job gets its own text rather than a flag that quietly reverses the meaning of his.
+  if (isJob(hook)) return jobPointerText(hook, event);
   const what = hook.do ? `The \`${String(hook.do).replace(/^skill:/, "")}\` skill applies here.` : "";
   const note = hook.note ? `\n${hook.note}` : "";
   // THE TEXT FOLLOWS THE TIMING, and the old text is the evidence that the timing was wrong. It
@@ -561,6 +691,51 @@ function pointerText(hook, event = {}) {
   return `<context-hook name="${hook.name}" on="${kind}">\n${body}\n</context-hook>`;
 }
 
+// THE JOB POINTER. Two shapes, and which one you get is a fact decided at fire time (resolveJob),
+// not a judgement made here.
+//
+// THE REFUSAL, when the job was given less than it declared: it names the job, names what was
+// missing, and says nothing ran. It goes to the agent rather than to a log because the agent is the
+// one in a conversation with the human — a refusal in a file is a silence with extra steps. And it
+// tells the agent NOT to improvise the missing value, because an agent handed an incomplete job and
+// an idle moment will fill the gap helpfully, which is the exact failure part 2 exists to stop.
+//
+// THE GIVING, otherwise: the job's name, what it was given, and the source its run must carry. No
+// procedure text — the document is loaded whole, by name, and copying any of it here would be a
+// second copy of the instructions to drift from the first.
+function jobPointerText(hook, event = {}) {
+  const kind = event.kind || hook.on;
+  const name = targetOf(hook).name;
+  const wrap = (body) => `<context-hook name="${hook.name}" on="${kind}">\n${body}\n</context-hook>`;
+  const note = hook.note ? `\n\n${String(hook.note).trim()}` : "";
+
+  if (hook.refusal)
+    return wrap(
+      `A job was handed to you by the \`${hook.name}\` hook on **${kind}**, and it was REFUSED.\n\n` +
+        `${hook.refusal}\n\n` +
+        `Do not fill in the missing value and do not run a reduced version of the job: a job given ` +
+        `less than it declared is a refusal, not a smaller job. Say in one line that it was refused ` +
+        `and what was missing, so whoever wired the hook can fix its \`with:\`, and carry on.${note}`
+    );
+
+  const inputs = hook.with && typeof hook.with === "object" ? hook.with : {};
+  const given = Object.keys(inputs).length
+    ? `It was given:\n${Object.entries(inputs).map(([k, v]) => `- \`${k}\`: ${JSON.stringify(v)}`).join("\n")}`
+    : `It was given no inputs, and declares none.`;
+  const run = hook.runId
+    ? `Its run is already open as \`${hook.runSource}\` — write your plan to the worklist with ` +
+      `\`source: "${hook.runSource}"\` and it continues that same run rather than starting a second one.`
+    : `Open its run before you start: write your plan to the worklist with ` +
+      `\`source: "job:${name}"\`. That run closing is the only thing that records the job as done.`;
+
+  return wrap(
+    `The \`${name}\` job has been GIVEN to you on **${kind}**.\n\n` +
+      `A job is not a suggestion and there is no proportionate version of it: load the document ` +
+      `whole by name and follow it, including its bounds. If you cannot load it, say so — do not ` +
+      `reconstruct it from its name.\n\n${given}\n\n${run}${note}`
+  );
+}
+
 // HIS FILE, READ AT FIRE TIME (see the note in pointerText). The comment block at the top is for
 // him, not for the agent — it is how the placeholders are documented where they are edited, so it
 // is stripped on the way out. No caching on purpose: a hook fires rarely and an edit that needs a
@@ -594,8 +769,18 @@ function save(rec = {}) {
   if (rateIn) {
     if (!RATE_FORMS.test(rateIn))
       throw new Error(
-        `rate must be once-per-session, once-per-day, once-per-week, once-per-month, or ` +
-          `cooldown:<duration> — got "${rateIn}"`
+        `rate must be once-per-session, once-per-rise, once-per-day, once-per-week, ` +
+          `once-per-month, or cooldown:<duration> — got "${rateIn}"`
+      );
+    // A RISE WITH NO CONDITION CAN NEVER FALL, so it degenerates silently into
+    // `once-per-session` — which is precisely the bug this rate was added to fix, wearing the new
+    // name. Refused here, where somebody is watching, rather than discovered months later from a
+    // hook that looks correct and fired once.
+    if (rateIn === "once-per-rise" && !(rec.when && typeof rec.when === "object" && Object.keys(rec.when).length))
+      throw new Error(
+        `once-per-rise is once per CROSSING of a condition, so it needs a \`when\` to cross. ` +
+          `With nothing to go false it could never re-arm and would mean once-per-session — the ` +
+          `exact failure it exists to end. Give it a \`when\`, or use a different rate.`
       );
     if (rateIn.startsWith("cooldown:")) {
       const ms = parseDur(rateIn.slice("cooldown:".length));
@@ -604,6 +789,34 @@ function save(rec = {}) {
           `"${rateIn}" is not a duration I can read. Write it like 30m, 24h, 3d12h, 2w ` +
             `(bare digits still mean seconds). A rate that cannot be parsed would either block ` +
             `forever or not at all, and both are worse than this refusal.`
+        );
+    }
+  }
+  const inputs = rec.with && typeof rec.with === "object" && !Array.isArray(rec.with) ? rec.with : {};
+  // A HOOK THAT POINTS AT A JOB IT CANNOT GIVE WHAT THE JOB DECLARED IS REFUSED HERE, where
+  // somebody is watching — the same move as the event name and the rate, and for the same reason.
+  // The fire-time check is the one that must never be skipped, but a hook that will refuse on every
+  // single match is broken at the moment it is written, and finding that out at 3am from a feed row
+  // is strictly worse than finding it out now. (RFC-067 §9: register anything; assigning something
+  // without its contract is what to refuse.)
+  //
+  // ONLY WHEN THE JOB ALREADY EXISTS. A hook written before its job is not an error — the job may
+  // be authored afterwards, and refusing would make the two orderings behave differently.
+  {
+    const t = targetOf(rec);
+    if (t.kind === "job" && t.name) {
+      // lazily, and in a try: jobs.cjs requires THIS module, so a top-level require would be a
+      // cycle, and a hook must still be writable if the job store is unreadable.
+      let gate = null;
+      try {
+        const jobs = require("./jobs.cjs");
+        if (jobs.get(t.name)) gate = jobs.check(t.name, inputs);
+      } catch {}
+      if (gate && !gate.ok)
+        throw new Error(
+          `the "${t.name}" job must be given ${gate.missing.map((n) => `\`${n}\``).join(", ")} — ` +
+            `put ${gate.missing.length === 1 ? "it" : "them"} in this hook's \`with:\`. It declares: ` +
+            `${gate.declared.join(", ")}. A hook that cannot supply what a job requires would refuse on every match.`
         );
     }
   }
@@ -618,6 +831,9 @@ function save(rec = {}) {
     `do: ${String(rec.do || "").trim()}`,
     `kind: ${String(rec.kind || "context").trim()}`,
   ];
+  // Written only when there is something to give, so a skill hook's file does not carry an empty
+  // object explaining nothing — the same rule `until` and `deliver` follow.
+  if (Object.keys(inputs).length) lines.push(`with: ${JSON.stringify(inputs)}`);
   if (rec.author) lines.push(`author: ${String(rec.author).trim()}`);
   // written under its real name; `guard` is read on the way in but never written on the way out,
   // so a hook edited once migrates itself and there is only ever one spelling on disk
@@ -636,6 +852,13 @@ function save(rec = {}) {
   // it is injecting context you never wired.
   const was = slug(rec.wasName);
   if (was && was !== name) { try { fs.unlinkSync(path.join(DIR, `${was}.md`)); } catch {} }
+  // THE WRITER INVALIDATES THE CACHE, because the directory's mtime does not move when a file
+  // inside it is REWRITTEN — only when one is added or removed. Found while wiring `with:` (2026-10-04):
+  // editing an existing hook left `index()` serving the version from before the edit, so the hook kept
+  // firing on its old condition, with its old `do`, with its old inputs, until something unrelated
+  // happened to touch the folder. Exactly the failure the no-caching note on list() warns about,
+  // one layer down — and invisible, because every surface reads list() and agreed with the edit.
+  INDEX = null;
   return list().find((h) => h.name === name) || null;
 }
 
@@ -672,6 +895,7 @@ function remove(name) {
     for (const k of Object.keys(st)) if (k.endsWith(`|${n}`)) { delete st[k]; touched = true; }
     if (touched) writeFiredState(st);
   } catch {}
+  INDEX = null; // same reason as in save(): the writer invalidates, never the reader's clock
   return gone;
 }
 
@@ -694,6 +918,10 @@ module.exports = {
   persists,
   isCleared,
   IN_TURN_EVENTS,
+  // RFC-067 §3 — `do` names a skill or a job by the same grammar, and this is that grammar. Every
+  // reader of `do` goes through it, so "which kind is this pointer" has exactly one answer.
+  targetOf,
+  isJob,
   // exported for tests and for the UI's "would this have fired?" preview
   parseFrontMatter,
   matchesWhen,

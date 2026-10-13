@@ -31,6 +31,18 @@ const BUILTINS = [
     capabilities: [
       "context:read", "context:write",
       "files:read", "files:write",
+      // JOBS (added 2026-10-08). The IDE is where a job is read: its document, what it demands,
+      // which hooks can fire it, what it has actually done. Without `jobs:read` the preload never
+      // hands `window.systemview.jobs` over at all, and the surface above it cannot tell "there are
+      // no jobs" from "I was given no way to look" — it printed the first while two jobs sat on
+      // disk, which is a surface testifying instead of reading state.
+      //
+      // `jobs:write` IS BROADER THAN WHAT IS USED, and that is worth saying rather than hiding:
+      // the only write this app makes is `rate`, captured where the report is read, and `rate` is
+      // bundled with `save`/`remove` in the capability table. Authoring stays with `job-authoring`
+      // through `jobsWrite`; nothing in this surface calls save or remove. Splitting `rate` out is
+      // the right fix and it belongs to the table, not to a special case here.
+      "jobs:read", "jobs:write",
       "projects", "auth", "agents", "dictation", "terminal", "components", "systemlynx",
     ],
   },

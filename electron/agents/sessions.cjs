@@ -154,6 +154,46 @@ function systemContext() {
 // 154% CPU and jammed the main process on 2026-09-12. Three stat calls answer the only
 // question being asked — "has anything it was built from been touched since?" — and a
 // touched-but-identical file costing one offered re-init is a trade worth making.
+// A cheap stable number over the composed fields only. Not a crypto hash — it just has to CHANGE
+// when one of these does and not when anything else in the file does, which is all `staleParts`
+// compares. Unreadable definition returns 0, the same as a missing file did before.
+//
+// AND IT IS MEMOISED ON THE FILE'S MTIME, which is not an optimisation — it is the whole reason
+// this is allowed to exist. The comment above says a synchronous read-and-hash per call per session
+// is "precisely the shape that put the app at 154% CPU and jammed the main process on 2026-09-12",
+// and `list()` is polled by the panel while `staleParts(s)` is called TWICE in the same projection.
+// The first version of this function did exactly the forbidden thing; the store's own note
+// (`the defs dir: sidecars for churn`) warned about it and I did not read it until the maintenance
+// pass an hour later.
+//
+// So the hot path is one stat, as it was before. The read and the hash happen only when the mtime
+// has actually moved — which is the only moment the answer could be different. Keyed per agent, and
+// a stat failure falls through to a re-read rather than serving a stale number, because being wrong
+// about staleness is the one thing this cannot afford.
+const COMPOSED_FIELDS = [
+  "prompt", "skills", "tools", "disallowedTools",
+  "mcpServers", "model", "effort", "maxTurns", "background", "memory",
+];
+const STAMP_CACHE = new Map(); // agentId -> { mtime, stamp }
+function composedStamp(agentId) {
+  try {
+    const file = path.join(definitions.DIR, `${agentId}.json`);
+    let mtime = 0;
+    try { mtime = fs.statSync(file).mtimeMs; } catch { return 0; } // no file is no composition
+    const hit = STAMP_CACHE.get(agentId);
+    if (hit && hit.mtime === mtime) return hit.stamp;
+    const rec = definitions.get(agentId);
+    const def = (rec && rec.def) || {};
+    const shape = COMPOSED_FIELDS.map((k) => `${k}=${JSON.stringify(def[k] === undefined ? null : def[k])}`).join("|");
+    let h = 0;
+    for (let i = 0; i < shape.length; i += 1) h = (h * 31 + shape.charCodeAt(i)) | 0;
+    STAMP_CACHE.set(agentId, { mtime, stamp: h });
+    return h;
+  } catch {
+    return 0;
+  }
+}
+
 function compositionOf(agentId, cwd) {
   const t = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
   // KEYED BY THE NAME A HUMAN READS, not an anonymous list. "presence, the system context or this
@@ -163,7 +203,27 @@ function compositionOf(agentId, cwd) {
     Presence: t(PRESENCE_FILE),
     "System context": t(SYSTEM_CONTEXT_FILE),
   };
-  if (agentId) parts["Agent doc"] = t(path.join(definitions.DIR, `${agentId}.json`));
+  // THE AGENT DOC, FINGERPRINTED BY WHAT IS ACTUALLY COMPOSED — not by the file's mtime.
+  //
+  // His objection, 2026-10-12: *"we know that this shit is requiring a re-init. It doesn't require
+  // a re-init… not everything in there is immediate context and you don't have to aim at the
+  // entire document."* Correct. This used to be `t(<id>.json)`, so ANY write to the definition
+  // moved the stamp and every live session reported stale — saving a chore line asked him to
+  // re-initialize a session for a field that never enters a system prompt.
+  //
+  // THE DEFINITION IS A MIX, and the split is what reaches the SDK at open:
+  //   COMPOSED  prompt (the doc), skills (their descriptions are injected), tools /
+  //             disallowedTools, mcpServers, model, effort, maxTurns, background, memory
+  //   NOT       chores   — read on demand, only when the `chores` verb is called
+  //             hooks    — fire at runtime, and the carry list is read per fire (see carriesOf)
+  //             subscriptions — delivered at their moment, and they live in a sidecar anyway
+  //             name / description — surfaces, never the prompt
+  //
+  // So the whitelist below IS the claim "this is what a re-init would change", and a field added
+  // to the definition is NOT stale-making until somebody puts it here on purpose. That is the
+  // right default: a false "up to date" is one bad paragraph, while crying stale at every write
+  // teaches him to ignore the notice, which costs the real ones too.
+  if (agentId) parts["Agent doc"] = composedStamp(agentId);
   // AND THE CLAUDE.md STACK — his catch. It is composed into a session at open exactly like the
   // rest, by Claude Code rather than by us, which is precisely why it was missed: the fingerprint
   // only knew the files THIS file writes. An edit to CLAUDE.md would have left the page saying
@@ -366,10 +426,17 @@ const TURN_ACTIVITY = new Set([
 // Hand the pointer over. THE WRAPPER IS THE POINT: it rides the same path a cross-session message
 // does — the pump recognises it and the feed draws a row instead of pretending the human typed it.
 function deliverHook(s, h, event) {
+  // THE POINTER IS BUILT ONCE AND KEPT, because the receipt needs the same words the agent got.
+  // It used to be built inline here and discarded: the feed could say a hook fired and never what
+  // it said, and `HOOKWRAP` strips the text out of the transcript on purpose (so the mechanism
+  // cannot draw as the human typing) — which left the pointer visible to nobody at all. Hidden
+  // from the transcript and available on the row is the behaviour; this is the half that was
+  // missing.
+  const pointer = hooks.pointerText(h, event);
   try {
     s.input.push({
       type: "user",
-      message: { role: "user", content: [{ type: "text", text: hooks.pointerText(h, event) }] },
+      message: { role: "user", content: [{ type: "text", text: pointer }] },
       parent_tool_use_id: null,
       session_id: "",
     });
@@ -381,7 +448,30 @@ function deliverHook(s, h, event) {
   // THE RECEIPT, AND IT IS WRITTEN AT DELIVERY, NOT AT MATCH. A pointer held for the turn boundary
   // has not reached anyone yet; a receipt at match time would put a row in the feed for something
   // that had not happened, and for a hook whose session ends first, never would.
-  emit(s, { kind: "hook.fired", name: h.name, on: event.kind, to: h.do, hookKind: h.kind, note: h.note || "" });
+  // AND A JOB'S VERDICT RIDES WITH IT. Without this a job that fired and was REFUSED for a missing
+  // input drew the identical row to one that ran — the row reporting the pointer rather than what
+  // happened, which is a surface testifying instead of reading state. `given` is the fact; `missing`
+  // is why not; `with` is what it was handed; `runId` is the record it opened.
+  emit(s, {
+    kind: "hook.fired",
+    name: h.name,
+    on: event.kind,
+    to: h.do,
+    hookKind: h.kind,
+    note: h.note || "",
+    text: pointer,
+    when: h.when && Object.keys(h.when).length ? h.when : null,
+    rate: h.rate || h.guard || "",
+    ...(h.job
+      ? {
+          job: h.job,
+          given: h.given === true,
+          inputs: h.with && Object.keys(h.with).length ? h.with : null,
+          missing: Array.isArray(h.missing) && h.missing.length ? h.missing : null,
+          runId: h.runId || "",
+        }
+      : {}),
+  });
   logLife(s, `hook fired: ${h.name} on ${event.kind} -> ${h.do || "(no target)"}`);
   // THE RATE'S CLOCK STARTS AT DELIVERY, not at match — same reason the receipt is written here.
   // A pointer that matched, was held for the turn boundary and then dropped has not spent the
@@ -438,13 +528,47 @@ function armFlush(s) {
 let IDLE_TICK_OVERRIDE = 0;
 function __setIdleTick(ms) { IDLE_TICK_OVERRIDE = Number(ms) || 0; } // tests only
 
+// WHICH HOOKS THIS SESSION CARRIES, READ NOW RATHER THAN AT BIRTH.
+//
+// His objection, 2026-10-12, and it is about the design and not a bug hunt: *"sometimes it's like
+// if I enable this hook, you tell me I got to refresh the context. That makes no sense because
+// hooks aren't a part of your context. They just jump into your chat out of nowhere. What the fuck
+// does that have to do with you resetting your session to enable the hook?"*
+//
+// Nothing, is the answer. The carry list was COPIED onto the session record when the session was
+// built and every fire read that copy, so ticking a hook on the profile wrote to disk and a
+// running session never looked again. Restarting "worked" only because it rebuilt the snapshot —
+// a session reset to pick up a list that was never part of the session's context in the first
+// place. tests/hooks.js already describes this shape from the other side: the switches moved, the
+// agent behaved enabled, and the truth on disk was empty.
+//
+// So it is read per call. The cost is one small JSON read of one definition file, on an event that
+// already walks the hook index; the definition store is a handful of files and `list()` next door
+// deliberately does not cache for the same reason. THE SNAPSHOT REMAINS THE FALLBACK: if the
+// definition cannot be read at this instant, a session must keep firing the hooks it had rather
+// than silently carrying none — losing a pointer is the failure this whole file is written against.
+function carriesOf(s) {
+  if (!s) return [];
+  try {
+    const defs = require("./definitions.cjs");
+    const id = s.agentId || null;
+    if (!id) return s.carriesHooks || [];
+    const rec = defs.get(id) || defs.resolve(id);
+    const live = rec && rec.def && Array.isArray(rec.def.hooks) ? rec.def.hooks.map(String) : null;
+    return live || s.carriesHooks || [];
+  } catch {
+    return s.carriesHooks || [];
+  }
+}
+
 function idleWakeMs(s) {
-  if (!s.carriesHooks || !s.carriesHooks.length) return 0;
+  const carries = carriesOf(s);
+  if (!carries.length) return 0;
   const mins = [];
   try {
     for (const h of hooks.list()) {
       if (h.on !== "idle" || h.enabled === false) continue;
-      if (!s.carriesHooks.includes(h.name)) continue;
+      if (!carries.includes(h.name)) continue;
       const q = (h.when || {}).quietMin || {};
       const n = Number(q.gte != null ? q.gte : q.gt);
       // a hook that names no duration wants any quiet at all, so it sets the floor
@@ -546,9 +670,14 @@ function fireHooks(s, event) {
     hits = hooks.fire(ev, {
       agentId: s.agentId,
       projectCode: s.projectCode,
+      // THE SESSION, so a `job:` hook can open its run at match time instead of asking the agent to
+      // open it. A run is joined to its continuation by (source, session) — without the key, fire()
+      // would either mint a run against nobody or leave the job to the agent's first worklist write.
+      // The lane that built the fire path refused to guess this rather than risk an orphan record.
+      session: s.worklistOwner,
       // `every-agent` is conservative by default (see hooks.inScope): an agent carries a shared
       // hook the way it carries a skill, so nothing acquires one it never opted into.
-      carries: s.carriesHooks || [],
+      carries: carriesOf(s),
       fired: s.hooksFired,
       // what a persisting hook is measured against, and which turn this is
       cleared: s.runsDone,
@@ -1063,7 +1192,10 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     turnEndTimer: null,
     idleTimer: null,
     quietSince: 0,
+    // THE CARRY LIST AT BIRTH — kept as the fallback only. `carriesOf()` below is what the fire
+    // path and the idle clock actually ask, because this snapshot going stale is the whole bug.
     carriesHooks: (agent && Array.isArray(agent.def && agent.def.hooks) ? agent.def.hooks : []),
+    agentId: agent ? agent.id : null,
     composition: compositionOf(agent ? agent.id : null, cwd),
     // WHAT WAS ASKED FOR, not what came back. `s.model` is overwritten at init with the
     // SDK's RESOLVED id, and re-init has to replay the request — feeding a resolved id
@@ -1149,12 +1281,75 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   s.currentRun = null; // { id, source }
   const worklistServer = worklist.serverFor((items, source) => {
     if (source) {
+      // ─── A `lane:` SOURCE IS A PROMISE THAT A BRANCH EXISTS, and now it is checked ───────────
+      //
+      // REGISTRATION IS WHAT MAKES A LANE A LANE (his ruling, 2026-10-08). Cutting a branch is
+      // nothing — any agent does it with one git command — so the branch is not the lane; the
+      // RECORD is, and writing a run sourced `lane:<branch>` is how one gets registered. Which
+      // makes this write the registration door, and an unchecked door registers lanes that do not
+      // exist: on 2026-10-04 a skill-writing lane was briefed `lane:lane/job-authoring`, drove a
+      // complete 9/9 run, and left a record addressed to a branch nobody ever cut. The row was
+      // real; the work was not where the row said it was.
+      //
+      // AND IT IS WHAT DECOUPLES A LANE FROM DELEGATION. Registering is one call an agent makes
+      // about its own work — no subagent, no handing anything over. Doing a job in a lane is now
+      // the same two steps for anyone: cut the branch, write the list against it.
+      //
+      // REFUSED, NOT CORRECTED. Guessing the branch or silently dropping the prefix would both
+      // leave the agent believing it had a lane. The refusal names the branch and the fix, because
+      // the fix is one command away and the agent is holding it.
+      if (String(source).startsWith("lane:")) {
+        const branch = String(source).slice(5).trim();
+        const known =
+          !!branch && !!s.cwd &&
+          require("child_process").spawnSync(
+            "git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+            { cwd: s.cwd, encoding: "utf8", timeout: 4000 },
+          ).status === 0;
+        // THROWN, NOT RETURNED. `onSet`'s return value is discarded by the tool handler, which
+        // builds its own reply — so an early return here would skip the write and still answer
+        // "worklist: 0/3 done". A throw is the only thing that reaches the agent.
+        if (!known)
+          throw new Error(
+            `No branch "${branch}" exists in ${s.cwd || "this session's folder"}, so there is nothing to ` +
+              `register as a lane. A \`lane:\` source is a promise that a branch exists — the row it draws ` +
+              `points at work, and a row pointing at nothing is worse than no row at all. Cut it first ` +
+              `(\`git worktree add -b ${branch} <path>\`) and write the list again, or give this work a ` +
+              `source with no branch in it.`
+          );
+      }
       if (!s.currentRun || s.currentRun.source !== source) {
         // resume the unfinished run this session already started on this source — a harness
         // restart mid-run must not mint a corpse that reads as died-at-step-3
         const back = worklist.openRunFor(s.worklistOwner, source);
         s.currentRun = { id: back || worklist.newRunId(), source };
         if (!back) emit(s, { kind: "run.started", id: s.currentRun.id, source });
+        // A JOB NAMED IN THE CONVERSATION LEAVES THE SAME EVIDENCE AS ONE A HOOK FIRED (2026-10-08).
+        //
+        // `jobs.given()` is the only door that opens a job's RUN RECORD, and it is reached only
+        // through a hook. So the other legitimate way a job is handed over — the human saying "do
+        // the accounting one", which RFC-067 §3 names explicitly — produced a worklist run with the
+        // right source and NO job-side record. Everything that reads the record then failed
+        // silently: the report pointer had no file to land on, the status never flipped to
+        // finished, and the job's card had nothing to show. The worklist half worked, which is what
+        // made it quiet.
+        //
+        // THE GATE IS NOT CLAIMED TO HAVE RUN, and that is the whole care taken here. `given()`
+        // checks the declared inputs against a hook's `with:`; a human supplying them in a sentence
+        // cannot be checked that way and must not be recorded as though it had been. So the record
+        // is opened with a `why` that says exactly how it arrived, and the refusal machinery is left
+        // where it belongs — on the path that can actually be refused.
+        if (String(source).startsWith("job:")) {
+          try {
+            const jobsMod = require("./jobs.cjs");
+            const name = source.slice(4);
+            if (jobsMod.get(name) && !jobsMod.runsOf(name).some((r) => String(r.id) === String(s.currentRun.id)))
+              jobsMod.startRun(name, {
+                runId: s.currentRun.id,
+                why: "named in the conversation, not fired by a hook — its declared inputs were not machine-checked",
+              });
+          } catch {}
+        }
       }
       // NOBODY SENT ME HERE — AND THE HOST SAYS SO, NOT THE AGENT (RFC-066 §3). Read off the
       // session's current-turn origin, which the harness observed; there is no tool parameter
@@ -1166,6 +1361,19 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       emit(s, { kind: "todo.updated", items, source, run: s.currentRun.id });
       if (worklist.allDone(items)) {
         emit(s, { kind: "run.finished", id: s.currentRun.id, source });
+        // A JOB'S RUN RECORD HAS TO CLOSE TOO (2026-10-08). `jobs.done` observes the close off the
+        // worklist and stamps the run record finished — and NOTHING called it, so every job run on
+        // disk said "running" forever however finished it was. A surface reading that record could
+        // never show finished work waiting, which is the whole of RFC-067 §4. Observed, not
+        // claimed: `done` re-reads the list and refuses to close a run that is not all-done, so
+        // this is the moment it is true rather than the moment somebody says it is.
+        if (String(source || "").startsWith("job:")) {
+          try { require("./jobs.cjs").done(source.slice(4), s.currentRun.id); } catch {}
+          // AND IT STAYS REACHABLE FOR THE REPORT. An agent usually files its account AFTER it
+          // marks the last item done, so a pointer that could only be stamped while the run was
+          // open would miss the common order by one call.
+          s.lastJobRun = { job: source.slice(4), runId: s.currentRun.id };
+        }
         s.currentRun = null;
       }
       return;
@@ -1186,6 +1394,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   }, (src) => {
     // the mild reminder: an unknown skill/job source is EITHER a typo pointing a run record at
     // nothing, or a namespace made up on purpose — only the agent knows which, so say it and move on
+    // A LANE SAYS SO POSITIVELY. Registering is the whole act now — cut a branch, write a list
+    // against it — so the one call that does it has to confirm it did, or the agent cannot tell a
+    // registered lane from a plain sourced run. The branch is already verified above (the write
+    // throws otherwise), so this is a statement and not a check.
+    if (/^lane:/.test(src))
+      return `registered as a lane on ${src.slice(5)} — it has a row in his strip now, and it stands there until he clears it.`;
     const m = /^(skill|job):(.+)$/.exec(src);
     if (!m) return "";
     if (m[1] === "skill") {
@@ -1225,6 +1439,23 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // lane cleared by an agent disappears the same way one cleared by his press does
     onLaneRemoved: (branch) => removeLaneByBranch(projectCode, branch),
     onLaneBroughtIn: (branch, opts) => recordLaneBroughtIn(projectCode, branch, opts),
+    // A JOB'S RUN POINTS AT THE REPORT IT FILED (RFC-067 §2 part 6). The host is the only place
+    // that knows both halves — which document was just filed, and whether this session is working a
+    // job — so the stamp happens here and nothing is asked of the agent.
+    // WHICH LANES THIS PROJECT HAS REGISTERED — run records, which live on this side. The lanes
+    // verb intersects the hub's git answer with this, so a branch nobody registered is reported as
+    // a branch rather than listed as a lane.
+    // REGISTERED LANES, ASKED OF THE BRANCH rather than of this project — see
+    // worklist.registeredLanes for why the two axes are different and what scoping it by project
+    // got wrong.
+    laneRuns: () => [...worklist.registeredLanes()],
+    onReportFiled: ({ path: at, label }) => {
+      const open = s.currentRun && String(s.currentRun.source || "").startsWith("job:")
+        ? { job: s.currentRun.source.slice(4), runId: s.currentRun.id }
+        : s.lastJobRun || null;
+      if (!open) return; // a report filed outside a job is just a report, which is most of them
+      try { require("./jobs.cjs").reported(open.job, open.runId, { path: at, label }); } catch {}
+    },
   });
 
   s.query = query({
@@ -1751,6 +1982,7 @@ function transcriptsFor(cwd, projectCode) {
 
 module.exports = {
   sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
+  composedStamp, // test seam: proves which fields staleness watches, and that the hot path is cached
   purgeAgent, agentRuns,
   open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,

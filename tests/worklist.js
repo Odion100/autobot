@@ -297,6 +297,80 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   ok("an agent cannot smuggle its own provenance through `set` — the host reads it off the session");
 }
 
+// ---- CHORES: THE RESIDUE A SWEPT RUN LEAVES (RFC-067 §4) -----------------------------------
+// The board asks "did a run with this line's source close inside the current period", and
+// pruneRuns deletes closed runs after fourteen days — so a MONTHLY line would have no run left to
+// find and would read "never" when the truth is "42 days ago", wrong in exactly the case the board
+// exists for. The answer built is one integer per (procedure, place), written at the close.
+//
+// These claims are about that integer. The period arithmetic and the join to an agent's chore
+// lines are proven where they live, in tests/agent-definitions.js.
+//
+// SCRATCH STORE, AND IT IS NOT OPTIONAL: pruneRuns(now + 15 days) below is the call that, run
+// against the real store, swept every closed run on this machine and deleted the user's live lane
+// records (2026-09-17). AUTOBOT_WORKLISTS_DIR is set at the top of this file for exactly that.
+{
+  const DAY = 24 * 60 * 60 * 1000;
+  const sess = "session:p-chore:s1";
+
+  const closed = worklist.newRunId();
+  worklist.writeRun(closed, sess, [{ id: "1", text: "tidied", state: "done" }], "skill:chore-closed");
+  assert.ok(worklist.lastClosed("skill:chore-closed", "p-chore") > 0, "a closed run answers with a time");
+
+  const died = worklist.newRunId();
+  worklist.writeRun(died, sess, [{ id: "1", text: "got this far", state: "active" }], "skill:chore-died");
+  assert.equal(worklist.lastClosed("skill:chore-died", "p-chore"), 0,
+    "a run that died mid-list never closed, so it has no last-done at all");
+  assert.equal(worklist.lastClosed("skill:never-run", "p-chore"), 0, "and a source nobody ran is 0");
+  ok("lastClosed answers from CLOSES only — a died run and a source nobody ran are both 0");
+
+  // THE WHOLE POINT. The janitor takes the record; the answer has to survive it.
+  const was = worklist.lastClosed("skill:chore-closed", "p-chore");
+  assert.ok(worklist.pruneRuns(Date.now() + 15 * DAY) >= 1, "the closed run aged out after two weeks");
+  assert.deepEqual(worklist.read(worklist.runOwner(closed)), [], "its record is gone from disk");
+  assert.equal(worklist.lastClosed("skill:chore-closed", "p-chore"), was,
+    "and the answer is unchanged — the janitor cannot blind the board");
+  assert.equal(worklist.read(worklist.runOwner(died))[0].text, "got this far",
+    "while the run that DIED is still there, untouched by any of this");
+  ok("a close outlives its run record — the stamp is what the sweep leaves behind");
+
+  const longAgo = Date.now() - 42 * DAY;
+  assert.equal(worklist.stampClosed("skill:chore-long-ago", sess, longAgo), longAgo,
+    "a stamp can be written for a close that already happened");
+  assert.equal(worklist.lastClosed("skill:chore-long-ago", "p-chore"), longAgo,
+    "so a line whose run is long gone reads 42 days ago");
+  ok("the difference the stamp buys: `42 days ago` instead of `never`, which was the wrong answer");
+
+  assert.equal(worklist.stampClosed("skill:chore-long-ago", sess, longAgo - DAY), longAgo,
+    "an older close does not move the stamp backwards");
+  assert.equal(worklist.lastClosed("skill:chore-long-ago", "p-chore"), longAgo, "...so the answer holds");
+  ok("a stamp only ever moves forward — an out-of-order write cannot age a line");
+
+  worklist.writeRun(worklist.newRunId(), sess, [{ id: "1", text: "again", state: "done" }], "skill:chore-long-ago");
+  assert.ok(worklist.lastClosed("skill:chore-long-ago", "p-chore") > longAgo,
+    "a close today beats a stamp from six weeks ago");
+  ok("record and stamp are one truth at two resolutions — both are read and the NEWEST close wins");
+
+  worklist.writeRun(worklist.newRunId(), "session:p-other:s1", [{ id: "1", text: "elsewhere", state: "done" }], "skill:chore-elsewhere");
+  assert.equal(worklist.lastClosed("skill:chore-elsewhere", "p-chore"), 0,
+    "another project's close is not this place's");
+  assert.ok(worklist.lastClosed("skill:chore-elsewhere", "p-other") > 0, "it belongs to the place it ran in");
+  assert.ok(worklist.lastClosed("skill:chore-elsewhere") > 0, "and no place at all counts every place");
+  ok("a close is scoped to the project it ran in — one agent's board is not checked off by another's");
+
+  assert.ok(fs.existsSync(worklist.STAMPS), "the stamps live in one sidecar file");
+  assert.ok(!worklist.all().some((r) => /chore-stamps/.test(r.owner)),
+    "and all() never draws it as a worklist — a sidecar is excluded by SHAPE, not by name");
+  ok("the stamp sidecar is not a worklist — the `<id>.subs.json` bug does not recur here");
+
+  const before = fs.readdirSync(worklist.DIR).sort();
+  const stampsBefore = fs.readFileSync(worklist.STAMPS, "utf8");
+  worklist.lastClosedBySource("p-chore");
+  assert.deepEqual(fs.readdirSync(worklist.DIR).sort(), before, "reading the board creates no file");
+  assert.equal(fs.readFileSync(worklist.STAMPS, "utf8"), stampsBefore, "and changes no byte of the store");
+  ok("the board's read half writes NOTHING — so nothing it says can disagree with what happened");
+}
+
 // ---- 1-3. against a live session -----------------------------------------------
 const key = "worklist-test:t1";
 const s = await sessions.open({
@@ -377,6 +451,21 @@ ok("a late subscriber renders the current list from history, from ONE event");
 // The claim a unit test cannot make: a model calls the tool it was given, a run is born, and the
 // HOST — not the input — is what answered "did anyone send me here".
 {
+  // A `lane:` SOURCE NEEDS ITS BRANCH TO EXIST (2026-10-08). Registering is what makes a lane a
+  // lane — his ruling — so the write is the registration door and it refuses a branch nobody cut.
+  // This session's cwd has to be a real repo holding `test/live-run`, or the claim below would be
+  // testing the refusal while reading like it tests the write.
+  const repo = path.join(scratch, "work");
+  const sh = (...args) => require("child_process").spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+  fs.mkdirSync(repo, { recursive: true });
+  sh("init", "-q");
+  fs.writeFileSync(path.join(repo, "README.md"), "# scratch\n");
+  sh("add", "-A");
+  sh("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base");
+  sh("branch", "test/live-run");
+  assert.equal(sh("rev-parse", "--verify", "--quiet", "refs/heads/test/live-run").status, 0,
+    "the branch the lane is about to be registered against really exists");
+
   const seen = [];
   sessions.subscribe(s.key, (e) => { if (e.kind === "run.started") seen.push(e); });
   sessions.send(
@@ -400,6 +489,29 @@ ok("a late subscriber renders the current list from history, from ONE event");
   assert.equal(row.selfDirected, false,
     "a run born in a turn the user started is commissioned work, and the HOST is what says so");
   ok("selfDirected reads false for a user-started turn — read off the session, never off the input");
+
+  // AND THE OTHER HALF OF THE RULE: a lane whose branch does not exist is REFUSED, so a row can
+  // never point at work that is not there. 2026-10-04 this happened for real — a lane briefed
+  // `lane:lane/job-authoring` drove a complete 9/9 run and left a record addressed to a branch
+  // nobody ever cut.
+  const before = worklist.laneRuns("worklist-test").length;
+  sessions.send(
+    s.key,
+    "Call your worklist tool ONCE with source \"lane:test/never-cut\", one item " +
+      "{id:\"1\",text:\"anything\",state:\"active\"}. Then stop and say nothing else."
+  );
+  const dl2 = Date.now() + 120000;
+  while (Date.now() < dl2) {
+    const txt = JSON.stringify(sessions.history(s.key));
+    if (/No branch "test\/never-cut" exists/.test(txt)) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const hist = JSON.stringify(sessions.history(s.key));
+  if (!/never-cut/.test(hist)) console.error("HISTORY TAIL:", hist.slice(-1200));
+  assert.ok(/never-cut/.test(hist), "the refusal reached the agent, naming the branch");
+  assert.equal(worklist.laneRuns("worklist-test").length, before,
+    "and NO run record was written — a refused registration leaves nothing behind");
+  ok("a lane whose branch was never cut is refused BY NAME, and leaves no row pointing at nothing");
 }
 
 // simulate the restart: drop the in-memory session, reopen the same key, and

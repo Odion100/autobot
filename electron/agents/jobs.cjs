@@ -61,13 +61,28 @@ function get(id) {
   const j = readJson(path.join(dirOf(id), "job.json"));
   if (!j) return null;
   const runs = runsOf(id);
+  const text = doc(id);
   return {
     ...j,
     id: slug(j.id || id),
     dir: dirOf(id),
-    doc: doc(id),
+    doc: text,
+    // READ FROM THE DOCUMENT, NOT FROM THE PROJECTION, for the same reason `doc` is: the document
+    // is edited between runs, and a job whose part 2 gained an input this morning must refuse for
+    // it this afternoon without waiting for someone to re-save — and one that dropped an input must
+    // stop demanding it the same way. `job.json` carries the same list for a surface that only
+    // reads the projection; this is the one that answers.
+    requires: requiresIn(text) || [],
     worklistOwner: ownerOf(id),
-    worklist: worklist.read(ownerOf(id)),
+    // THE LIVE LIST, with the same correction as `finishRun` below: the items a run writes land
+    // under `run:<runId>`, so reading only the job owner showed a job mid-flight as having no plan.
+    // Newest run first — `runsOf` already sorts that way.
+    worklist: (() => {
+      const own = worklist.read(ownerOf(id));
+      if (own.length) return own;
+      const latest = runsOf(id)[0];
+      return latest ? worklist.read(`run:${String(latest.id)}`) : [];
+    })(),
     runs: runs.length,
     lastRun: runs[0] || null,
   };
@@ -89,6 +104,126 @@ function list() {
 // here, so a job can never express a field an agent cannot: anything else translates at the SDK
 // boundary forever, and the translation is what rots.
 // ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+// WHAT IT MUST BE GIVEN (RFC-067 §2, part 2). The inputs, NAMED — and named somewhere a machine
+// can read, because a refusal that cannot be computed is a refusal nobody ever gets.
+//
+// THE DECLARATION LIVES IN THE DOCUMENT, in its front matter, for the same reason everything else
+// about a job does: `job.json` is a projection and the document is the job, so a job whose inputs
+// were declared only in the projection could be edited into disagreeing with itself. A job
+// document is a skill-shaped markdown file and already has front matter to put a field in.
+//
+//   ---
+//   requires: ["period", "ledger"]      ← or: requires: period, ledger
+//   ---
+//
+// A JOB THAT DECLARES NOTHING NEEDS NOTHING, and that is a real answer rather than a hole: plenty
+// of jobs take their target from the moment that fired them. What it is NOT is a licence to guess —
+// nothing is being inferred from prose here, because inferring the inputs from a paragraph is the
+// guess part 2 exists to forbid, one level up.
+const toNames = (v) => {
+  const arr = Array.isArray(v)
+    ? v
+    : typeof v === "string"
+      ? v.split(",")
+      : v && typeof v === "object"
+        ? Object.keys(v)
+        : null;
+  if (!arr) return null;
+  const out = [...new Set(arr.map((n) => String(n || "").trim()).filter(Boolean))];
+  return out.length ? out : null;
+};
+
+function requiresIn(text) {
+  // hooks.parseFrontMatter, not a second parser — the hook file and the job document have the same
+  // small, documented front matter, and two parsers for one format is one of them being wrong.
+  const { meta } = hooks.parseFrontMatter(String(text || ""));
+  return toNames(meta.requires);
+}
+
+// An input is MISSING when it is absent or empty. An empty string is not a value a job can act on,
+// so treating it as supplied would be the guess wearing a key.
+const supplied = (v) => !(v === undefined || v === null || (typeof v === "string" && v.trim() === ""));
+
+// The refusal, BY NAME — the whole requirement, and the one the design calls worthless if it is
+// not enforced. It names the job, every input that is missing, and that nothing ran, so the row in
+// the feed is an account a human can act on rather than a silence they have to notice.
+function refusalFor(id, missing = [], declared = []) {
+  const names = missing.map((n) => `\`${n}\``).join(", ");
+  return (
+    `The \`${id}\` job was NOT run: it must be given ${names}, and ${missing.length === 1 ? "it was" : "they were"} ` +
+    `not supplied. A missing input is a refusal, not a guess — nothing was started and no run was opened. ` +
+    `This job declares it must be given: ${declared.join(", ") || "(nothing)"}. ` +
+    `Fix the hook's \`with:\` and it will run on the next match.`
+  );
+}
+
+// WHAT A JOB WAS GIVEN, CHECKED — the gate, and the only way to open a job's run. Answers the same
+// shape whether it passed or failed, so no caller has to know two return conventions, and never
+// throws for a condition that is the system working: a job that does not exist and a job given too
+// little are both refusals with a name in them.
+function check(id, inputs = {}) {
+  const job = get(id);
+  if (!job)
+    return { ok: false, job: null, missing: [], declared: [], refusal: `There is no job named \`${slug(id)}\` — nothing ran.` };
+  const declared = Array.isArray(job.requires) ? job.requires : [];
+  const given = inputs && typeof inputs === "object" ? inputs : {};
+  const missing = declared.filter((n) => !supplied(given[n]));
+  return {
+    ok: missing.length === 0,
+    job,
+    declared,
+    missing,
+    refusal: missing.length ? refusalFor(job.id, missing, declared) : "",
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE RUN OPENS AND CLOSES, AND IT IS THE WORKLIST'S RUN — not a second one. A job's progress model
+// is already the worklist (§3), `allDone` is already how completion is OBSERVED rather than
+// declared, and `source: "job:<id>"` is already the source `job-authoring` tells a job to write and
+// `clearedBy` already resolves for a persisting hook. So there is nothing here to invent: this opens
+// that run at the moment the job is GIVEN, so the record exists before the agent has written a word.
+//
+// RESUME BEFORE MINT. A second pointer for the same job in the same session must land on the same
+// run — openRunFor is what makes that true, and it is also what makes the agent's own first
+// `worklist.set({ source: "job:<id>" })` continue THIS run instead of minting a rival. That join is
+// on (source, session), which is why `session` is required here and why a fire path that cannot name
+// the session cannot honestly open a run.
+//
+// ONE PENDING ITEM, NAMED FOR THE JOB. A run with no items can never be all-done, so it could never
+// close; this way the run says "given, not started" from birth and reads as exactly that if nobody
+// ever picks it up. A job that dies stays where it died — nothing here sweeps it.
+function given(id, { session = "", inputs = {}, why = "", event = null } = {}) {
+  const gate = check(id, inputs);
+  if (!gate.ok) return gate;
+  if (!String(session || "").trim())
+    return { ...gate, ok: false, refusal: `The \`${gate.job.id}\` job needs a session to open its run against — none was given, so nothing ran.` };
+
+  const source = ownerOf(gate.job.id);
+  const back = worklist.openRunFor(session, source);
+  const runId = back || worklist.newRunId();
+  const items = back
+    ? worklist.read(worklist.runOwner(runId))
+    : [{ id: "1", text: `${gate.job.name} — given, not started`, state: "pending" }];
+  worklist.writeRun(runId, session, items, source, { selfDirected: true });
+  // The job's OWN record of the run (§2.4) — why it ran, which is the question you must be able to
+  // answer at 3am. Only for a run being born: a resumed one already has its receipt and rewriting it
+  // would re-date the start of work that began earlier.
+  if (!back) startRun(gate.job.id, { runId, why, event });
+  return { ...gate, runId, source, items, resumed: !!back };
+}
+
+// AND THE CLOSE IS AN OBSERVATION, NOT A CALL AN AGENT MAKES. `allDone` on the persisted items is
+// the only evidence; a job that says it finished with an item still active has not. Answers false
+// and writes nothing in that case, because where a procedure died is the record.
+function done(id, runId) {
+  const items = worklist.read(worklist.runOwner(String(runId || "")));
+  if (!worklist.allDone(items)) return false;
+  finishRun(id, runId, { status: "finished" });
+  return true;
+}
+
 function save(input = {}) {
   const id = slug(input.id);
   if (!id) throw new Error("a job needs an id");
@@ -99,28 +234,36 @@ function save(input = {}) {
   if (!text) throw new Error("a job needs its document — job.json is a projection of it, not a substitute");
 
   const def = definitions.normalize({ name: id, ...(input.definition || {}) }).def;
-  const trigger = input.trigger && typeof input.trigger === "object" ? input.trigger : null;
-  if (trigger) {
-    if (!hooks.isEvent(trigger.on) && !VIRTUAL_EVENTS.includes(String(trigger.on || "")))
-      throw new Error(`"${trigger.on}" is not an event this system emits, so the job would never fire`);
-    if (trigger.when && typeof trigger.when !== "object") throw new Error("trigger.when must be an object");
-  }
+  // NO TRIGGER LIVES HERE ANY MORE (2026-10-07). A job used to carry its own `trigger: {on, when}`
+  // and `onMissed`, validated here and matched by `due()` — the pre-RFC design, from before a job
+  // was "a skill with the job parts". It was removed rather than wired, because it could not be
+  // wired: `given()` is the only door that opens a run and it REFUSES without a session, and a job
+  // matched straight off an event has no session to run in. The hook path answers that by
+  // construction — the carry names the agent — so the job's own trigger was a field that could
+  // only ever half-work. RFC-067 §3: a job is triggered exactly as a skill is. One path.
 
   const prev = readJson(path.join(dirOf(id), "job.json")) || {};
   const rec = {
     id,
     name: String(input.name || prev.name || id),
     definition: def,
-    trigger,
     // The two questions a run is judged against. `confirmation` is checkable by the job itself —
     // it is how a run knows it finished rather than stopped. `evaluation` is the human's, and §5
     // is why it is stored rather than assumed: a rated history is task learning arriving as a
     // byproduct, and an unrated one is a pile of transcripts.
     confirmation: String(input.confirmation || prev.confirmation || "").trim(),
     evaluation: String(input.evaluation || prev.evaluation || "").trim(),
-    // §2.3 — the answer to downtime, recorded per job because both branches are defensible and
-    // only silence is not. Default skip; `run` means catch up.
-    onMissed: input.onMissed === "run" ? "run" : "skip",
+    // RFC-067 §2 PART TWO — WHAT IT MUST BE GIVEN, as names a machine can compare. The prose in
+    // the document is for the human reading part 2; this is the same declaration in the one form
+    // `given()` can refuse against.
+    //
+    // DERIVED FROM THE DOCUMENT AND FROM NOTHING ELSE — no `input.requires` parameter and no
+    // carry-forward from the previous projection, both of which were tried and both of which make
+    // the same mistake: they let the projection outlive the document. A job whose part 2 drops an
+    // input would keep demanding it, which is a refusal nobody can remove by editing the job, and
+    // §2.1's inversion exactly — the projection having become the authority. Every other field here
+    // carries forward because its only home is this file; this one has a home that outranks it.
+    requires: requiresIn(text) || [],
     enabled: input.enabled === false ? false : true,
     createdAt: prev.createdAt || Date.now(),
     updatedAt: Date.now(),
@@ -130,12 +273,6 @@ function save(input = {}) {
   fs.writeFileSync(path.join(dirOf(id), "job.json"), JSON.stringify(rec, null, 2));
   return get(id);
 }
-
-// Events that no module emits yet but a job may legitimately be written against: the clock and
-// external arrivals (§2.3). They are listed rather than waved through, so a typo is still caught —
-// the check exists because a job on an event nobody emits is silent, and silence is the failure
-// this whole document is about.
-const VIRTUAL_EVENTS = ["schedule.due", "schedule.missed", "external.arrived"];
 
 function remove(id) {
   try {
@@ -187,7 +324,18 @@ function finishRun(id, runId, patch = {}) {
     // because the live list moves on and a run record is an account of a moment. This is the only
     // place the worklist is duplicated, and it is duplicated on purpose: history is a copy by
     // definition.
-    worklist: worklist.read(ownerOf(id)),
+    //
+    // READ OFF THE RUN, NOT OFF THE JOB (fixed 2026-10-08). It read `ownerOf(id)` — owner
+    // `job:<id>` — while every item is written by `worklist.writeRun` under owner `run:<runId>`.
+    // So the field that is the whole account of the moment came back `[]` on every job that ever
+    // closed, and the claim above was false for as long as it existed. It survived green because
+    // the suite asserted `status`, `finishedAt` and `why` and never this. The job owner is kept as
+    // a fallback: it is where the design always said the list lives, and an older record written
+    // that way must not lose its history to this fix.
+    worklist: (() => {
+      const fromRun = worklist.read(`run:${String(runId)}`);
+      return fromRun.length ? fromRun : worklist.read(ownerOf(id));
+    })(),
   };
   fs.writeFileSync(file, JSON.stringify(next, null, 2));
   return next;
@@ -195,6 +343,34 @@ function finishRun(id, runId, patch = {}) {
 
 // §5 — the rating is the loop. Separate from finishRun because a rating arrives when a human READS
 // the report, which is later, and often never if the surface makes them navigate to it.
+// THE RUN POINTS AT A REPORT, AND STORES NONE (2026-10-08, his call: *"you have a job, it just
+// needs to point to a report"*). RFC-066 §5 is the settled half and it was settled by deleting the
+// alternative: *"a report already has a home. `show` files one into the reports panel,
+// `nav({report})` opens it, `comments`/`reply` thread on it — the surface he actually reads reports
+// in."* A second report store hanging off this record is the exact thing that retraction removed,
+// so what lands here is a PATH and a label — the pointer the job card follows, and nothing a
+// drifting copy could be made out of.
+//
+// WRITTEN FROM THE SESSION, not by the agent asking. An agent files its report with `show` like
+// anything else; the host notices that a job's run is open in that session and stamps it. There is
+// no verb for an agent to remember and nothing it can claim: the pointer exists because a document
+// was really filed.
+function reported(id, runId, { path: p = "", label = "" } = {}) {
+  const file = path.join(runsDirOf(id), `${String(runId)}.json`);
+  const rec = readJson(file);
+  if (!rec) return null;
+  const at = String(p || "").trim();
+  if (!at) return rec;
+  // THE NEWEST FILING WINS, and the earlier ones are kept. A job that files twice — a draft and
+  // then the real thing — would otherwise lose the first silently, and "what did it hand me" is
+  // the one question this field exists to answer.
+  const prior = Array.isArray(rec.reports) ? rec.reports : [];
+  const reports = [...prior.filter((r) => r.path !== at), { path: at, label: String(label || "").trim(), ts: Date.now() }];
+  const next = { ...rec, reports, report: reports[reports.length - 1] };
+  fs.writeFileSync(file, JSON.stringify(next, null, 2));
+  return next;
+}
+
 function rateRun(id, runId, { rating, note = "" } = {}) {
   const file = path.join(runsDirOf(id), `${String(runId)}.json`);
   const rec = readJson(file);
@@ -204,23 +380,8 @@ function rateRun(id, runId, { rating, note = "" } = {}) {
   return next;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Matching — §1, and the whole reason this module is short. Jobs build ON the hooks seam, not
-// beside it: `matchesWhen` is the matcher hooks already use, so a job trigger and a hook condition
-// can never mean different things by the same JSON. A second dispatch path would duplicate
-// matching, guards, scope and receipts, and would be the half that drifts.
-// ---------------------------------------------------------------------------------------------
-function due(event = {}) {
-  const kind = String(event.kind || "");
-  if (!kind) return [];
-  return list().filter(
-    (j) => j.enabled && j.trigger && j.trigger.on === kind && hooks.matchesWhen(j.trigger.when, event)
-  );
-}
-
 module.exports = {
   DIR,
-  VIRTUAL_EVENTS,
   dirOf,
   ownerOf,
   doc,
@@ -228,9 +389,16 @@ module.exports = {
   list,
   save,
   remove,
+  // RFC-067 §2 part 2 and §3 — the gate, the giving, and the close. `check` answers "was this job
+  // given what it declared?"; `given` is the only door that opens a job's run, so a run cannot
+  // exist for a job that was given too little; `done` observes the close off the run record.
+  requiresIn,
+  check,
+  given,
+  done,
   runsOf,
   startRun,
   finishRun,
+  reported,
   rateRun,
-  due,
 };
