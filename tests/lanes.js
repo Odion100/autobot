@@ -187,4 +187,65 @@ const lanes = (identity = {}) =>
   assert.ok(/NO BASE RECORDED/.test(blind), blind);
   ok("a hub that cannot name a commit records no base AND says the receipt is a date and nothing more");
 }
+
+// ---------------------------------------------------------------------------------------------
+// A LANE'S BRANCH MAY LIVE IN A COUPLED REPO (2026-10-13). Registration ran `git rev-parse`
+// against the session's cwd and nothing else, so a branch cut in autobot could not be registered
+// from a systemview session — and the refusal it printed told the agent to cut a branch it had
+// already cut. A proactive run died on exactly that. These claims are about `repoHolding`, the
+// resolution that replaced it: real git, real registry, because "where does this branch live" is
+// the rule under test and stubbing it would test nothing.
+{
+  const sessions = require("../electron/agents/sessions.cjs");
+  const { execFileSync } = require("node:child_process");
+  const fsx = require("node:fs");
+  const pathx = require("node:path");
+  const osx = require("node:os");
+
+  const here = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  const mine = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: here, encoding: "utf8" }).trim();
+
+  assert.equal(sessions.repoHolding(mine, here), here);
+  ok("the session's own folder is tried first and wins when it holds the branch");
+
+  assert.equal(sessions.repoHolding("lane/nobody-ever-cut-this", here), null);
+  ok("a branch that exists nowhere still resolves to nothing — the refusal still refuses");
+
+  assert.equal(sessions.repoHolding("", here), null);
+  assert.equal(sessions.repoHolding(null, here), null);
+  ok("an empty or missing branch name is not a lookup, it is a null");
+
+  // THE CASE THAT WAS IMPOSSIBLE. Read the registry the way the resolution does and pick any root
+  // that is NOT the cwd — then its own current branch must be found from here. Self-configuring on
+  // purpose: hard-coding a repo would make this claim a fact about one machine.
+  // A WORKTREE SHARES ITS PARENT'S REFS, which is what made the first version of this claim wrong:
+  // autobot's own branch resolved to this worktree, correctly. So the candidate must be a branch
+  // genuinely INVISIBLE from here — checked with git directly rather than through the code under test.
+  const visibleHere = (b) => {
+    try {
+      return execFileSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${b}`], { cwd: here, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0;
+    } catch { return false; }
+  };
+  let other = null;
+  try {
+    const map = JSON.parse(fsx.readFileSync(pathx.join(osx.homedir(), ".autobot", "projects.json"), "utf8"));
+    for (const dir of Object.values(map)) {
+      if (typeof dir !== "string" || dir === here || !fsx.existsSync(pathx.join(dir, ".git"))) continue;
+      try {
+        const b = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+        if (!b || b === "HEAD" || visibleHere(b)) continue;
+        other = { dir, b };
+        break;
+      } catch { /* not a readable repo — not this claim's business */ }
+    }
+  } catch { /* no registry on this machine */ }
+
+  if (other) {
+    assert.equal(sessions.repoHolding(other.b, here), other.dir);
+    ok(`a branch living only in a COUPLED repo resolves to that repo (${other.b} -> ${other.dir})`);
+  } else {
+    ok("no second registry repo on this machine — the coupled-repo claim had nothing to assert against");
+  }
+}
+
 console.log(`\n${n} claims held — the lane verb`);

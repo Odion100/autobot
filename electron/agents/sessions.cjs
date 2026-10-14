@@ -14,6 +14,50 @@ const path = require("path");
 
 const HISTORY_LIMIT = 2000;
 
+// WHICH REPO HOLDS A LANE'S BRANCH — and the answer is not always the session's own folder.
+//
+// The work here is full-stack and coupled across repos: a SystemView change routinely needs
+// autobot's `electron/`, so the branch for that half is cut in autobot while the session's cwd is
+// systemview. The lane guard below used to run `git rev-parse` against `s.cwd` and nothing else,
+// which made every such lane UNREGISTERABLE — and the refusal it printed named the branch and the
+// fix as though the fix were one command away, when no command could satisfy it. A proactive run
+// hit exactly that on 2026-10-13: branch cut in autobot, registration refused from a systemview
+// session, so the work could not be handed over at all.
+//
+// The session's own folder is tried FIRST — that is the common case and it costs one spawn. The
+// registry's other roots are only consulted when that misses, and the holder is returned rather
+// than a boolean so a caller can say WHERE the branch lives instead of only that it exists.
+const PROJECTS_FILE = () => path.join(require("os").homedir(), ".autobot", "projects.json");
+function branchIn(dir, branch) {
+  if (!dir || !branch) return false;
+  try {
+    return (
+      require("child_process").spawnSync(
+        "git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+        { cwd: dir, encoding: "utf8", timeout: 4000 },
+      ).status === 0
+    );
+  } catch {
+    return false;
+  }
+}
+function repoHolding(branch, cwd) {
+  if (!branch) return null;
+  if (branchIn(cwd, branch)) return cwd;
+  let map = {};
+  try {
+    map = JSON.parse(fs.readFileSync(PROJECTS_FILE(), "utf8")) || {};
+  } catch {
+    return null; // no registry readable — the session's own folder was the whole answer
+  }
+  if (!map || typeof map !== "object" || Array.isArray(map)) return null;
+  for (const dir of Object.values(map)) {
+    if (typeof dir !== "string" || !dir || dir === cwd) continue;
+    if (branchIn(dir, branch)) return dir;
+  }
+  return null;
+}
+
 const sessions = new Map(); // key -> session record
 
 // THE LAST QUOTA REPORT the API gave anyone — {status, type, resetsAt(sec)} — cached so ambient
@@ -1300,20 +1344,17 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       // the fix is one command away and the agent is holding it.
       if (String(source).startsWith("lane:")) {
         const branch = String(source).slice(5).trim();
-        const known =
-          !!branch && !!s.cwd &&
-          require("child_process").spawnSync(
-            "git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
-            { cwd: s.cwd, encoding: "utf8", timeout: 4000 },
-          ).status === 0;
+        const holder = branch ? repoHolding(branch, s.cwd) : null;
+        const known = !!holder;
         // THROWN, NOT RETURNED. `onSet`'s return value is discarded by the tool handler, which
         // builds its own reply — so an early return here would skip the write and still answer
         // "worklist: 0/3 done". A throw is the only thing that reaches the agent.
         if (!known)
           throw new Error(
-            `No branch "${branch}" exists in ${s.cwd || "this session's folder"}, so there is nothing to ` +
-              `register as a lane. A \`lane:\` source is a promise that a branch exists — the row it draws ` +
-              `points at work, and a row pointing at nothing is worse than no row at all. Cut it first ` +
+            `No branch "${branch}" exists in ${s.cwd || "this session's folder"} or in any other ` +
+              `project this machine knows, so there is nothing to register as a lane. A \`lane:\` source ` +
+              `is a promise that a branch exists — the row it draws points at work, and a row pointing at ` +
+              `nothing is worse than no row at all. Cut it first ` +
               `(\`git worktree add -b ${branch} <path>\`) and write the list again, or give this work a ` +
               `source with no branch in it.`
           );
@@ -1989,6 +2030,7 @@ function transcriptsFor(cwd, projectCode) {
 module.exports = {
   sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
   composedStamp, // test seam: proves which fields staleness watches, and that the hot path is cached
+  repoHolding, // test seam: a lane's branch may live in a COUPLED repo, not the session's own folder
   purgeAgent, agentRuns,
   open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, stripRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
