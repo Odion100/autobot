@@ -356,6 +356,35 @@ function laneRuns(projectCode) {
   );
 }
 
+// THE STRIP'S ROWS, ALL OF THEM — lanes, jobs and skills, read off the same run files and for the
+// same reason `laneRuns` exists: a row whose debris is still on disk must survive a refresh.
+//
+// His report, 2026-10-14: *"the job rows disappeared, I didn't delete them."* They had. A job or
+// skill row came only from the session's in-memory events, so a SHELL restart erased every one of
+// them while lane rows stood — and the run records were on disk the whole time, which made the
+// strip say a job never ran while the disk said it did. Worst for an unattended job: it fires at
+// 3am, files its account, closes, and the only trace is a card that disappears on the next restart.
+//
+// LANES ARE UNBOUNDED AND THE REST ARE NOT, which is design rather than oversight. A lane row
+// stands until he clears it (RFC-059); a project accumulates every job and skill run it has ever
+// had — 46 of them on this machine — and forty rows of history is not a strip, it is a log. So a
+// non-lane row shows while its run is OPEN, at any age, because a run that died three days ago is
+// exactly the thing worth seeing; otherwise only while it closed recently.
+const STRIP_RECENT_MS = 24 * 60 * 60 * 1000;
+function stripRuns(projectCode, now = Date.now()) {
+  const pre = `session:${projectCode}:`;
+  return all().filter((r) => {
+    if (!r.owner.startsWith("run:") || !r.session.startsWith(pre)) return false;
+    const src = String(r.source || "");
+    if (src.startsWith("lane:")) return true;
+    if (!src.startsWith("job:") && !src.startsWith("skill:")) return false;
+    // OPEN AT ANY AGE. `allDone` is the same predicate the close stamp rides, so "open" here means
+    // exactly what it means everywhere else rather than a second definition of finished.
+    if (!allDone(r.items || [])) return true;
+    return (Number(r.updatedAt) || 0) >= now - STRIP_RECENT_MS;
+  });
+}
+
 // IS THIS BRANCH REGISTERED AS A LANE — asked of the BRANCH, across every run on disk, and
 // deliberately not project-scoped (2026-10-08).
 //
@@ -684,4 +713,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, stripRuns, STRIP_RECENT_MS, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

@@ -68,6 +68,7 @@ function register(surfaceOf) {
   ipcMain.handle("agent:whiteboard-wipe", (_e, key) => sessions.wipeWhiteboard(key));
   // standing lanes: run files by project, and the user's confirmed delete of one
   ipcMain.handle("agent:lane-runs", (_e, key) => sessions.laneRuns(key));
+  ipcMain.handle("agent:strip-runs", (_e, key) => sessions.stripRuns(key));
   ipcMain.handle("agent:lane-run-delete", (_e, key, id) => sessions.deleteLaneRun(key, id));
   // model switching — setModel is a request; truth arrives on the next re-init
   ipcMain.handle("agent:models", (_e, key) => sessions.models(key));

@@ -518,6 +518,52 @@ ok("a late subscriber renders the current list from history, from ONE event");
 // assert a subscriber that has seen NOTHING still gets the plan.
 await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
 
+// THE STRIP READS RUN FILES FOR EVERY KIND OF ROW, not only lanes (2026-10-14). His report: "the
+// job rows disappeared, I didn't delete them" — they came from in-memory session events, so a shell
+// restart erased them while lane rows, which are read off disk, stood.
+{
+  const now = Date.now();
+  const sess = "session:stripproj:abc";
+  // writeRun stamps its own `updatedAt`, so the record is aged on disk afterwards — the point of
+  // these claims is the age test, and faking the clock would test the fake.
+  const mk = (id, source, items, updatedAt) => {
+    worklist.writeRun(id, sess, items, source);
+    const f = path.join(worklist.DIR, `run-${id}.json`);
+    const rec = JSON.parse(fs.readFileSync(f, "utf8"));
+    rec.updatedAt = updatedAt;
+    fs.writeFileSync(f, JSON.stringify(rec, null, 2));
+  };
+  const DONE = [{ id: "1", text: "a", state: "done" }];
+  const OPEN = [{ id: "1", text: "a", state: "done" }, { id: "2", text: "b", state: "active" }];
+
+  mk("s1", "lane:lane/ancient", DONE, now - 400 * 24 * 3600 * 1000);
+  mk("s2", "job:fresh", DONE, now - 60 * 1000);
+  mk("s3", "job:ancient", DONE, now - 400 * 24 * 3600 * 1000);
+  mk("s4", "skill:died-long-ago", OPEN, now - 400 * 24 * 3600 * 1000);
+  mk("s5", "something-else:x", DONE, now - 60 * 1000);
+
+  const got = worklist.stripRuns("stripproj", now).map((r) => r.source);
+
+  got.includes("lane:lane/ancient")
+    ? ok("a LANE row is unbounded — it stands at any age, because it dies at cleanup and nothing else")
+    : bad("an old lane row was dropped");
+  got.includes("job:fresh")
+    ? ok("a job that closed recently still draws its row, which is the whole report: a 3am run leaves a trace")
+    : bad("a recently closed job row was dropped");
+  !got.includes("job:ancient")
+    ? ok("a job closed long ago does NOT — forty rows of history is a log, not a strip")
+    : bad("an ancient closed job row came back");
+  got.includes("skill:died-long-ago")
+    ? ok("an OPEN run draws at any age — a procedure that died three days ago is exactly what to see")
+    : bad("a dead run was hidden because it was old");
+  !got.includes("something-else:x")
+    ? ok("a source that is neither lane, job nor skill draws nothing")
+    : bad("an unknown source drew a row");
+  worklist.stripRuns("otherproj", now).length === 0
+    ? ok("and it is project-scoped, like laneRuns — another project's runs are not this chat's rows")
+    : bad("stripRuns leaked another project's runs");
+}
+
 fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} claims held — the agent worklist\n`);
 process.exit(0);

@@ -1636,6 +1636,12 @@ function wipeWhiteboard(key) {
 function laneRuns(key) {
   return worklist.laneRuns(String(key || "").split(":")[0]);
 }
+
+// EVERY ROW THE STRIP DRAWS, not just the lanes. Additive beside `laneRuns` rather than a widening
+// of it: that one is also read by `runIdForLane` and the receipt path, where "lane" means lane.
+function stripRuns(key) {
+  return worklist.stripRuns(String(key || "").split(":")[0]);
+}
 const deleteLaneRun = (_key, id) => worklist.deleteRun(id);
 
 // A LANE DISAPPEARING IS AN EVENT — and until now it was the only lifecycle moment that wasn't.
@@ -1984,7 +1990,7 @@ module.exports = {
   sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
   composedStamp, // test seam: proves which fields staleness watches, and that the hot path is cached
   purgeAgent, agentRuns,
-  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
+  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, stripRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
   // file by path; with the name changing, a missed caller reads an empty object

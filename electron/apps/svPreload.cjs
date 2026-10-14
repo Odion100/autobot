@@ -199,6 +199,7 @@ const FULL = {
         // standing lanes (RFC-059): every lane run for this PROJECT — refresh-proof, read from
         // disk — and the user's confirmed delete of one
         laneRuns: () => ipcRenderer.invoke("agent:lane-runs", key),
+        stripRuns: () => ipcRenderer.invoke("agent:strip-runs", key),
         deleteLaneRun: (id) => ipcRenderer.invoke("agent:lane-run-delete", key, id),
         // model switching — SDK menu + a request whose truth is the next re-init
         models: () => ipcRenderer.invoke("agent:models", key),
