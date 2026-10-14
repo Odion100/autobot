@@ -767,14 +767,22 @@ function toolsFor(identity = {}) {
       ),
       tool(
         "board",
-        "His board — the notes he accumulates for agents between sessions. Read it, or add a " +
-          "note / reply to one.",
+        "His board — the notes he accumulates for agents between sessions. Read it, add a note, " +
+          "reply to one, or REMOVE one whose account has landed. There is no done state on purpose: " +
+          "a card is deleted when its work has been reported somewhere, so the number of cards is " +
+          "the number of things still outstanding. Remove it only once the account exists — a " +
+          "report, a lane, a commit — and if you only did part of a card, add the remainder back as " +
+          "its own note rather than deleting the whole thing.",
         {
           projectCode: z.string(),
           name: z.string().optional().describe("a named board; default is the main one"),
           add: z.string().optional().describe("a note to add"),
           replyText: z.string().optional().describe("a reply to an existing note"),
           at: z.union([z.string(), z.number()]).optional().describe("which note the reply targets"),
+          remove: z
+            .union([z.string(), z.number()])
+            .optional()
+            .describe("the ID of a card to take off the board — its id, never its position; the removed text is handed back so it is never lost in the act"),
         },
         async (a) => {
           try {
