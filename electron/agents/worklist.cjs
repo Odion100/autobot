@@ -136,12 +136,13 @@ function save(owner, patch) {
     // (a set() that clobbered the board made the two features enemies). `broughtIn` was the first
     // passenger; `selfDirected` (RFC-066) is the newest, and it rides for the same reason: it is
     // stamped once at a run's birth, so every later list write is a write that does not know it.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, selfDirected: cur.selfDirected, ...patch, updatedAt: Date.now() };
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, ...patch, updatedAt: Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
     if (!next.broughtIn) delete next.broughtIn;
     if (!next.status) delete next.status;
+    if (!next.repo) delete next.repo;
     // FALSE IS ABSENT, ON PURPOSE. Every run record already on disk is commissioned work, so
     // "no key" and "false" must be the same answer — which is what makes this need no migration.
     if (!next.selfDirected) delete next.selfDirected;
@@ -160,6 +161,20 @@ function writeBoard(owner, text) {
   const t = String(text || "").slice(0, 20000);
   save(owner, { whiteboard: t || undefined });
   return t;
+}
+
+// WHICH REPO HOLDS THE LANE'S BRANCH — stamped once at registration, where repoHolding just
+// answered it (his catch: autobot lanes and systemview lanes read identically on the strip, so
+// the row could not answer "is this repo clean"). A project CODE when the registry knows the
+// folder, the folder's basename when it does not. On the record, so the row survives restarts
+// like everything else the strip draws.
+function markLaneRepo(id, repo) {
+  const owner = runOwner(String(id || ""));
+  const name = String(repo || "").trim().slice(0, 80);
+  if (!name) return null;
+  try { if (!fs.existsSync(fileFor(owner))) return null; } catch { return null; }
+  save(owner, { repo: name });
+  return name;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -586,6 +601,8 @@ function all() {
         // THE HEADLINE, when one was set. null — never undefined — so a surface can render the
         // ABSENCE of a statement, which is the ordinary case for a lane nobody has spoken about.
         status: r.status && typeof r.status === "object" && r.status.text ? r.status : null,
+        // WHICH REPO the lane's branch lives in — "" when never stamped, which old records are.
+        repo: typeof r.repo === "string" ? r.repo : "",
         // ABSENT READS FALSE. No migration: every record written before this existed was
         // commissioned by a human asking for it.
         selfDirected: r.selfDirected === true,
@@ -739,4 +756,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

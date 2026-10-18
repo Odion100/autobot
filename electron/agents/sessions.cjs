@@ -1383,6 +1383,16 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         if (jr) {
           try { require("./jobs.cjs").laneCut(jr.job, jr.runId, { branch, repo: holder }); } catch {}
         }
+        // WHICH REPO, held for the lane's own record — the row's answer to "is this repo clean"
+        // (his catch: autobot and systemview lanes read identically on the strip). The registry's
+        // code when it knows the folder; the folder's own name when it does not.
+        s.pendingLaneRepo = (() => {
+          try {
+            const map = JSON.parse(fs.readFileSync(PROJECTS_FILE(), "utf8")) || {};
+            for (const [code, dir] of Object.entries(map)) if (dir === holder) return code;
+          } catch {}
+          return require("path").basename(String(holder || ""));
+        })();
       }
       if (!s.currentRun || s.currentRun.source !== source) {
         // resume the unfinished run this session already started on this source — a harness
@@ -1423,6 +1433,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       // a lane's later list writes — possibly landing in a turn the human did start — cannot
       // relabel the provenance of the run.
       worklist.writeRun(s.currentRun.id, s.worklistOwner, items, source, { selfDirected: s.turnFromHook === true });
+      // the repo resolved at the lane verify lands the moment the record exists — synchronous,
+      // because a stamp scheduled for "later" raced the very first read of the row
+      if (s.pendingLaneRepo && String(source).startsWith("lane:")) {
+        try { worklist.markLaneRepo(s.currentRun.id, s.pendingLaneRepo); } catch {}
+        s.pendingLaneRepo = null;
+      }
       s.worklistSource = source;
       emit(s, { kind: "todo.updated", items, source, run: s.currentRun.id });
       if (worklist.allDone(items)) {

@@ -144,6 +144,13 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
       "a later list write must not clobber the receipt");
     ok("a list write preserves the receipt — the same carry-forward the whiteboard needed");
 
+    // the repo stamp rides the same carry — set once, survives later writes, "" when never set
+    assert.equal(worklist.markLaneRepo(lane, "autobot"), "autobot", "markLaneRepo answers with what it stamped");
+    worklist.writeRun(lane, "session:proj-a:old-session-id", [{ id: "1", text: "build", state: "done" }], "lane:test/a");
+    assert.equal(worklist.laneRuns("proj-a")[0].repo, "autobot", "a later list write keeps the repo stamp");
+    assert.equal(worklist.markLaneRepo("no-such-run", "x"), null, "a repo stamp never mints a run");
+    ok("a lane's repo is a passenger like the receipt — stamped once, carried forever");
+
     // IT CANNOT MINT A LANE. save() would create the file, and a receipt for a run nobody ran is
     // exactly the thing that accumulates in the background.
     const ghost = worklist.newRunId();
@@ -497,6 +504,12 @@ ok("a late subscriber renders the current list from history, from ONE event");
   const row = worklist.laneRuns("worklist-test").find((r) => r.source === "lane:test/live-run");
   assert.ok(row, "the run record exists, found the way a lane row finds it");
   ok("a live agent opened a sourced run through `set` and it is on disk");
+  // WHICH REPO, on the record — stamped at registration from the repo that held the branch. The
+  // scratch repo is registered with no project code, so the folder's own name is the answer.
+  await new Promise((r) => setTimeout(r, 300)); // the stamp rides a microtask behind the write
+  const stamped = worklist.laneRuns("worklist-test").find((r) => r.source === "lane:test/live-run");
+  assert.equal(stamped.repo, "work", "the lane row says which repo holds its branch");
+  ok("a lane row names its repo — the strip can answer 'is this repo clean'");
 
   // THE TURN WAS STARTED BY THE HUMAN — sessions.send() above is the user's message, so the host's
   // own answer to "did anyone send me here" must be no-this-was-asked-for.
