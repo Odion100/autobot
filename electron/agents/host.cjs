@@ -28,7 +28,11 @@ function resolveCwd(projectCode, cwd) {
     const map = JSON.parse(fs.readFileSync(PROJECTS, "utf8"));
     if (map[projectCode] && fs.existsSync(map[projectCode])) return map[projectCode];
   } catch {}
-  return os.homedir();
+  // AN UNKNOWN PROJECT IS A REFUSAL, NEVER A GUESS — the home fallback ran a :::cmd block's bundle
+  // rebuild in ~ when the block named a project that wasn't registered: "run in that project's
+  // root" silently became "run in your home folder". Refusing surfaces as the block's own
+  // "didn't run" face, which is the honest answer; home is only ever deliberate ("browser" above).
+  throw new Error(`no project "${projectCode}" is registered — nowhere to run this`);
 }
 
 // key -> Map<webContents, unsubscribe>

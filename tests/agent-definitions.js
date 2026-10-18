@@ -140,15 +140,32 @@ ok("list() returns whole records, newest first");
 // His call: implicit is a migration state, not a species. A run with no definition
 // must GET one — and a project's many conversations must stay ONE agent, or a busy
 // day writes fifty junk files.
-const a1 = definitions.adopt({ projectCode: "buAPI", cwd: "/tmp/bu", permissionMode: "default" });
+const a1 = definitions.adopt({ projectCode: "adoptee", cwd: "/tmp/bu", permissionMode: "default" });
 assert.ok(a1 && a1.id, "a run with no definition gets one");
-const a2 = definitions.adopt({ projectCode: "buAPI", cwd: "/tmp/bu", permissionMode: "default" });
+const a2 = definitions.adopt({ projectCode: "adoptee", cwd: "/tmp/bu", permissionMode: "default" });
 assert.equal(a2.id, a1.id, "same placement adopts the SAME agent, not a second one");
-const a3 = definitions.adopt({ projectCode: "buAPI", cwd: "/tmp/other" });
-assert.notEqual(a3.id, a1.id, "a different directory is a different agent");
+const a3 = definitions.adopt({ projectCode: "adoptee", cwd: "/tmp/other" });
+assert.equal(a3.id, a1.id, "a different directory within the SAME project is the SAME agent — adopt's own words: five conversations, one agent");
 assert.equal(definitions.adopt({}), null, "no placement, nothing adopted — never a nameless file");
 assert.equal(definitions.get(a1.id).adopted, true, "adopted agents are marked, never disguised as authored");
-ok("adoption is per-placement, marked, and never nameless");
+ok("adoption is per-project, marked, and never nameless");
+
+// ---- adoption never disarms a configured agent ----------------------------------
+// It happened live: a configured def (hooks, chores, prompt) sat at the plain id with one cwd; a
+// session opened with another cwd, adopt() fell to the suffix path and minted a HOOKLESS twin —
+// every idle behavior silently disarmed, the configured def abandoned. Same project must resolve
+// to the same def, config intact, twin never minted.
+definitions.save({ id: "cfg-proj", name: "cfg-proj", projectCode: "cfg-proj", cwd: "/tmp/cfg-a",
+  prompt: "the role", hooks: ["h1", "h2"], chores: [{ what: "skill:x", period: "daily" }] });
+const kept = definitions.adopt({ projectCode: "cfg-proj", cwd: "/tmp/cfg-b" });
+assert.equal(kept.id, "cfg-proj", "a cwd variation adopts the configured def, never a twin");
+assert.deepEqual(definitions.get("cfg-proj").def.hooks, ["h1", "h2"], "its hook carries survive untouched");
+assert.ok(Array.isArray(definitions.get("cfg-proj").def.chores) && definitions.get("cfg-proj").def.chores.length === 1,
+  "and its chore lines survive");
+assert.equal(definitions.get("cfg-proj").def.prompt, "the role", "and its prompt");
+assert.ok(!definitions.list().some((d) => d.id.startsWith("cfg-proj-")),
+  "no suffixed twin exists anywhere");
+ok("adoption never disarms a configured agent — same project, same def, config intact");
 
 // ---- THE ROUND TRIP: reading a record and saving it back must not wipe it -------
 // Found 2026-09-09 reviewing systemview-0c's docs/skills work. normalize() reads

@@ -482,17 +482,19 @@ function adopt({ projectCode, cwd, permissionMode, model } = {}) {
       if (topOf(cwd) === topOf(os.tmpdir())) return null;
     }
   } catch {}
-  const existing = list().find(
-    (d) => d.adopted && d.projectCode === projectCode && (d.cwd || null) === (cwd || null)
-  );
+  // ONE PROJECT, ONE AGENT — whatever cwd this session opened with. A cwd variation used to fall
+  // through to the suffix path below and mint a HOOKLESS twin (it happened: systemview-test-16jo),
+  // abandoning the configured def — hooks, chores, prompt, every idle behavior — at the plain id,
+  // silently disarmed. A definition supplies defaults, never an override, so the explicit open cwd
+  // still wins at open(); the def's recorded cwd is just the default placement.
+  const existing = list().find((d) => d.projectCode === projectCode);
   if (existing) return resolve(existing.id);
-  // THE ID IS DERIVED FROM THE NAME, so two placements of the same project would
-  // both slug to "buapi" and the second would OVERWRITE the first — losing the
-  // first's directory silently. Caught by the test, not by reading. A taken id
-  // belonging to a different placement gets a stable suffix from the path.
+  // THE ID IS DERIVED FROM THE NAME, so two DIFFERENT projects could slug to the same id and the
+  // second would OVERWRITE the first — losing its directory silently. Caught by the test, not by
+  // reading. A taken id belonging to a different project gets a stable suffix from the path.
   let id = idOf(projectCode);
   const taken = get(id);
-  if (taken && (taken.projectCode !== projectCode || (taken.cwd || null) !== (cwd || null))) {
+  if (taken && taken.projectCode !== projectCode) {
     let n = 0;
     for (const ch of String(cwd || "")) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
     id = `${id}-${n.toString(36).slice(0, 4)}`;

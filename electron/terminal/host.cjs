@@ -15,11 +15,21 @@ function resolveCwd(projectCode, cwd) {
   // An explicit cwd (a :::cmd{dir=…} machine address) wins — and `~` expands HERE, because the
   // browser deliberately doesn't know where home is (the same split RFC-069's machine doors use).
   if (cwd) return String(cwd).replace(/^~(?=\/|$)/, os.homedir());
+  // the browser's own sessions are placed in its home dir — the one DELIBERATE non-project cwd
+  if (projectCode === "browser") {
+    const home = path.join(os.homedir(), ".autobot", "home");
+    try { fs.mkdirSync(home, { recursive: true }); } catch {}
+    return home;
+  }
   try {
     const map = JSON.parse(fs.readFileSync(PROJECTS, "utf8"));
     if (map[projectCode] && fs.existsSync(map[projectCode])) return map[projectCode];
   } catch {}
-  return os.homedir();
+  // AN UNKNOWN PROJECT IS A REFUSAL, NEVER A GUESS — the home fallback ran a :::cmd block's bundle
+  // rebuild in ~ when the block named a project that wasn't registered: "run in that project's
+  // root" silently became "run in your home folder". Refusing surfaces as the block's own
+  // "didn't run" face, which is the honest answer; home is only ever deliberate ("browser" above).
+  throw new Error(`no project "${projectCode}" is registered — nowhere to run this`);
 }
 
 // key -> Map<webContents, unsubscribe>
