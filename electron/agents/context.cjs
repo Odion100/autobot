@@ -137,6 +137,23 @@ function parseTtlMs(ttl) {
 // what: "note:<id>@<scope>" or "corpus:<name>:<source>#<heading>". Resolution returns
 // { title, body } or null when the target no longer exists — and a subscription whose target
 // is gone DIES LOUDLY: deleted from the def, receipted in the delivery wrapper, never silent.
+// WHERE A PROJECT LIVES — the registry the shell and the sessions already read; the env seam is
+// for the test scratch, same precedent as AUTOBOT_CORPORA above and AUTOBOT_WORKLISTS_DIR next door.
+function projectRootOf(pc) {
+  const file = process.env.AUTOBOT_PROJECTS_FILE || path.join(os.homedir(), ".autobot", "projects.json");
+  try {
+    const reg = JSON.parse(fs.readFileSync(file, "utf8")) || {};
+    // the live file is a flat { code: root } map; tolerate the nested and array shapes too
+    const root =
+      reg[pc] ||
+      (reg.projects && !Array.isArray(reg.projects) && reg.projects[pc]) ||
+      ((Array.isArray(reg.projects) ? reg.projects : []).find((r) => r && r.code === pc) || {}).root;
+    return typeof root === "string" && root ? root : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveWhat(what, allowedScopes) {
   const nm = /^note:(.+)@([a-zA-Z0-9._:-]+)$/.exec(String(what || ""));
   if (nm) {
@@ -145,6 +162,55 @@ function resolveWhat(what, allowedScopes) {
     const p = place(scope);
     const n = p && readNoteFile(p.dir, id);
     return n ? { title: n.title || id, body: n.body || "" } : null;
+  }
+  // HIS BOARD, DELIVERABLE (2026-10-14, his card: 32KB of notes written FOR agents was the one
+  // context layer that could only be fetched, never delivered — presence and the system context
+  // mention it zero times, so only an agent that already thought to call board() ever saw it).
+  // `board:<projectCode>` resolves to the project's open cards, newest-first, self-capped to
+  // INJECT_NOTE_MAX with a counted tail — so a growing board can never outgrow its shelf.
+  //
+  // ONE DELIBERATE DIVERGENCE from the corpus rule: an EMPTY or MISSING board resolves to a
+  // truthful empty body, never null. A corpus heading that disappears is gone for good, so its
+  // subscription dies loudly; a board empties and refills as part of its normal life — an emptied
+  // board even deletes its own file — and dying on the first clean sweep would make this
+  // subscription unkeepable.
+  const bm = /^board:([a-zA-Z0-9._-]+)$/.exec(String(what || ""));
+  if (bm) {
+    const [, pc] = bm;
+    if (allowedScopes && !allowedScopes.includes(`project:${pc}`)) return { denied: `project:${pc}` };
+    const root = projectRootOf(pc);
+    if (!root) return null; // an unknown PROJECT is gone-for-good — that one does die loudly
+    let raw = "";
+    try { raw = fs.readFileSync(path.join(root, ".systemview", "boards", "board.md"), "utf8"); } catch {}
+    const cards = [];
+    String(raw)
+      .split(/<!--card (\d+)(?: by=([^\s>]+))?-->/)
+      .forEach((part, i, arr) => {
+        if (i % 3 !== 1) return;
+        // replies stay with their card, rendered as lines rather than leaking comment markers
+        const body = String(arr[i + 2] || "").replace(/<!--reply(?: [^>]*?)?-->\s*/g, "\n↳ ").trim();
+        if (body) cards.push({ by: arr[i + 1] || "", body });
+      });
+    const title = `the ${pc} board — ${cards.length} open`;
+    if (!cards.length) return { title, body: "(nothing on the board right now)" };
+    const lines = [];
+    let used = 0;
+    let shown = 0;
+    for (const c of cards) {
+      const line = `• ${c.by ? `[${c.by}] ` : ""}${c.body}`;
+      // the counted tail must always fit, so stop while there is room to say what was left out
+      if (used + line.length + 40 > INJECT_NOTE_MAX) break;
+      lines.push(line);
+      used += line.length + 1;
+      shown += 1;
+    }
+    if (!shown) {
+      // the newest card alone is bigger than the shelf — a slice of it beats silence, said honestly
+      lines.push(`• ${cards[0].body.slice(0, INJECT_NOTE_MAX - 60)}…`);
+      shown = 1;
+    }
+    if (shown < cards.length) lines.push(`(+${cards.length - shown} more — board({projectCode: "${pc}"}))`);
+    return { title, body: lines.join("\n") };
   }
   const cm = /^corpus:([a-zA-Z0-9._-]+):(.+?)#(.+)$/.exec(String(what || ""));
   if (cm) {
@@ -198,7 +264,7 @@ function subscribe(scopes, { what, when, until } = {}) {
     gate.untilTs = Date.now() + ms; // a clock can back up a count or a condition
   }
   const target = resolveWhat(what, scopes.allowed);
-  if (!target) throw new Error(`nothing at "${what}" — a subscription points at note:<id>@<scope> or corpus:<name>:<source>#<heading>, and the target must exist`);
+  if (!target) throw new Error(`nothing at "${what}" — a subscription points at note:<id>@<scope>, corpus:<name>:<source>#<heading>, or board:<projectCode>, and the target must exist`);
   if (target.denied) throw new Error(`scope ${target.denied} is not readable by this session`);
   if (target.body.length > INJECT_NOTE_MAX)
     throw new Error(`an injected item is capped at ${INJECT_NOTE_MAX} chars (this one resolves to ${target.body.length}) — injection spends attention on every delivery; point at something tighter`);

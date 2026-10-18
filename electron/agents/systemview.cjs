@@ -704,21 +704,37 @@ function toolsFor(identity = {}) {
       ),
       tool(
         "show",
-        "Put a document on the project's TV (beside the chat). Markdown text or an existing " +
-          "report path; it is filed as a report automatically. Use for anything long or with " +
-          "choices (::question / :::approval blocks) — the chat line stays short.",
+        "File a document in the project's reports panel, and put it on his TV (beside the chat). " +
+          "Markdown text or an existing report path. Use for anything long or with choices " +
+          "(::question / :::approval blocks) — the chat line stays short. " +
+          "PASS `quiet: true` WHEN NOBODY MAY BE IN THE ROOM — an unattended job, a hook that fired " +
+          "at 3am, a report he can read when he wants to: the document is filed and the run's " +
+          "report pointer is stamped exactly as it would be, and only the screen is left alone. " +
+          "Quiet is the right call whenever you are not sure he is watching; a report cannot be " +
+          "filed by any other verb, so filing quietly is how an account exists without an " +
+          "interruption.",
         {
           projectCode: z.string(),
           text: z.string().optional().describe("the markdown to show"),
           reportPath: z.string().optional().describe("an existing .md file to show instead of text"),
           clear: z.boolean().optional().describe("take the show down"),
+          quiet: z
+            .boolean()
+            .optional()
+            .describe("file it and stamp the run, but do NOT put it on his TV — for unattended work"),
         },
-        async ({ projectCode, text: md, reportPath, clear }) => {
+        async ({ projectCode, text: md, reportPath, clear, quiet }) => {
           try {
-            const r = await hub("Agent", "show", { projectCode, text: md, reportPath, clear, as: who });
+            const r = await hub("Agent", "show", { projectCode, text: md, reportPath, clear, quiet, as: who });
             // THE PATH IS THE POINT. `Agent.show` files the document and answers with where it
             // landed, which until now was thrown away — so a job's own account of itself existed
             // on disk with nothing connecting it to the run that produced it.
+            //
+            // AND THE STAMP IS NOT PART OF THE SHOW. It rides the FILING, which is why `quiet`
+            // changes nothing here: a run that filed its account points at it whether or not
+            // anybody's screen was taken. That weld is what made a job card read
+            // "finished · no report" for every run that obeyed its own instruction not to
+            // interrupt him — his report, 2026-10-14.
             if (r && r.ok && r.path && onReportFiled) {
               try { onReportFiled({ path: r.path, label: r.label || "" }); } catch {}
             }
@@ -726,8 +742,10 @@ function toolsFor(identity = {}) {
               r && r.ok
                 ? clear
                   ? "TV cleared."
-                  : `The show is up.${r.path ? ` Filed as ${r.path}.` : ""}`
-                : "The show did not go up.",
+                  : r.quiet
+                    ? `Filed as ${r.path}. Not on the TV — it is in his reports panel when he wants it.`
+                    : `The show is up.${r.path ? ` Filed as ${r.path}.` : ""}`
+                : `The show did not go up.${r && r.error ? ` ${r.error}` : ""}`,
             );
           } catch (e) { return fail(e); }
         }

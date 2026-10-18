@@ -58,7 +58,9 @@ function watchLog(s) {
     if (await isAlive(s.name)) return;
     stopWatching(s);
     sessions.delete(s.key);
-    for (const cb of s.exitSubs) cb({ code: 0, signal: null });
+    // screen doesn't expose the child's exit code — UNKNOWN is the honest answer, never 0: a
+    // hardcoded zero told SystemView's :::cmd block that an `exit 7` run passed (caught 2026-10-18).
+    for (const cb of s.exitSubs) cb({ code: null, signal: null });
   }, 3000);
 }
 

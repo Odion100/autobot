@@ -467,6 +467,21 @@ function resolve(id) {
 // become inefficient" failure he explicitly does not want.
 function adopt({ projectCode, cwd, permissionMode, model } = {}) {
   if (!projectCode) return null;
+  // A TEMP PLACEMENT IS NEVER AN AGENT — his report, 2026-10-17: every run of a suite that opens
+  // real sessions in a mkdtemp cwd (tests/worklist.js, projectCode "worklist-test") birthed an
+  // adopted agent he then deleted by hand, four standing at once. Adoption memorialises a real
+  // placement; a tmp directory is about to vanish by construction, so there is nothing to
+  // memorialise. Realpath both sides — macOS spells the same tmp dir /var/… and /private/var/….
+  try {
+    if (cwd) {
+      const os = require("os");
+      const real = (x) => { try { return fs.realpathSync(x); } catch { return x; } };
+      // tmpdir() is per-user and deep (/var/folders/xx/…/T); comparing the top mount catches any
+      // cwd under it, however the suite nested its mkdtemp.
+      const topOf = (x) => real(String(x)).split("/").slice(0, 3).join("/");
+      if (topOf(cwd) === topOf(os.tmpdir())) return null;
+    }
+  } catch {}
   const existing = list().find(
     (d) => d.adopted && d.projectCode === projectCode && (d.cwd || null) === (cwd || null)
   );

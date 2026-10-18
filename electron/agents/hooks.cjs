@@ -412,6 +412,10 @@ function index() {
 //   once-per-rise        EDGE — once per CROSSING of its own `when`, re-armed when the condition
 //                            goes false again. Neither a clock nor a calendar: a fact about the
 //                            condition's shape.
+//   once-per-compaction  THE SAME EDGE, named for what the human means (his correction,
+//                            2026-10-18: "what the fuck is a rise… I said once per compaction, it
+//                            sounds better"). For a usage hook the fall IS the compaction, so the
+//                            two words are one behaviour — this one says it in the reader's unit.
 //
 // WHY THE EDGE FAMILY EXISTS (found 2026-10-12, from his report: *"two times in a row context
 // maintenance did not fire"*). `context-maintenance` is `on: usage, when: pct >= 60` with
@@ -431,7 +435,7 @@ function index() {
 // a 3.5-day cadence in a session restarted daily fired daily. `once-per-session` was the only one
 // that ever worked, because it is the only one whose scope IS the thing it was stored in.
 const STATE_FILE = path.join(os.homedir(), ".autobot", "hooks-fired.json");
-const RATE_FORMS = /^(once-per-session|once-per-rise|once-per-day|once-per-week|once-per-month|cooldown:.+)$/;
+const RATE_FORMS = /^(once-per-session|once-per-rise|once-per-compaction|once-per-day|once-per-week|once-per-month|cooldown:.+)$/;
 
 // Durations people write: 30m, 24h, 3d12h, 2w — and bare digits, which `cooldown:` has always
 // meant as SECONDS, so old hooks keep their meaning.
@@ -487,7 +491,7 @@ function rateAllows(hook, fired, ctx = {}) {
   // deletes this entry when `when` stops matching — so "is there an entry" IS "has it fired since
   // the last fall". Session-scoped on purpose: a fresh session is a fresh context and therefore
   // armed, which is the behaviour you want when the harness restarts at 80% full.
-  if (g === "once-per-rise") return !seen;
+  if (g === "once-per-rise" || g === "once-per-compaction") return !seen;
 
   const st = readFiredState();
   const last = st[firedKey(hook, ctx)];
@@ -514,7 +518,7 @@ function recordFired(hook, ctx = {}) {
   // NOTHING DURABLE TO REMEMBER for either session-scoped rate. Persisting a rise would be worse
   // than useless: a restart would find it still "fired" and stay silent on a window that is a
   // fresh context, which is the exact failure this rate exists to end.
-  if (!g || g === "once-per-session" || g === "once-per-rise") return;
+  if (!g || g === "once-per-session" || g === "once-per-rise" || g === "once-per-compaction") return;
   const st = readFiredState();
   st[firedKey(hook, ctx)] = { ts: Date.now(), hook: hook.name };
   writeFiredState(st);

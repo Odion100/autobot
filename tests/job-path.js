@@ -200,6 +200,26 @@ requires: ["period"]
   assert.strictEqual(jobs.reported(JOB, fired.runId, { path: "  " }).report.path, twice.report.path);
   ok("an empty path changes nothing — there is no way to blank the pointer by accident");
 
+  // A LANE THE RUN CUT LANDS ON THE JOB'S RECORD — his design, 2026-10-14: the job record is the
+  // one surface that points at everything a run produced, because the lane is disposable and this
+  // record is not. The FACT only (branch, repo, when): in/out stays the lanes verb's live answer.
+  {
+    const withLane = jobs.laneCut(JOB, fired.runId, { branch: "lane/organize-me", repo: "/tmp/x" });
+    assert.strictEqual(withLane.lanes.length, 1);
+    assert.strictEqual(withLane.lanes[0].branch, "lane/organize-me");
+    ok("a lane cut mid-run is recorded on the job's run record — branch, repo, when");
+
+    jobs.laneCut(JOB, fired.runId, { branch: "lane/organize-me", repo: "/tmp/x" });
+    assert.strictEqual(jobs.runsOf(JOB).find((r) => r.id === fired.runId).lanes.length, 1);
+    ok("...idempotent by branch — a replayed registration does not double the row");
+
+    jobs.laneCut(JOB, fired.runId, { branch: "lane/second", repo: "/tmp/x" });
+    const rec = jobs.runsOf(JOB).find((r) => r.id === fired.runId);
+    assert.strictEqual(rec.lanes.length, 2);
+    assert.ok(rec.report && rec.report.path, "and the report pointer survives beside the lanes");
+    ok("...a second lane joins the first — one record carries the run's whole produce");
+  }
+
   // ── 8 · AND THE LINE CHECKS ITSELF OFF ───────────────────────────────────────────────────
   // The sentence this whole file exists for. Nobody ticked anything.
   const after = await chores.handler({}, {});

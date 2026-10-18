@@ -42,10 +42,15 @@ that names a `lane:` source is what makes it a lane — it opens the run, draws 
 *"registered as a lane on `<branch>`"*. So the prefix is not only an address, it is a claim, and
 both halves of it are enforced:
 
-- **The branch must exist.** `sessions.cjs` runs `git rev-parse --verify` in the session's cwd and
-  **refuses** a `lane:` source whose branch it cannot find, writing nothing. A row points at work;
-  a row pointing at nothing is worse than no row at all — which is not hypothetical, it is the 9/9
-  run addressed to `lane/job-authoring`, a branch nobody ever cut.
+- **The branch must exist.** The registration runs `git rev-parse --verify` — in the session's own
+  repo first, and on a miss in every other root the project registry knows (`repoHolding`), because
+  coupled work routinely cuts its branch in the OTHER repo. A `lane:` source whose branch no
+  registered repo holds is **refused**, writing nothing. A row points at work; a row pointing at
+  nothing is worse than no row at all — which is not hypothetical, it is the 9/9 run addressed to
+  `lane/job-authoring`, a branch nobody ever cut.
+- **The dead `lane/` spelling is refused too.** The old convention sourced runs `lane/<branch>`
+  (slash, no colon); surfaces filter on `lane:`, so that spelling produced invisible rows. The
+  write door now refuses it by name instead of accepting a run no surface will ever draw.
 - **The run must exist.** A `lane/*` branch with no run against it is **not a lane**: the agent-side
   `lanes` verb names it separately rather than listing it, because `worklist.registeredLanes()` is
   what that verb intersects git's answer with. Asked of the BRANCH across every run on disk and
@@ -62,6 +67,34 @@ displayed "plan" flapped between them. An hour of argument came out of that — 
 something true about a screen neither could see. When a subagent IS doing the work, brief it with the
 exact source string rather than leaving it to derive one — an agent registering its own lane has
 nobody to brief it, and writes the string itself.
+
+## What rides a run record — passengers, never testimony
+
+Beside its list, a run record carries fields each stamped in ONE act and preserved by every later
+list write (`save()` carries what a writer does not own):
+
+- **`broughtIn`** — the receipt: who applied the branch into which tree, when, against what base.
+  Unretractable; written at the moment of the bring-in, because derivation goes blind the moment
+  anyone edits those files again.
+- **`status`** — the statement: free text, dated, attributed, clearable. The row's headline.
+- **`selfDirected`** — provenance, read off the SESSION by the host, never off the input: `set`
+  takes `items` and `source` and nothing else, so an agent cannot testify about its own
+  commissioning. Absent reads false — every record from before the field was commissioned work.
+- **A job's run carries the lanes it cut** — so the job's card can show its lanes after the
+  session that cut them is gone.
+
+There is deliberately NO report field: an account already has a home — `show` files it into the
+reports panel — and a second store on the run record was built once and retracted on sight
+(RFC-066 §5 carries the full retraction; do not re-add it).
+
+## The strip reads run files — and rows leave when HE clears them
+
+Every kind of row — lane, job, skill — is drawn from the run FILES (`stripRuns`), never from
+session events, so a shell restart cannot erase a row whose record is on disk. And no clock
+removes one: an open run draws at any age (a procedure that died three days ago is exactly what
+to see), and a closed run's row stands until his press or the retention janitor takes the record
+itself. A recency window shipped here once and was retired — rows that vanish on a schedule read
+as work that never happened.
 
 ## Retention sweeps itself
 

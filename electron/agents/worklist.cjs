@@ -175,6 +175,12 @@ function writeBoard(owner, text) {
 // that DIED mid-list is never swept — where a procedure died is the record, and it stays until
 // someone acts on it.
 const RUN_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+// A SOURCE THAT STARTS "lane/" IS A MISSPELLED LANE, not a kind of run. Every reader keys on
+// "lane:", so this spelling files a record nothing can ever show — the write door refuses it by
+// name (sessions.cjs), and pruneRuns retires the ones already on disk. One predicate, so the
+// refusal and the janitor can never drift apart about what the dead convention looks like.
+const misspelledLane = (source) => /^lane\//.test(String(source || ""));
+
 function pruneRuns(now = Date.now()) {
   let names = [];
   try { names = fs.readdirSync(DIR); } catch { return 0; }
@@ -183,6 +189,19 @@ function pruneRuns(now = Date.now()) {
     if (!n.startsWith("run-") || !n.endsWith(".json")) continue;
     try {
       const r = JSON.parse(fs.readFileSync(path.join(DIR, n), "utf8"));
+      // THE PRE-`lane:` CONVENTION IS RETIRED (2026-10-14). Three records from 2026-09-28 carried
+      // source "lane/<branch>" — written before registration settled the spelling as
+      // "lane:<branch>" — and they were invisible AND immortal: unreadable by every door BY
+      // DESIGN (laneRuns, stripRuns and registeredLanes all key on "lane:"), and never all-done,
+      // so the age rule below never aged them out. Their branches are long deleted, so
+      // normalising them into visibility would draw rows pointing at nothing, in rooms that never
+      // asked — retirement is the honest end, and the proactive report of 2026-10-14 preserves
+      // what each one said.
+      if (misspelledLane(r.source)) {
+        fs.unlinkSync(path.join(DIR, n));
+        swept++;
+        continue;
+      }
       const items = Array.isArray(r.items) ? r.items : [];
       if (items.length && items.every((i) => i.state === "done") && now - (r.updatedAt || 0) > RUN_KEEP_MS) {
         fs.unlinkSync(path.join(DIR, n));
@@ -365,23 +384,30 @@ function laneRuns(projectCode) {
 // strip say a job never ran while the disk said it did. Worst for an unattended job: it fires at
 // 3am, files its account, closes, and the only trace is a card that disappears on the next restart.
 //
-// LANES ARE UNBOUNDED AND THE REST ARE NOT, which is design rather than oversight. A lane row
-// stands until he clears it (RFC-059); a project accumulates every job and skill run it has ever
-// had — 46 of them on this machine — and forty rows of history is not a strip, it is a log. So a
-// non-lane row shows while its run is OPEN, at any age, because a run that died three days ago is
-// exactly the thing worth seeing; otherwise only while it closed recently.
-const STRIP_RECENT_MS = 24 * 60 * 60 * 1000;
-function stripRuns(projectCode, now = Date.now()) {
+// A ROW LEAVES WHEN HE CLEARS IT, AND FOR NO OTHER REASON. There was a second rule here — a
+// closed non-lane run drew its row only if it had closed inside the last 24 hours — and it was
+// mine, not his. It was answering "a project accumulates every job and skill run it ever had, and
+// forty rows of history is not a strip, it is a log", which is a real worry that had ALREADY BEEN
+// ANSWERED ONE LEVEL UP: the strip is height-bounded and scrolls, and both kinds of card collapse
+// to a single header line when closed. His ruling the day that landed, 2026-10-13: *"NOT by
+// dropping closed runs out, which was the other half of the ask: a row that vanishes because its
+// run finished is a row he cannot find again, and watching them is what the strip is FOR."* The
+// window made this file override that decision by clock, invisibly — and against a clock he is
+// racing without knowing: a job that closed at 3am is gone by the time he looks on day two.
+// Measured before removing it: systemview-test drew 10 rows with the window and 25 without, so it
+// was hiding fifteen closed runs, twelve days of context-maintenance, chore-round and path checks.
+//
+// WHAT BOUNDS IT NOW, since the row count still has to end somewhere: `pruneRuns` deletes a closed
+// run after fourteen days, so the history this can draw is bounded by the store rather than by a
+// second rule living here — and the dismissal he presses is recorded in the window's localStorage,
+// so a row he has cleared stays cleared across restarts. An OPEN run is unbounded in both
+// directions: a procedure that died three days ago is exactly the thing worth seeing.
+function stripRuns(projectCode) {
   const pre = `session:${projectCode}:`;
   return all().filter((r) => {
     if (!r.owner.startsWith("run:") || !r.session.startsWith(pre)) return false;
     const src = String(r.source || "");
-    if (src.startsWith("lane:")) return true;
-    if (!src.startsWith("job:") && !src.startsWith("skill:")) return false;
-    // OPEN AT ANY AGE. `allDone` is the same predicate the close stamp rides, so "open" here means
-    // exactly what it means everywhere else rather than a second definition of finished.
-    if (!allDone(r.items || [])) return true;
-    return (Number(r.updatedAt) || 0) >= now - STRIP_RECENT_MS;
+    return src.startsWith("lane:") || src.startsWith("job:") || src.startsWith("skill:");
   });
 }
 
@@ -713,4 +739,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, laneRuns, stripRuns, STRIP_RECENT_MS, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

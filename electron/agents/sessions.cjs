@@ -1342,6 +1342,18 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       // REFUSED, NOT CORRECTED. Guessing the branch or silently dropping the prefix would both
       // leave the agent believing it had a lane. The refusal names the branch and the fix, because
       // the fix is one command away and the agent is holding it.
+      // THE MISSPELLED LANE IS REFUSED BY NAME, same discipline as the unexisting branch below.
+      // "lane/<branch>" passed this door silently as a GENERIC run — invisible to the strip, the
+      // lanes verb and the janitor, which is how three of them sat unreadable for sixteen days
+      // (the 2026-09-28 BUApp records pruneRuns now retires). A door that accepts a near-miss of
+      // its own protocol is a door that files work where nothing can find it.
+      if (worklist.misspelledLane(source))
+        throw new Error(
+          `"${source}" is not a lane source — the spelling is \`lane:<branch>\`, so this would be ` +
+            `filed as a generic run that no strip, verb or janitor can ever read. If you mean the ` +
+            `lane, write \`lane:${source}\`; if you mean an ordinary run, pick a source that does ` +
+            `not start with "lane/".`
+        );
       if (String(source).startsWith("lane:")) {
         const branch = String(source).slice(5).trim();
         const holder = branch ? repoHolding(branch, s.cwd) : null;
@@ -1358,6 +1370,19 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
               `(\`git worktree add -b ${branch} <path>\`) and write the list again, or give this work a ` +
               `source with no branch in it.`
           );
+        // THE JOB THIS LANE BELONGS TO, recorded on the JOB's run record at the only moment the
+        // relation is a fact: registration, while the job's run is still this session's current
+        // one (the switch below replaces it). His design, 2026-10-14: the job record is the
+        // surface that points at everything a run produced — the lane is just a branch of work,
+        // disposable by construction, so it learns nothing. Same reach-back rule as a report filed
+        // after the last item: currentRun if it is a job's, else the job run that just closed.
+        const jr =
+          s.currentRun && String(s.currentRun.source || "").startsWith("job:")
+            ? { job: s.currentRun.source.slice(4), runId: s.currentRun.id }
+            : s.lastJobRun || null;
+        if (jr) {
+          try { require("./jobs.cjs").laneCut(jr.job, jr.runId, { branch, repo: holder }); } catch {}
+        }
       }
       if (!s.currentRun || s.currentRun.source !== source) {
         // resume the unfinished run this session already started on this source — a harness
@@ -1852,7 +1877,12 @@ function noteUsedBy(key, surface) {
 }
 
 const list = () =>
-  [...sessions.values()].map((s) => ({
+  [...sessions.values()].map((s) => {
+    // ONE PASS, READ TWICE. staleParts was called twice per session per poll — memoised, so
+    // usually one stat each, but a cache miss (any def edit) paid the full composition hash twice
+    // in the same projection. The board card is his; the fix is a local.
+    const staleNames = staleParts(s);
+    return {
     key: s.key,
     projectCode: s.projectCode,
     sessionId: s.sessionId,
@@ -1864,13 +1894,14 @@ const list = () =>
     // STALE = running on an older composition than the files now hold. Shown, never acted on:
     // re-init is a press (see reinit), because restarting an agent mid-turn to pick up a
     // paragraph is worse than the paragraph being late.
-    staleParts: staleParts(s),   // the NAMES that moved — the panel says which, not "something"
-    stale: staleParts(s).length > 0,
+    staleParts: staleNames,   // the NAMES that moved — the panel says which, not "something"
+    stale: staleNames.length > 0,
     capabilities: s.capabilities || null,   // null = not started yet, NOT "has nothing"
     usedBy: s.usedBy || [],                 // which applications are using this agent
     worklist: s.worklist || [],
     startedAt: s.startedAt,
-  }));
+  };
+  });
 
 // The conversations that already exist on disk for a directory — the claude CLI
 // stores each session at ~/.claude/projects/<cwd with / → -> as <sessionId>.jsonl.

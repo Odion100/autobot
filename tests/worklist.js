@@ -327,6 +327,20 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   // THE WHOLE POINT. The janitor takes the record; the answer has to survive it.
   const was = worklist.lastClosed("skill:chore-closed", "p-chore");
   assert.ok(worklist.pruneRuns(Date.now() + 15 * DAY) >= 1, "the closed run aged out after two weeks");
+
+  // THE DEAD `lane/` CONVENTION IS RETIRED ON SIGHT, at any age, done or not (2026-10-14). Three
+  // 2026-09-28 records spelled their source "lane/<branch>" — pre-`lane:` — and were invisible AND
+  // immortal: no reader keys on that spelling, and never-all-done meant the age rule never touched
+  // them. The janitor is the only door that can honestly end them.
+  {
+    worklist.writeRun("legacy1", "session:sweepproj:abc", [{ id: "1", text: "x", state: "active" }], "lane/old-way");
+    assert.ok(worklist.misspelledLane("lane/old-way"), "the predicate knows the dead spelling");
+    assert.ok(!worklist.misspelledLane("lane:lane/new-way"), "...and does not eat the real one");
+    const swept = worklist.pruneRuns(Date.now());
+    assert.ok(swept >= 1, "a legacy-spelled record is retired immediately, not aged");
+    assert.ok(!worklist.all().some((r) => r.source === "lane/old-way"), "and it is gone from the store");
+    ok("a pre-`lane:` record is retired by the janitor — it was invisible to every reader and too undone to ever age out");
+  }
   assert.deepEqual(worklist.read(worklist.runOwner(closed)), [], "its record is gone from disk");
   assert.equal(worklist.lastClosed("skill:chore-closed", "p-chore"), was,
     "and the answer is unchanged — the janitor cannot blind the board");
@@ -520,7 +534,8 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
 
 // THE STRIP READS RUN FILES FOR EVERY KIND OF ROW, not only lanes (2026-10-14). His report: "the
 // job rows disappeared, I didn't delete them" — they came from in-memory session events, so a shell
-// restart erased them while lane rows, which are read off disk, stood.
+// restart erased them while lane rows, which are read off disk, stood. The ages below are still
+// faked on disk deliberately: they are what proves age no longer decides anything.
 {
   const now = Date.now();
   const sess = "session:stripproj:abc";
@@ -542,7 +557,7 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   mk("s4", "skill:died-long-ago", OPEN, now - 400 * 24 * 3600 * 1000);
   mk("s5", "something-else:x", DONE, now - 60 * 1000);
 
-  const got = worklist.stripRuns("stripproj", now).map((r) => r.source);
+  const got = worklist.stripRuns("stripproj").map((r) => r.source);
 
   got.includes("lane:lane/ancient")
     ? ok("a LANE row is unbounded — it stands at any age, because it dies at cleanup and nothing else")
@@ -550,16 +565,20 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   got.includes("job:fresh")
     ? ok("a job that closed recently still draws its row, which is the whole report: a 3am run leaves a trace")
     : bad("a recently closed job row was dropped");
-  !got.includes("job:ancient")
-    ? ok("a job closed long ago does NOT — forty rows of history is a log, not a strip")
-    : bad("an ancient closed job row came back");
+  // AND SO DOES ONE THAT CLOSED A YEAR AGO. The 24h window this replaces (2026-10-14) was the
+  // file's own rule, not his: *"a row that vanishes because its run finished is a row he cannot
+  // find again, and watching them is what the strip is FOR."* Age is no longer a reason a row is
+  // missing — `pruneRuns` deleting the record at fourteen days is, and the ✕ he presses is.
+  got.includes("job:ancient")
+    ? ok("a job closed LONG ago still draws — nothing but his press and the janitor takes a row away")
+    : bad("an old closed job row was hidden by age");
   got.includes("skill:died-long-ago")
     ? ok("an OPEN run draws at any age — a procedure that died three days ago is exactly what to see")
     : bad("a dead run was hidden because it was old");
   !got.includes("something-else:x")
     ? ok("a source that is neither lane, job nor skill draws nothing")
     : bad("an unknown source drew a row");
-  worklist.stripRuns("otherproj", now).length === 0
+  worklist.stripRuns("otherproj").length === 0
     ? ok("and it is project-scoped, like laneRuns — another project's runs are not this chat's rows")
     : bad("stripRuns leaked another project's runs");
 }

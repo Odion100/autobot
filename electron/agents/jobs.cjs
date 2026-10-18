@@ -371,6 +371,26 @@ function reported(id, runId, { path: p = "", label = "" } = {}) {
   return next;
 }
 
+// A LANE THE RUN CUT, recorded on the JOB's record — his design, 2026-10-14: *"the job refers to
+// the lane. The whole point is it's organized properly in the strip."* The lane is disposable by
+// construction — its branch lands or dies, its worklist record goes at cleanup — so the relation
+// lives on the thing that survives: this record, which already carries the report pointer and the
+// rating, is the one surface that can point at everything a run produced. The FACT of the cut only
+// (branch, repo, when): whether the branch is in or out stays derived live by the lanes verb at
+// display time, so this field cannot rot when the lane is landed or deleted later.
+function laneCut(id, runId, { branch = "", repo = "" } = {}) {
+  const file = path.join(runsDirOf(id), `${String(runId)}.json`);
+  const rec = readJson(file);
+  if (!rec) return null;
+  const b = String(branch || "").trim();
+  if (!b) return rec;
+  // Re-registering the same branch (a harness restart replays the write) must not double the row.
+  const prior = (Array.isArray(rec.lanes) ? rec.lanes : []).filter((l) => l.branch !== b);
+  const next = { ...rec, lanes: [...prior, { branch: b, repo: String(repo || ""), ts: Date.now() }] };
+  fs.writeFileSync(file, JSON.stringify(next, null, 2));
+  return next;
+}
+
 function rateRun(id, runId, { rating, note = "" } = {}) {
   const file = path.join(runsDirOf(id), `${String(runId)}.json`);
   const rec = readJson(file);
@@ -400,5 +420,6 @@ module.exports = {
   startRun,
   finishRun,
   reported,
+  laneCut,
   rateRun,
 };

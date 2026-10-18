@@ -55,6 +55,18 @@ async function ensureApp(entry) {
     cwd: cwd || undefined,
     detached: true,
   });
+  // THE DEATH LEAVES A STAMP (gaps/SYSTEMVIEW_HUB_DROPS…, filed by buAPI's agent): the hub died
+  // five times in one session and nothing anywhere said so — detached + unref meant the exit was
+  // absorbed, the next health poll relaunched, and the only symptom was a minute of refused
+  // connections corrupting a test run. The child's stderr already lands in this same log file, so
+  // the spawn stamp and the exit stamp beside it turn a silent respawn into a readable timeline:
+  // when it came up, when it died, with what code or signal, and what it printed last.
+  fs.writeSync(out, `[launcher] ${entry.id}: spawned pid ${child.pid} at ${new Date().toISOString()}\n`);
+  child.on("exit", (code, signal) => {
+    try {
+      fs.writeSync(out, `[launcher] ${entry.id}: pid ${child.pid} EXITED code=${code} signal=${signal} at ${new Date().toISOString()} — if nobody killed it, read the lines above this one\n`);
+    } catch {}
+  });
   child.unref();
 
   for (let i = 0; i < 60; i++) {

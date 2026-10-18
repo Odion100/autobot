@@ -26,6 +26,7 @@
     "dev:nowatch": "node electron/dev.js --no-watch",
     "smoke:worklist": "node tests/worklist.js",
     "smoke:lanes": "node tests/lanes.js",
+    "smoke:show": "node tests/show.js",
     "smoke:origin": "node tests/same-origin.js",
     "smoke:caps": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_CAPSMOKE=1 node electron/launch.js",
     "smoke:contract": "node tests/app-contract.js",

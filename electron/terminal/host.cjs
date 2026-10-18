@@ -12,7 +12,9 @@ const sessions = require("./sessions.cjs");
 // ~/.autobot/projects.json holds the map; a hub-side root registry can replace it later.
 const PROJECTS = path.join(os.homedir(), ".autobot", "projects.json");
 function resolveCwd(projectCode, cwd) {
-  if (cwd) return cwd;
+  // An explicit cwd (a :::cmd{dir=…} machine address) wins — and `~` expands HERE, because the
+  // browser deliberately doesn't know where home is (the same split RFC-069's machine doors use).
+  if (cwd) return String(cwd).replace(/^~(?=\/|$)/, os.homedir());
   try {
     const map = JSON.parse(fs.readFileSync(PROJECTS, "utf8"));
     if (map[projectCode] && fs.existsSync(map[projectCode])) return map[projectCode];

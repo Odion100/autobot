@@ -259,6 +259,56 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     try { ctx.subscribe(subScopes, { what: `note:${noteD.id}@${AG}`, when: "every-turn" }); } catch (e) { full = e.message; }
     ok(full && /every-turn shelf is full/.test(full) && full.includes(noteB.id), "a full shelf refuses and names the holders");
 
+    // ── HIS BOARD IS A SUBSCRIBABLE TARGET (2026-10-14) ──────────────────────────────────────
+    // 32KB of notes written FOR agents was the one context layer that could only be fetched,
+    // never delivered. board:<pc> resolves live at every delivery, scope-gated like a note.
+    {
+      const dirBase = fs.mkdtempSync(path.join(os.tmpdir(), "board-sub-"));
+      const bdir = path.join(dirBase, "board-proj", ".systemview", "boards");
+      fs.mkdirSync(bdir, { recursive: true });
+      fs.writeFileSync(
+        path.join(bdir, "board.md"),
+        "<!--card 200 by=systemview-test-->\nnewest: the strip nests lanes now\n<!--reply by=you ts=201-->\nlove it\n\n<!--card 100-->\noldest: fix the thing\n",
+      );
+      fs.writeFileSync(path.join(dirBase, "projects.json"), JSON.stringify({ "smoketest-sys": path.join(dirBase, "board-proj") }));
+      process.env.AUTOBOT_PROJECTS_FILE = path.join(dirBase, "projects.json");
+
+      const sb = ctx.subscribe(subScopes, { what: "board:smoketest-sys", when: "session-start", until: { ttl: "2d" } });
+      ok(/2 open/.test(sb.title), "subscribing to a board resolves it — the title carries the live count");
+
+      const delivered = ctx.injectedFor({ slot: "smoketest", projectCode: "smoketest-sys" }, "session-start");
+      ok(/newest: the strip nests lanes/.test(delivered) && /↳ love it/.test(delivered), "the board DELIVERS — newest card first, replies as lines, no comment markers leaked");
+      ok(!/<!--/.test(delivered), "...really no markers");
+
+      let denied = false;
+      try { ctx.subscribe(subScopes, { what: "board:someone-elses", when: "session-start" }); } catch (e) { denied = /not readable/.test(e.message); }
+      ok(denied, "a board outside the session's scopes is DENIED like a note, not resolved");
+
+      let ghostProj = false;
+      try { ctx.subscribe(subScopes, { what: "board:smoketest-b", when: "session-start" }); } catch (e) { ghostProj = /must exist/.test(e.message); }
+      ok(ghostProj, "a readable scope whose project has no registered root refuses — an unknown project is gone-for-good");
+
+      // THE DIVERGENCE WITH TEETH: an emptied board keeps its subscription. A corpus heading that
+      // vanishes is gone for good; a board empties and refills as part of its normal life — an
+      // emptied board even deletes its own file — so target-gone semantics would kill the shelf
+      // on the first clean sweep.
+      fs.rmSync(path.join(bdir, "board.md"));
+      const emptied = ctx.injectedFor({ slot: "smoketest", projectCode: "smoketest-sys" }, "session-start");
+      ok(/nothing on the board right now/.test(emptied), "an emptied board delivers its emptiness instead of dying");
+      ok(require("../electron/agents/definitions.cjs").subscriptionsOf("smoketest").some((r) => r.what === "board:smoketest-sys"), "...and the subscription SURVIVES the sweep");
+
+      // a board bigger than the shelf self-caps and says what it left out
+      const big = Array.from({ length: 12 }, (_, i) => `<!--card ${900 - i}-->\ncard ${i}: ${"x".repeat(90)}`).join("\n");
+      fs.writeFileSync(path.join(bdir, "board.md"), big);
+      const capped = ctx.injectedFor({ slot: "smoketest", projectCode: "smoketest-sys" }, "session-start");
+      const bodyOnly = capped.split("\n").filter((l) => /card \d|more —/.test(l)).join("\n");
+      ok(bodyOnly.length <= 700 + 80 && /more — board\(/.test(capped), "a board bigger than the shelf self-caps, newest-first, and counts what it left out");
+
+      ctx.unsubscribe(subScopes, { what: "board:smoketest-sys" });
+      delete process.env.AUTOBOT_PROJECTS_FILE;
+      fs.rmSync(dirBase, { recursive: true, force: true });
+    }
+
     // sessions seams still ride injectedFor
     const c1 = sessions.sendContent({ slot: "smoketest" }, "what changed?");
     ok(c1.length === 2 && /<injected-context moment="every-turn">/.test(c1[0].text) && c1[1].text === "what changed?",
