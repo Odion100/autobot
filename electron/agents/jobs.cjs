@@ -391,6 +391,31 @@ function laneCut(id, runId, { branch = "", repo = "" } = {}) {
   return next;
 }
 
+// HIS OWN MARK ON A RUN — and it is a THIRD thing, beside the two that already exist. The card's
+// word today is DERIVED (running / finished / finished · landed) and an agent can set `status` in
+// its own words; neither says *"I have been through this myself."* His ask, 2026-10-18: *"I want
+// the display to also be a selector… I wanna just know that I've gone through it. And then I'll
+// delete it."* So this is the human's lane on the same row: free text, his vocabulary, cleared by
+// an empty string — and it changes nothing about cleanup, because the delete is still his press.
+//
+// It does NOT overwrite `status`. An agent saying "blocked on your press" and him saying "walked
+// it" are two different facts, and collapsing them would lose whichever was written second.
+function markState(id, runId, state) {
+  const file = path.join(runsDirOf(id), `${String(runId)}.json`);
+  const rec = readJson(file);
+  if (!rec) return null;
+  const mark = String(state == null ? "" : state).trim().slice(0, 40);
+  const next = { ...rec };
+  if (mark) { next.state = mark; next.stateAt = Date.now(); }
+  else { delete next.state; delete next.stateAt; } // a mark nobody can retract is worse than none
+  fs.writeFileSync(file, JSON.stringify(next, null, 2));
+  return next;
+}
+
+// The words the window offers first — his, from the ask. Not a closed set: `markState` takes any
+// text, because a vocabulary the human cannot extend is a vocabulary he works around.
+const STATES = ["walked it", "approved", "needs another look", "mine to finish"];
+
 function rateRun(id, runId, { rating, note = "" } = {}) {
   const file = path.join(runsDirOf(id), `${String(runId)}.json`);
   const rec = readJson(file);
@@ -420,6 +445,8 @@ module.exports = {
   startRun,
   finishRun,
   reported,
+  markState,
+  STATES,
   laneCut,
   rateRun,
 };

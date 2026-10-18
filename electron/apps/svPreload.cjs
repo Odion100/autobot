@@ -91,6 +91,10 @@ const FULL = {
     remove: (id) => ipcRenderer.invoke("jobs:remove", id),
     // §5 — capturable where the report is READ. One call, no ceremony.
     rate: (id, runId, body) => ipcRenderer.invoke("jobs:rate", id, runId, body),
+    // his own mark on a run ("walked it", "approved") — free text, "" clears it; `states` is the
+    // offered vocabulary, not a closed set
+    state: (id, runId, state) => ipcRenderer.invoke("jobs:state", id, runId, state),
+    states: () => ipcRenderer.invoke("jobs:states"),
     // The ambient stream: things that happened to nobody in particular. `subscribe` returns an
     // unsubscribe, the same shape the agent feed uses, so a surface never has to remember a key.
     events: (limit) => ipcRenderer.invoke("jobs:events", limit),

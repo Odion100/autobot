@@ -46,6 +46,12 @@ function register() {
   // which is why this is one call with no ceremony around it.
   ipcMain.handle("jobs:rate", (_e, id, runId, body) => jobs.rateRun(id, runId, body || {}));
 
+  // HIS MARK on a run — the row's word becomes something he sets, not only something derived
+  // (2026-10-18). Same no-ceremony shape as the rating: it has to be settable at the moment he
+  // finishes reading, or it never gets set. An empty string clears it.
+  ipcMain.handle("jobs:state", (_e, id, runId, state) => jobs.markState(id, runId, state));
+  ipcMain.handle("jobs:states", () => jobs.STATES);
+
   // ---- watches (RFC-005 §7.1) ----------------------------------------------------------------
   // A watch created from a right-click is invisible until something draws it, and an invisible
   // watcher running on someone's machine is the thing you turn the whole feature off over. This is

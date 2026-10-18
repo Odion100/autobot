@@ -82,6 +82,25 @@ try {
     assert.ok(rated.ratedAt > 0);
     ok("§5 — the rating is separate from finishing, because it arrives when a human READS it");
 
+    // HIS MARK — a third lane on the row, beside the derived word and the agent's status
+    const marked = jobs.markState(ID, "r1", "  walked it  ");
+    assert.equal(marked.state, "walked it", "trimmed, stored verbatim — his words, not a code");
+    assert.ok(marked.stateAt > 0);
+    assert.equal(marked.status, "finished", "and it leaves the run's OWN status alone");
+    assert.equal(marked.rating, 4, "and the rating it was given");
+    ok("his mark rides the run record beside the status, never over it");
+
+    const relabelled = jobs.markState(ID, "r1", "approved");
+    assert.equal(relabelled.state, "approved", "he can change his mind");
+    const cleared = jobs.markState(ID, "r1", "   ");
+    assert.ok(!("state" in cleared), "and clear it — a mark nobody can retract is worse than none");
+    assert.ok(!("stateAt" in cleared), "the stamp goes with it");
+    ok("the mark is his to change and to clear, and clearing leaves no ghost");
+
+    assert.equal(jobs.markState(ID, "nope", "walked it"), null, "no record, no mark invented");
+    assert.ok(Array.isArray(jobs.STATES) && jobs.STATES.includes("walked it"));
+    ok("the offered vocabulary exists and a missing run is answered with null, not a new file");
+
     const j = jobs.get(ID);
     assert.equal(j.runs, 1);
     assert.equal(j.lastRun.id, "r1");
