@@ -32,6 +32,7 @@ const documents = require("../markdown/registry.cjs");
 const docFires = require("../markdown/fires.cjs");
 const docWrite = require("../markdown/write.cjs");
 const PROJECTS_FILE = () => path.join(require("os").homedir(), ".autobot", "projects.json");
+const { jobRunOf, onRunOpened, onRunClosed } = require("./runSlots.cjs");
 function branchIn(dir, branch) {
   if (!dir || !branch) return false;
   try {
@@ -1839,6 +1840,9 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // source is the session's own plan, untouched by any run. Completion is observed: the write
   // that marks every item done closes the run.
   s.currentRun = null; // { id, source }
+  // The JOB run this session is inside, held under whatever is current — see runSlots.cjs for the
+  // bug that made a second slot necessary.
+  s.jobRun = null; // { job, runId }
   const worklistServer = worklist.serverFor((items, source) => {
     if (source) {
       // ─── A `lane:` SOURCE IS A PROMISE THAT A BRANCH EXISTS, and now it is checked ───────────
@@ -1892,10 +1896,11 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         // surface that points at everything a run produced — the lane is just a branch of work,
         // disposable by construction, so it learns nothing. Same reach-back rule as a report filed
         // after the last item: currentRun if it is a job's, else the job run that just closed.
-        const jr =
-          s.currentRun && String(s.currentRun.source || "").startsWith("job:")
-            ? { job: s.currentRun.source.slice(4), runId: s.currentRun.id }
-            : s.lastJobRun || null;
+        // ONE DECISION, SHARED WITH THE REPORT STAMP (runSlots.jobRunOf). These two reach-backs
+        // were copies of each other, and the copy that ran LATER — the report stamp — was the one
+        // that silently failed, because by then the lane's run had closed and taken the only
+        // reference to the job's run with it.
+        const jr = jobRunOf(s);
         if (jr) {
           try { require("./jobs.cjs").laneCut(jr.job, jr.runId, { branch, repo: holder }); } catch {}
         }
@@ -1915,6 +1920,9 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         // restart mid-run must not mint a corpse that reads as died-at-step-3
         const back = worklist.openRunFor(s.worklistOwner, source);
         s.currentRun = { id: back || worklist.newRunId(), source };
+        // Held separately, because `currentRun` is a single slot and a lane's run is about to take
+        // it. This is the reference that used to be lost.
+        s.jobRun = onRunOpened(s, s.currentRun);
         if (!back) emit(s, { kind: "run.started", id: s.currentRun.id, source });
         // A JOB NAMED IN THE CONVERSATION LEAVES THE SAME EVIDENCE AS ONE A HOOK FIRED (2026-10-08).
         //
@@ -1971,6 +1979,13 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
           // marks the last item done, so a pointer that could only be stamped while the run was
           // open would miss the common order by one call.
           s.lastJobRun = { job: source.slice(4), runId: s.currentRun.id };
+        }
+        // A LANE'S CLOSE MUST NOT ERASE THE JOB UNDERNEATH IT. `currentRun` still goes to null —
+        // nothing is current — but the job run stays held until its OWN list goes all-done.
+        {
+          const after = onRunClosed(s, s.currentRun);
+          s.jobRun = after.jobRun;
+          s.lastJobRun = after.lastJobRun || s.lastJobRun;
         }
         s.currentRun = null;
       }
@@ -2083,9 +2098,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       return { ok: true, sent: built.members, arc: built.event.arc || "", path: built.event.path };
     },
     onReportFiled: ({ path: at, label }) => {
-      const open = s.currentRun && String(s.currentRun.source || "").startsWith("job:")
-        ? { job: s.currentRun.source.slice(4), runId: s.currentRun.id }
-        : s.lastJobRun || null;
+      // THE STAMP SURVIVES A LANE NOW. It read `currentRun`-if-a-job, else `lastJobRun` — and a
+      // job that cuts lanes (the shape proactive-development REQUIRES) has neither by the time the
+      // report is filed: the lane's run replaced the current slot and then closed it to null, while
+      // `lastJobRun` only fills when a JOB run closes. Measured 2026-10-19: eight reports, six job
+      // runs, every record on disk `report: null`, every card reading "no report".
+      const open = jobRunOf(s);
       if (!open) return; // a report filed outside a job is just a report, which is most of them
       try { require("./jobs.cjs").reported(open.job, open.runId, { path: at, label }); } catch {}
     },

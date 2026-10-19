@@ -53,7 +53,8 @@
     "smoke:markdown-write": "node tests/markdown-write.js",
     "smoke:markdown-announce": "node tests/markdown-announce.js",
     "smoke:registry": "node tests/registry.js",
-    "smoke:perf": "node tests/perf.js"
+    "smoke:perf": "node tests/perf.js",
+    "smoke:run-slots": "node tests/run-slots.js"
   },
   "repository": {
     "type": "git",
