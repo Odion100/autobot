@@ -5,9 +5,11 @@
 // slots — and those slots could not survive the shape the job document REQUIRES ("two runs, and
 // they are not interchangeable": the job's run, and a registered run per lane).
 //
-// Measured on disk, 2026-10-19: eight reports filed across six `job:proactive-development` runs in
-// one night, every record carrying `report: null`, every card reading "finished · no report". The
-// quiet-show flag was blamed for this last night and was never the cause — this was.
+// Measured on disk, 2026-10-19, on the JOB-side records (the ones the card reads): eight reports
+// filed across six `job:proactive-development` runs, and the pointers land on the WRONG RUN — the
+// newest run has none, one points at another run's report, four point at the previous session's.
+// The reach-back explains all three: with `currentRun` null the stamp falls through to the job run
+// that most recently closed, which is a neighbour rather than the one that filed.
 //
 // These claims are about the decision only. Whether sessions.cjs calls them at the right moments is
 // covered by reading the three call sites; there is no harness that drives a live session's run

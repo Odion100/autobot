@@ -14,10 +14,16 @@
 //                                                          when a JOB run closes)
 //     show quiet:true       → stamp? currentRun is null, lastJobRun is null → NOTHING
 //
-// Measured 2026-10-19: eight reports filed across six job runs in one night, and every run record
-// on disk had `report: null`. The job cards read "finished · no report" while the documents sat in
-// the mailbox — the same lie that was chased last night and attributed to the quiet-show flag, when
-// the flag was never the cause.
+// MEASURED 2026-10-19, on the job-side records (~/.autobot/jobs/<job>/runs/<runId>.json — the
+// surface the card reads; the worklist run file carries no pointer at all, which is a trap for
+// anyone diagnosing this). Eight reports filed across six runs in one night, and the pointers are
+// not merely missing, they are WRONG: the newest run has none, one run points at a report filed by
+// a different run, and four point at reports from the PREVIOUS SESSION. His report: "I'm going to
+// always start with the latest report on job run. But the last one still says no report."
+//
+// The reach-back is why. With `currentRun` null (the lane closed it) the stamp falls through to
+// `lastJobRun` — the job run that most recently CLOSED, which after the first firing is the
+// previous one. So each report lands on a neighbour and the current run is never stamped.
 //
 // So the slot becomes a short STACK of one dedicated kind: the job run is remembered separately and
 // survives any number of lane runs opening and closing underneath it. Pure, because the thing that
