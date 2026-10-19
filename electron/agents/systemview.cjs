@@ -814,20 +814,25 @@ function toolsFor(identity = {}) {
             .string()
             .optional()
             .describe(
-              "with `add`: name the card. The title is how he says WHICH card he means out loud, and how you " +
-                "address it later — a card without one can only be reached by its id."
+              "name the card — with `add`, or with `at` to name one that already exists. TITLING IS YOURS ON ANY " +
+                "CARD, including his: the title is how he says which card he means out loud and how you address " +
+                "it later, and his arrive raw from a voice recorder with none. Title his in HIS words, never a " +
+                "summary of them."
             ),
           state: z
-            .enum(["resolved", "partial", "blocked", "open"])
+            .enum(["resolved", "reviewed", "partial", "blocked", "open"])
             .optional()
             .describe(
-              "read back only the cards in this state. `open` is the ones with no account yet — usually what " +
-                "you want before deciding what to pick up."
+              "read back only the cards in this state. `open` is an ABSENCE — no account at all, nobody has "
+                + "even read it — and it is the group to drain first, because his cards arrive raw from a voice "
+                + "recorder. REVIEWING ONE IS TWO ACTS, BOTH REQUIRED: title it in HIS words (titling is your job "
+                + "on any card, not his), then stamp `reviewed — <what it actually is>`. A stamp with no title is "
+                + "a claim you read something he still cannot point at."
             ),
           status: z
             .string()
             .optional()
-            .describe("the card's account, in one line, with `at`. START IT WITH THE STATE — `resolved`, `partial` or `blocked` — then the line: \"resolved — the band is tabs now\", \"resolved — cause written into the gap file\", \"partial — the panel half only\", \"blocked — waiting on his press\". Each word is a thing HE does next, which is the whole point of them: `blocked` is the only one that is a request (he has to answer it), `partial` asks nothing, `resolved` means he reads one line and deletes the card, and a card with no status at all is `open` — untouched, and the state you are resolving. The word is not decoration: his board filters and clears by it, and an account that does not start with one is read as UNACCOUNTED and never swept, however well it reads. One slot: a second status replaces the first, an empty string clears it. Never stamp a state on his behalf to tidy the board."),
+            .describe("the card's account, in one line, with `at`. START IT WITH THE STATE — `reviewed`, `partial`, `blocked` or `resolved` — then the line: \"reviewed — he wants a post-commit hook per project\", \"partial — the panel half only\", \"blocked — waiting on his press\", \"resolved — cause written into the gap file\". Each word is a thing HE does next: `reviewed` says you READ his card and understood it (and you title it in the same motion — a stamp with no title claims you read something he still cannot point at), `partial` asks nothing, `blocked` is the only one that is a request, `resolved` means he reads one line and deletes the card. A card with no status is `open` — nobody has even read it, and `open` is the only state nobody writes: every other one is a CLAIM you are making, which is why none of them is derived. The word is not decoration: his board filters and clears by it, and an account that does not start with one is read as UNACCOUNTED and never swept, however well it reads. One slot: a second status replaces the first, an empty string clears it. Never stamp a state on his behalf to tidy the board."),
           removeSettled: z
             .boolean()
             .optional()
