@@ -6,15 +6,40 @@
 // load whole when it fires, nothing that says what it must never do, and nothing a human can read
 // on Monday to know what they agreed to. Everything else here is plumbing; that one is the design.
 //
-// Writes under ~/.autobot/jobs/smoke-* and removes them. It never touches a real job.
+// Writes under its own scratch home and removes nothing of his. It used to say "writes under
+// ~/.autobot/jobs/smoke-* and removes them. It never touches a real job" — true about jobs, and
+// silent about the rest: closing a run stamps the CHORE BOARD, so every run of this suite wrote a
+// `job:smoke-job-probe` key into his live `.chore-stamps.json` and re-stamped it on each run
+// (measured 2026-10-18 — the key had been accumulating there for as long as the suite has existed).
+// A suite stands up what it needs and leaves nothing behind, so it gets the same scratch home its
+// sibling `job-path` has, and the same proof that the scratch TOOK.
 import assert from "node:assert";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
+// A SCRATCH HOME BEFORE ANY REQUIRE — these modules resolve their directories from homedir at load
+// time, once, so a redirect after the require reaches nothing.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-jobs-"));
+process.env.HOME = scratch;
+os.homedir = () => scratch;
+process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
+fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
+
 const jobs = require("../electron/agents/jobs.cjs");
 const worklist = require("../electron/agents/worklist.cjs");
+
+// PROVE THE SCRATCH TOOK, or refuse to run. An invented env var and a hopeful comment is how a
+// "scratch" suite wrote into the live agents store once already; the guard is the only thing that
+// turns an assumption into a fact.
+for (const [what, dir] of [["jobs", jobs.DIR], ["worklists", worklist.DIR], ["chore stamps", worklist.STAMPS]]) {
+  if (!String(dir).startsWith(scratch)) {
+    console.error(`FAIL ${what} is pointing at ${dir} — the scratch home did not take`);
+    process.exit(1);
+  }
+}
 
 const ID = "smoke-job-probe";
 let pass = 0;
