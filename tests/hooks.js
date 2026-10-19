@@ -23,6 +23,15 @@ const require = createRequire(import.meta.url);
 const nudgeScratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-hooks-"));
 process.env.AUTOBOT_NUDGE_FILE = path.join(nudgeScratch, "nudge.json");
 fs.writeFileSync(process.env.AUTOBOT_NUDGE_FILE, JSON.stringify({ on: false }));
+
+// THE FIRE LEDGER GOES TO SCRATCH. Firing a hook writes the ledger, and the ledger is his live
+// `~/.autobot/logs` — so every run of this suite appended test fires to `agents.log` and the day's
+// `calls-*.jsonl` (measured 2026-10-19). A log that contains runs nobody made is a log that
+// misleads the next investigation, which is the whole reason it exists. `ledger.cjs` has had the
+// pin all along; this suite simply never set it, and it must be set BEFORE the require that reads
+// it at load time.
+process.env.AUTOBOT_LEDGER_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-hooks-ledger-"));
+
 const defs = require("../electron/agents/definitions.cjs");
 const hooks = require("../electron/agents/hooks.cjs");
 

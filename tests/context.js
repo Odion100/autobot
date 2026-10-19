@@ -19,8 +19,29 @@ const require = createRequire(import.meta.url);
 // load time, once. The corpus claims at the bottom of this file CREATE and PROMOTE corpora; against
 // the live ~/.autobot/corpora.json that would repoint the human's handbooks and publish a test
 // fixture into everybody's unnamed search. Same lesson as the throwaway scopes above.
+
 const CORPORA = path.join(os.tmpdir(), "corpora-smoke-" + process.pid + ".json");
 process.env.AUTOBOT_CORPORA = CORPORA;
+
+// HIS READ COUNTS ARE NOT THIS SUITE'S TO MOVE. Every unscoped search here matches real notes —
+// measured 2026-10-19: one run recorded reads against `he-never-wants-preemptive-rules…`,
+// `file-chips-one-colon-links…` and others — and read counts are exactly the signal maintenance
+// uses to decide what has gone quiet and what has become a doc-candidate. The searches stay real
+// (that is what makes the claims worth anything); the LEDGER is restored byte for byte afterwards,
+// the same save-and-restore `page-events` uses for the watches file.
+const USAGE = path.join(os.homedir(), ".autobot", "context", "usage.jsonl");
+const usageBefore = (() => { try { return fs.readFileSync(USAGE); } catch { return null; } })();
+const restoreUsage = () => {
+  try {
+    if (usageBefore === null) fs.rmSync(USAGE, { force: true });
+    else fs.writeFileSync(USAGE, usageBefore);
+  } catch {}
+};
+process.on("exit", restoreUsage);
+// a crash is the case a `finally` misses — the exit hook above covers both, and these two make
+// a kill or an uncaught throw behave the same way
+process.on("SIGINT", () => { restoreUsage(); process.exit(130); });
+process.on("uncaughtException", (e) => { restoreUsage(); console.error(e); process.exit(1); });
 // A SCRATCH ~/.autobot FOR JOBS.CJS ONLY, pinned before anything loads it. jobs.cjs resolves its
 // DIR from os.homedir() at module load, once — so the job claims at the bottom of this file would
 // otherwise create and delete fixtures in his REAL ~/.autobot/jobs. Same lesson as the throwaway

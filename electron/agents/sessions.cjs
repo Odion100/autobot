@@ -1512,7 +1512,12 @@ const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6
 // Lifecycle breadcrumbs — when a session dies on its own, this file says why.
 function logLife(s, what) {
   try {
-    const dir = path.join(os.homedir(), ".autobot", "logs");
+    // ONE ANSWER FOR WHERE LOGS GO. This re-derived `~/.autobot/logs` while `ledger.cjs` already
+    // owns that path AND makes it pinnable (`AUTOBOT_LEDGER_DIR`) — so a suite that pinned the
+    // ledger still wrote lifecycle lines into his real log, which is how test fires ended up in
+    // the file an investigation reads (measured 2026-10-19). Two derivations of one path is one
+    // derivation too many.
+    const dir = require("./ledger.cjs").ROOT;
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, "agents.log"), `${new Date().toISOString()} ${s.key} ${what}\n`);
   } catch {}
