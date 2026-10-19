@@ -67,6 +67,13 @@ const EVENTS = [
   // THE HOST EMITS, NEVER THE PAGE. A registered app has no door that reaches emit() — if it did,
   // an app could forge the trigger for a hook it was never granted. So the shell observes the page
   // and announces what it saw; the page is watched, not trusted.
+  // RFC-071 — A DOCUMENT HAS MEMBERS. His design: there is no meeting object, there is a document
+  // with people on it, and an update reaches them through THIS system rather than a second one
+  // ("at the end of the day, these are hooks, right?"). Ambient, like the page events: it belongs
+  // to no session, so it fans out to hooks and never into somebody's feed. `members` is the list
+  // the document itself carries, so an agent's standing hook is one line — `when: { members:
+  // { contains: "<its own project code>" } }` — and membership is edited by editing the file.
+  { name: "document.updated", what: "a document someone is a member of was updated — he pressed send, or it auto-updates. `members` is PIPE-WRAPPED (`|buapi|systemlynx|`) so a hook matches one exactly with `contains: \"|buapi|\"` — a bare `contains: \"bu\"` would also match `buapi`, which is how an agent ends up woken for somebody else's document", fields: ["path", "project", "members", "by", "summary", "threads", "thread"] },
   { name: "page.navigated", what: "a tab went somewhere — fires on every tab, watched or not", fields: ["url", "title", "from", "tabId"] },
   { name: "page.value-changed", what: "a value someone asked us to watch is no longer what it was", fields: ["watch", "label", "from", "to", "url", "selector"] },
   // NOT LISTED: `hook.fired`. It is emitted (the receipt every hook writes to the feed) but it is

@@ -62,6 +62,13 @@ const FULL = {
   // RFC-005 §10 — JOBS, for the app that is the surface for them without owning them. Every verb
   // here goes through the engine: nothing an app calls writes into a store the app can see, which
   // is what keeps "workers can be deleted without the engine changing" true rather than aspirational.
+  // RFC-071 — A DOCUMENT HAS MEMBERS. The window observes the send; the HOST emits the event, the
+  // same rule page events live by: a surface that could emit its own trigger could forge a hook it
+  // was never granted. So this door carries the facts and nothing else — the shell decides it is an
+  // event, and the hook layer decides who hears it.
+  documents: {
+    sendUpdate: (payload) => ipcRenderer.invoke("documents:send-update", payload),
+  },
   jobs: {
     list: () => ipcRenderer.invoke("jobs:list"),
     get: (id) => ipcRenderer.invoke("jobs:get", id),

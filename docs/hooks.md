@@ -33,6 +33,34 @@ out, so a hook edited once migrates itself and only one spelling exists on disk.
 hook that exists with its rate and delivery — read from the code, incapable of drifting. A page
 listing twenty events is wrong the day someone adds the twenty-first. **Ask the verb.**
 
+## An event can reach an agent WITHOUT a hook — membership is its own subscription
+
+A hook is how an agent subscribes to a MOMENT. It is not the only way a turn arrives, and assuming
+it is cost a build: RFC-071's document membership was first delivered through hooks alone, so a
+document could show `buAPI` as a member while buAPI heard nothing — the chip claimed a subscription
+nobody was honouring, because no agent happened to carry the hook. His ruling settled it: *"if
+you're in the members, then you get the messages."*
+
+So `document.updated` is delivered **twice over, on purpose**:
+
+- **The press reaches the host, never the page.** `window.systemview.documents.sendUpdate` →
+  `documents:send-update` in `electron/apps/files-host.cjs`, which refuses a send with no path or no
+  members and otherwise emits the ambient event. The window observes; the host announces.
+- **`deliverToMembers`** (`electron/agents/sessions.cjs`) runs off `emitAmbient` and pushes a turn
+  into every session whose `projectCode` appears in the event's `members`. Nothing is armed, nothing
+  is carried, and no agent can opt out by not having a hook — the `::members` line in the document
+  IS the subscription.
+- **The hook system** then fans the same event out as usual, for anything that wants to do something
+  EXTRA when a document moves.
+
+The rule this generalises to: when a subscription is declared somewhere a human can see it — a line
+in a document, a row in a surface — the delivery has to come from that declaration. A hook is for
+what an agent decides to watch; it must never be what makes a promise on screen true.
+
+**The receipt is a row, not a notification.** A landing arrives as `message.landed` carrying the
+document, the thread and the whole delivered text, so the window draws it as a row that opens. A
+receipt that carries only a preview string is a row that can be read and nothing else.
+
 ## The condition can mix what happened with what the world can afford
 
 Every event is stamped with AMBIENT fields at the fire point, so a `when` can combine the event's own

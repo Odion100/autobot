@@ -141,6 +141,41 @@ function register(getWin) {
   );
 
   // auth — read-only mirror of the setup page's status
+  // RFC-071 — A DOCUMENT HAS MEMBERS, and this is where a send becomes an EVENT. The window sees
+  // the press; the host emits, because a surface that could emit its own trigger could forge a hook
+  // it was never granted — the same rule page events live by.
+  //
+  // `members` goes out PIPE-WRAPPED (`|buapi|systemlynx|`) so a standing hook matches one member
+  // exactly: `when: { members: { contains: "|buapi|" } }`. A bare substring would wake `buapi` for
+  // a document owned by `bu`, which is the kind of mistake nobody would ever find.
+  ipcMain.handle("documents:send-update", (_e, payload = {}) => {
+    const members = (Array.isArray(payload.members) ? payload.members : [])
+      .map((m) => String(m || "").trim())
+      .filter(Boolean);
+    const path_ = String(payload.path || "").trim();
+    if (!path_) return { ok: false, error: "no document path" };
+    if (!members.length) return { ok: false, error: "nobody to send to — the document has no members" };
+    const event = {
+      kind: "document.updated",
+      path: path_,
+      project: String(payload.project || ""),
+      members: `|${members.join("|")}|`,
+      by: String(payload.by || "you"),
+      summary: String(payload.summary || "").slice(0, 400),
+      threads: Number(payload.threads) || 0,
+      // WHICH SUBSCRIPTION THIS IS. A thread reply names its thread; a document send does not — so
+      // a hook can tell "somebody answered you" from "the file moved" with one field, and an agent
+      // woken by the first knows where to read before it opens anything.
+      ...(payload.thread ? { thread: String(payload.thread) } : {}),
+    };
+    try {
+      sessions.emitAmbient(event);
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || "could not announce it" };
+    }
+    return { ok: true, sent: members, path: path_ };
+  });
+
   ipcMain.handle("files:rauth-status", () => {
     const claude = (() => {
       try {

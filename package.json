@@ -41,7 +41,8 @@
     "build:systemlynx": "esbuild electron/apps/systemlynx.browser.entry.js --bundle --platform=browser --alias:form-data=./electron/apps/shims/form-data.js --alias:fs=./electron/apps/shims/node-empty.js --alias:path=./electron/apps/shims/node-empty.js --alias:stream=./electron/apps/shims/node-empty.js --outfile=electron/apps/systemlynx.browser.js --minify",
     "smoke:split": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_SPLITSMOKE=1 node electron/launch.js",
     "smoke:app": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_APPSMOKE=1 node electron/launch.js",
-    "smoke:shot": "node tests/shot.js"
+    "smoke:shot": "node tests/shot.js",
+    "smoke:documents": "node tests/documents.js"
   },
   "repository": {
     "type": "git",

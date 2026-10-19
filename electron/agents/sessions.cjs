@@ -790,11 +790,79 @@ const AMBIENT_LIMIT = 500;
 const ambient = [];
 const ambientSubs = new Set();
 
+// RFC-071 — MEMBERSHIP IS THE SUBSCRIPTION, AND IT DELIVERS ITSELF. His correction, 2026-10-19:
+// *"How could no agent have the hook? It shouldn't be up to the agent. If the UI says the agent
+// has the hook, then they have the hook. If you're in the members, then you get the messages."*
+//
+// He is right, and the first build had it wrong. Delivery rode on hooks alone, which meant the
+// document's chip said buAPI was a member while buAPI heard nothing — because somebody had to arm
+// a hook on buAPI first. A surface that claims a subscription nobody is honouring is the exact
+// failure this system refuses everywhere else.
+//
+// So a `document.updated` is delivered to the sessions of the projects named in its `members`,
+// directly, by the harness. Hooks still fire for whoever carries one — they are the general
+// mechanism and this is not replacing them — but membership no longer DEPENDS on one existing.
+function deliverToMembers(e) {
+  if (e.kind !== "document.updated") return;
+  const named = String(e.members || "")
+    .split("|")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (!named.length) return;
+  for (const s of sessions.values()) {
+    if (!named.includes(s.projectCode)) continue;
+    // Never to the room it came FROM: the project whose window pressed send already knows, and an
+    // agent being told about its own document's send would answer itself.
+    if (e.project && s.projectCode === e.project && e.by === "you" && !e.thread) continue;
+    const what = e.thread
+      ? `A thread you are in moved — ${e.project}:${e.path}, thread ${e.thread}. ${e.summary || ""}`
+      : `A document you are a member of was updated — ${e.project}:${e.path}. ${e.summary || ""}`;
+    const full =
+      `${what}\n\nRead the file rather than trusting this line — it is current and this is a ` +
+      `summary. You are on it because the document says so (\`::members\`), which is also how ` +
+      `you stop being on it.`;
+    try {
+      s.input.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: full,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        session_id: "",
+      });
+      s.nextTurnFromHook = true;
+      // THE RECEIPT CARRIES THE FACTS, not just a sentence. His: *"why isn't that thread log
+      // expandable like most logs so you can see details?"* — a one-line note with a 140-character
+      // preview is a row that can only ever be read, so the window gets the document, the thread
+      // and the whole delivered text and can open all three.
+      emit(s, {
+        kind: "message.landed",
+        from: e.by || "you",
+        preview: what.slice(0, 140),
+        doc: {
+          project: e.project || "",
+          path: e.path || "",
+          thread: e.thread || "",
+          summary: e.summary || "",
+          text: full,
+        },
+      });
+    } catch {}
+  }
+}
+
 function emitAmbient(event = {}) {
   const e = { ...event, ts: Date.now(), ambient: true };
   ambient.push(e);
   if (ambient.length > AMBIENT_LIMIT) ambient.splice(0, ambient.length - AMBIENT_LIMIT);
   for (const sub of ambientSubs) { try { sub(e); } catch {} }
+  try { deliverToMembers(e); } catch {}
   // A COPY PER SESSION. fireHooks hands the event to hooks.fire, which reads it and does not write
   // — but emit() downstream stamps fields onto whatever it is given, and one shared object stamped
   // by several sessions is the bug that would be invisible until two agents disagreed about which

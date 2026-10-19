@@ -22,6 +22,7 @@ const TOOL_NAMES = [
   "connect", "disconnect",
   "terminal", "terminals",
   "shot",
+  "documents",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -992,6 +993,35 @@ function toolsFor(identity = {}) {
       // model receives the pixels in the same turn it asked for them — a path would mean a second
       // hop through a file reader, and an agent that has to ask twice to look will stop looking.
       // The text line beside it is for the chat feed, which only ever sees text.
+      // RFC-071 — WHAT AM I ON? A document carries its members in its own `::members` line, so this
+      // asks the hub to walk the project and answer two questions with one read: which documents
+      // name me, and which of those have changed since whoever is on them was last told. An agent
+      // woken by a `document.updated` hook uses it to see the rest of what it is sitting on.
+      tool(
+        "documents",
+        "The documents in a project that carry MEMBERS — who is on each one, and who has not been told about the current version. " +
+          "Pass `member` to ask only about one (usually yourself: \"what am I on?\"). Membership lives in the document itself as a " +
+          "`::members{who=a|b}` line, so it is his to edit and yours to read — never a registry somewhere else. A document with no " +
+          "members is not listed at all.",
+        {
+          projectCode: z.string(),
+          member: z.string().optional().describe("only documents this project code is on — usually your own"),
+        },
+        async (a) => {
+          try {
+            const r = await hub("Agent", "documents", { ...a });
+            if (!r || r.error) return text(`no answer: ${(r && r.error) || "the hub said nothing"}`);
+            if (!r.documents.length)
+              return text(a.member ? `${a.member} is not on any document in ${r.project}` : `no document in ${r.project} has members`);
+            const lines = r.documents.map(
+              (d) => `${d.behind.length ? "•" : " "} ${d.path} — ${d.who.join(", ")}${d.behind.length ? ` (behind: ${d.behind.join(", ")})` : ""}`
+            );
+            return text(
+              [`${r.withMembers} document${r.withMembers === 1 ? "" : "s"} with members · ${r.withUpdates} with unsent updates`, ...lines].join("\n")
+            );
+          } catch (e) { return fail(e); }
+        }
+      ),
       tool(
         "shot",
         "PHOTOGRAPH HIS WINDOW and look at it. Returns the picture itself, plus where it was " +

@@ -63,8 +63,12 @@ const GRANTS = {
   "files:read": {
     files: ["readFile", "listFiles", "search", "gitState", "changedFiles", "getDiff"],
   },
+  // RFC-071's `documents.sendUpdate` rides HERE rather than taking a grant of its own: an app that
+  // can write a document can already change what its members would be told about, so a separate
+  // grant would protect nothing and add a line to every manifest.
   "files:write": {
     files: ["writeFile", "stageFiles", "stageHunk"],
+    documents: ["sendUpdate"],
   },
 };
 
