@@ -9,6 +9,7 @@
 // serve the model and the chat feed — the renderer's parseMcpResult knows these shapes, and
 // anything unparseable falls through to the raw block so pretty never loses data.
 const { createSdkMcpServer, tool } = require("@anthropic-ai/claude-agent-sdk");
+const shot = require("./shot.cjs");
 const { z } = require("zod");
 
 const SERVER = "systemview";
@@ -20,6 +21,7 @@ const TOOL_NAMES = [
   "nav", "refresh", "act", "highlight", "lanes",
   "connect", "disconnect",
   "terminal", "terminals",
+  "shot",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -786,17 +788,50 @@ function toolsFor(identity = {}) {
       tool(
         "board",
         "His board — the notes he accumulates for agents between sessions. Read it, add a note, " +
-          "reply to one, or REMOVE one whose account has landed. There is no done state on purpose: " +
-          "a card is deleted when its work has been reported somewhere, so the number of cards is " +
-          "the number of things still outstanding. Remove it only once the account exists — a " +
-          "report, a lane, a commit — and if you only did part of a card, add the remainder back as " +
-          "its own note rather than deleting the whole thing.",
+          "reply to one, set a card's STATUS, or REMOVE one whose account has landed. There is no " +
+          "done state on purpose: a card is deleted when its work has been reported somewhere, so " +
+          "the number of cards is the number of things still outstanding. A `status` does not change " +
+          "that — it is the one line he reads INSTEAD of re-reading the card when he decides to " +
+          "delete it (\"implemented — reports are a band tab now\"), which is why `removeSettled` " +
+          "exists: set the account as you finish each thing, and the settled ones clear in one " +
+          "motion. Remove only once the account exists — a report, a lane, a commit — and if you " +
+          "only did part of a card, add the remainder back as its own note rather than deleting the " +
+          "whole thing.",
         {
           projectCode: z.string(),
           name: z.string().optional().describe("a named board; default is the main one"),
           add: z.string().optional().describe("a note to add"),
           replyText: z.string().optional().describe("a reply to an existing note"),
-          at: z.union([z.string(), z.number()]).optional().describe("which note the reply targets"),
+          at: z
+            .union([z.string(), z.number()])
+            .optional()
+            .describe(
+              "which card the reply or the status targets — its id, its TITLE, or an unambiguous part " +
+                "of its title (\"the status picker\"). Never a position: positions shift when anyone adds " +
+                "a card. Two cards matching one title is refused with both named rather than resolved to the first."
+            ),
+          title: z
+            .string()
+            .optional()
+            .describe(
+              "with `add`: name the card. The title is how he says WHICH card he means out loud, and how you " +
+                "address it later — a card without one can only be reached by its id."
+            ),
+          state: z
+            .enum(["resolved", "partial", "blocked", "open"])
+            .optional()
+            .describe(
+              "read back only the cards in this state. `open` is the ones with no account yet — usually what " +
+                "you want before deciding what to pick up."
+            ),
+          status: z
+            .string()
+            .optional()
+            .describe("the card's account, in one line, with `at`. START IT WITH THE STATE — `resolved`, `partial` or `blocked` — then the line: \"resolved — the band is tabs now\", \"resolved — cause written into the gap file\", \"partial — the panel half only\", \"blocked — waiting on his press\". Each word is a thing HE does next, which is the whole point of them: `blocked` is the only one that is a request (he has to answer it), `partial` asks nothing, `resolved` means he reads one line and deletes the card, and a card with no status at all is `open` — untouched, and the state you are resolving. The word is not decoration: his board filters and clears by it, and an account that does not start with one is read as UNACCOUNTED and never swept, however well it reads. One slot: a second status replaces the first, an empty string clears it. Never stamp a state on his behalf to tidy the board."),
+          removeSettled: z
+            .boolean()
+            .optional()
+            .describe("take off EVERY card carrying a status, in one motion — every text and its account are handed back. Use after a pass that set statuses as it went; nothing settled answers removed: 0 rather than failing."),
           remove: z
             .union([z.string(), z.number()])
             .optional()
@@ -809,7 +844,29 @@ function toolsFor(identity = {}) {
               const lines = (r.notes || []).map((n, i) => `${i + 1}. ${typeof n === "string" ? n : n.text || JSON.stringify(n)}`);
               return text([`board — ${r.project}${r.board !== "board" ? ` · ${r.board}` : ""}`, ...lines].join("\n"));
             }
-            return text(r && r.ok === false ? "board op failed" : JSON.stringify(r, null, 2));
+            // A REFUSAL CARRIES THE HUB'S OWN REASON. This read `"board op failed"` and nothing
+            // else, so every refusal the door makes — an id that does not exist, a POSITION where
+            // an id was required, an unsigned write, a project the hub has never heard of — arrived
+            // as one sentence indistinguishable from the hub being down, and the ids the error
+            // helpfully lists were thrown away with it. Same bug `show` had and the same fix
+            // (tests/show.js §6); caught here by tests/board.js §6 rather than by an agent aiming
+            // the same wrong id twice.
+            // A REFUSAL IS ONLY USEFUL IF THE WAY OUT IS READABLE. The id list grew titles
+            // ({ts, title}) so a caller could choose between them, and this still joined the
+            // objects — printing `[object Object]` twenty-eight times, which is a refusal with its
+            // own answer removed. Caught by using it, a minute after shipping it.
+            if (r && (r.ok === false || r.error)) {
+              const idLine = (list) =>
+                (list || [])
+                  .map((x) => (x && typeof x === "object" ? `${x.ts}${x.title ? ` · ${x.title}` : ""}` : String(x)))
+                  .join("\n  ");
+              return text(
+                `the board refused that: ${r.error || "no reason given"}` +
+                  (r.matches ? `\nmatches:\n  ${idLine(r.matches)}` : "") +
+                  (r.ids ? `\ncards on it:\n  ${idLine(r.ids)}` : "")
+              );
+            }
+            return text(JSON.stringify(r, null, 2));
           } catch (e) { return fail(e); }
         }
       ),
@@ -917,6 +974,58 @@ function toolsFor(identity = {}) {
           try {
             const r = await hub("Agent", "disconnect", a);
             return text(r && r.ok ? `disconnected ${a.projectCode}${a.serviceId ? `/${a.serviceId}` : ""}` : `disconnect failed${r && r.error ? ` — ${r.error}` : ""}`);
+          } catch (e) { return fail(e); }
+        }
+      ),
+      // LOOKING AT THE WINDOW — the one tool here that calls NO hub method. A capture is the
+      // harness's own capability (this server runs inside the main process, so `BrowserWindow` is
+      // simply in scope), which also means a stale or stopped hub cannot take it away: when
+      // something is wrong enough that the agent needs to see the screen, the hub is exactly what
+      // is most likely to be down.
+      //
+      // IT RETURNS THE PICTURE, NOT A PATH TO ONE. An MCP result can carry an image block, so the
+      // model receives the pixels in the same turn it asked for them — a path would mean a second
+      // hop through a file reader, and an agent that has to ask twice to look will stop looking.
+      // The text line beside it is for the chat feed, which only ever sees text.
+      tool(
+        "shot",
+        "PHOTOGRAPH HIS WINDOW and look at it. Returns the picture itself, plus where it was " +
+          "filed. Use it whenever you have changed a surface and are about to CLAIM something " +
+          "about how it looks or reads — a field that renders, a control that appears, a layout " +
+          "that holds — because tests and source cannot see any of that, and he should not have " +
+          "to be your eyes. Captures the FOCUSED window, whatever page is in it. Put the file in " +
+          "your reply as a ::file block if he should see what you saw.",
+        {
+          label: z
+            .string()
+            .optional()
+            .describe("a few words for the filename — what you are looking at, e.g. \"board after the chip landed\""),
+          title: z
+            .string()
+            .optional()
+            .describe("photograph the window whose title contains this instead of the focused one"),
+        },
+        async ({ label, title }) => {
+          try {
+            const { BrowserWindow } = require("electron");
+            const r = await shot.capture({ windows: BrowserWindow.getAllWindows(), label, title });
+            if (!r || r.error)
+              return text(
+                `no photograph — ${(r && r.error) || "the capture did not happen"}` +
+                  (r && r.titles ? `\nopen windows: ${r.titles.map((t) => `"${t}"`).join(", ")}` : ""),
+              );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `photographed "${r.window}" (${r.why}) — ${r.width}×${r.height}, ${Math.round(r.bytes / 1024)}kb\n` +
+                    `filed as ${r.path}` +
+                    (r.pruned ? `\npruned ${r.pruned} older shot${r.pruned === 1 ? "" : "s"}` : ""),
+                },
+                { type: "image", data: r.png.toString("base64"), mimeType: "image/png" },
+              ],
+            };
           } catch (e) { return fail(e); }
         }
       ),

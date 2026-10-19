@@ -27,6 +27,7 @@
     "smoke:worklist": "node tests/worklist.js",
     "smoke:lanes": "node tests/lanes.js",
     "smoke:show": "node tests/show.js",
+    "smoke:board": "node tests/board.js",
     "smoke:origin": "node tests/same-origin.js",
     "smoke:caps": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_CAPSMOKE=1 node electron/launch.js",
     "smoke:contract": "node tests/app-contract.js",
@@ -39,7 +40,8 @@
     "smoke:jobs": "node tests/jobs.js",
     "build:systemlynx": "esbuild electron/apps/systemlynx.browser.entry.js --bundle --platform=browser --alias:form-data=./electron/apps/shims/form-data.js --alias:fs=./electron/apps/shims/node-empty.js --alias:path=./electron/apps/shims/node-empty.js --alias:stream=./electron/apps/shims/node-empty.js --outfile=electron/apps/systemlynx.browser.js --minify",
     "smoke:split": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_SPLITSMOKE=1 node electron/launch.js",
-    "smoke:app": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_APPSMOKE=1 node electron/launch.js"
+    "smoke:app": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_APPSMOKE=1 node electron/launch.js",
+    "smoke:shot": "node tests/shot.js"
   },
   "repository": {
     "type": "git",

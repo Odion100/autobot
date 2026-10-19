@@ -883,6 +883,23 @@ function startWatcher(s) {
 // for human reading — his rule, "our logs come out human" — and clipping a ranked list of notes
 // at 400 chars re-creates the dump problem by amputation. Their sizes are bounded at the source
 // (top-k results, 40KB cap on call), so the budget is honest, not unbounded.
+// A PICTURE A TOOL FILED IS SHOWN, NOT SPELLED. `brief` flattens a result's blocks to text and
+// writes any non-text block as `[image]` — which is how a screenshot tool, whose entire output IS
+// the picture, arrived in the feed as the five literal characters "[image]". His ruling,
+// 2026-10-19: *"if I expand the log, it's supposed to show me the screenshot."*
+//
+// The pairing is the signal, and both halves have to be there: the result carries a real image
+// block AND its text names an absolute file it filed. The path is what the feed keeps — never the
+// bytes, because a session's event log is replayed and stored, and base64 pngs in it would make
+// every reload heavier forever for a picture that is already on disk.
+function filedImage(content) {
+  if (!Array.isArray(content)) return null;
+  if (!content.some((b) => b && b.type === "image")) return null;
+  const text = content.filter((b) => b && b.type === "text").map((b) => b.text).join("\n");
+  const m = text.match(/(\/[^\s"']+\.(?:png|jpe?g|gif|webp))/i);
+  return m ? m[1] : null;
+}
+
 function brief(content, max = 400) {
   if (typeof content === "string") return content.slice(0, max);
   if (Array.isArray(content))
@@ -1110,6 +1127,7 @@ async function pump(s) {
                 ok,
                 summary: `${toolSummary(call.name, call.input)} — ${ok ? "done" : "failed"}`,
                 detail: brief(b.content, resultBudget(call.name)),
+                ...(filedImage(b.content) ? { image: filedImage(b.content) } : {}),
               });
               const fc = ok && call.name ? fileChangeOf(call.name, call.input) : null;
               if (fc && fc.path) {
@@ -1960,7 +1978,15 @@ function transcriptMessages(cwd, sessionId, { limit = 50 } = {}) {
             out.push({ kind: "user.prompt", text: b.text, ts });
           // the work is part of the conversation — results replay too
           else if (b.type === "tool_result")
-            out.push({ kind: "tool.result", id: b.tool_use_id, ok: !b.is_error, detail: brief(b.content, resultBudget(callNames.get(b.tool_use_id))), ts });
+            out.push({
+              kind: "tool.result",
+              id: b.tool_use_id,
+              ok: !b.is_error,
+              detail: brief(b.content, resultBudget(callNames.get(b.tool_use_id))),
+              // Replay shows the picture too — a log that only shows it live is a log that forgets.
+              ...(filedImage(b.content) ? { image: filedImage(b.content) } : {}),
+              ts,
+            });
         }
       }
     } else if (rec.type === "system" && rec.subtype === "compact_boundary") {

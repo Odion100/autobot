@@ -417,7 +417,24 @@ function ToolCard({ ev, res, open, toggle }) {
     <div className={`act tool-card ${res ? (res.ok ? "" : "failed") : "running"}`} onClick={toggle}>
       <span className="tool-summary">{ev.summary || ev.name}</span>
       <span className="tool-state">{res ? (res.ok ? "" : "✕") : "…"}</span>
-      {open && <div className="tool-detail" onClick={(e) => e.stopPropagation()}>{detail()}</div>}
+      {open && (
+        <div className="tool-detail" onClick={(e) => e.stopPropagation()}>
+          {/* A TOOL THAT FILED A PICTURE SHOWS THE PICTURE. It sits above the text because the
+              picture IS the result — the text beside it only says where it was filed and how big
+              it was. Every tool, not just the screenshot one: anything that files an image and
+              says so gets this for free. */}
+          {res?.image && (
+            <img
+              className="tool-shot"
+              src={`file://${res.image}`}
+              alt="what the tool photographed"
+              onClick={() => window.open(`file://${res.image}`)}
+              title="open full size"
+            />
+          )}
+          {detail()}
+        </div>
+      )}
     </div>
   );
 }
