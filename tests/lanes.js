@@ -248,4 +248,42 @@ const lanes = (identity = {}) =>
   }
 }
 
+{
+  // A RECEIPT SAYS HOW THE WORK CAME IN. A merge puts the commits into history; an apply-as-changes
+  // leaves them uncommitted in his tree — so "is my tree the only copy of this" has two different
+  // answers and the receipt recorded both identically. This is the half that decides it.
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-howrcpt-"));
+  process.env.AUTOBOT_WORKLISTS_DIR = dir;
+  delete require.cache[require.resolve("../electron/agents/worklist.cjs")];
+  const wl = require("../electron/agents/worklist.cjs");
+
+  wl.writeRun("h1", "session:sv:1", [{ text: "a", state: "done" }], "lane:lane/x");
+  assert.strictEqual(wl.markBroughtIn("h1", { base: "abc123", how: "merge" }).how, "merge");
+  assert.strictEqual(wl.markBroughtIn("h1", { base: "abc123", how: "changes" }).how, "changes");
+
+  // AN UNRECOGNISED VALUE BECOMES UNKNOWN rather than being stored — otherwise each surface invents
+  // its own synonyms and one fact ends up with three spellings.
+  assert.strictEqual(wl.markBroughtIn("h1", { how: "merged" }).how, "");
+  assert.strictEqual(wl.markBroughtIn("h1", { how: "applied" }).how, "");
+  assert.strictEqual(wl.markBroughtIn("h1", {}).how, "");
+  assert.deepStrictEqual(wl.HOW, ["merge", "changes"]);
+
+  // IT RIDES THE ROW, or no surface can say it.
+  wl.markBroughtIn("h1", { base: "abc123", how: "changes" });
+  const row = wl.all().find((r) => r.owner === "run:h1");
+  assert.strictEqual(row.broughtIn.how, "changes");
+
+  // AND IT SURVIVES A WRITE THAT KNOWS NOTHING ABOUT IT — `save()` carries only the keys it names,
+  // and `broughtIn` was already in that list, so the whole object rides along. Pinned because the
+  // next field added to a receipt will not be.
+  wl.markStatus("h1", { text: "waiting on review" });
+  assert.strictEqual(wl.all().find((r) => r.owner === "run:h1").broughtIn.how, "changes");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  ok("a receipt records HOW the work came in — merge or changes, unknown when nobody said, and it survives an unrelated write");
+}
+
 console.log(`\n${n} claims held — the lane verb`);

@@ -2423,13 +2423,16 @@ function announceLaneRemoved(projectCode, branch) {
 // `by` is the session's own slot, which is honest: the agent that applied the diff is the one making
 // the claim, and a receipt is a claim. `markBroughtIn` refuses a run that does not exist, so a
 // receipt can never mint a lane — and it lives on the run record, so it dies with the lane.
-function recordLaneBroughtIn(projectCode, branch, { base = "", repo = "" } = {}) {
+function recordLaneBroughtIn(projectCode, branch, { base = "", repo = "", how = "" } = {}) {
   const id = worklist.runIdForLane(projectCode, String(branch || "").trim());
   if (!id) return null;
   const me = [...sessions.values()].find((s) => s.projectCode === projectCode);
   return worklist.markBroughtIn(id, {
     base,
     repo: repo || projectCode,
+    // WHICH WAY IT CAME IN — the branch block knows, because it is the thing that did it: `merge`
+    // from mergeBranch, `changes` from the apply path. Absent stays absent; this door never guesses.
+    how,
     by: (me && me.agentId) || `project:${projectCode}`,
   });
 }

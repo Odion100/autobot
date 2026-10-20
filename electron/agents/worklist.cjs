@@ -712,7 +712,16 @@ function markNudged(owner, { ts = 0 } = {}) {
   return nudges;
 }
 
-function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
+// HOW THE WORK CAME IN, not just that it did. A merge puts the lane's commits into history; an
+// apply-as-changes leaves them uncommitted in his tree — and the difference decides whether his tree
+// is the only copy of that work. A receipt that records both the same way cannot answer the one
+// question he asks after landing a pile: "which of these still only exist in my working directory?"
+//
+// UNKNOWN IS A REAL VALUE and it is the default. Every receipt written before this field existed
+// came in one of the two ways and nobody can now say which, so "" means exactly that rather than
+// quietly reading as a merge.
+const HOW = ["merge", "changes"];
+function markBroughtIn(id, { base = "", repo = "", by = "", how = "", ts = 0 } = {}) {
   const owner = runOwner(String(id || ""));
   try {
     if (!fs.existsSync(fileFor(owner))) return null;
@@ -724,6 +733,10 @@ function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
     base: String(base || "").trim().slice(0, 80),
     repo: String(repo || "").trim().slice(0, 80),
     by: String(by || "").trim().slice(0, 80),
+    // AN UNRECOGNISED VALUE BECOMES UNKNOWN rather than being stored. A receipt is read by surfaces
+    // that branch on this; letting "merged" or "applied" through would mean each surface inventing
+    // its own synonyms, which is how one fact becomes three spellings.
+    how: HOW.includes(String(how || "").trim()) ? String(how).trim() : "",
   };
   save(owner, { broughtIn });
   return broughtIn;
@@ -1024,4 +1037,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { attach, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_NAMES };
+module.exports = { attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_NAMES };

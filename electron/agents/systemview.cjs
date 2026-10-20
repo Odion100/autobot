@@ -244,7 +244,11 @@ function renderLanes(projectCode, r) {
     const statement = said(l);
     // A receipt stays, because it carries something a sentence does not: the BASE it was applied
     // against, which is checkable against history. It is detail under the statement, not the answer.
-    const rcpt = l.broughtIn ? `  · applied ${new Date(l.broughtIn.ts).toISOString().slice(0, 10)}${l.broughtIn.base ? ` at ${l.broughtIn.base}` : ""}` : "";
+    // "merged" and "as changes" are different answers to "is my tree the only copy of this", so the
+    // row says which. An older receipt has no `how` and reads "applied", which is honest: nobody
+    // can now say which way it came in.
+    const how = l.broughtIn && l.broughtIn.how === "merge" ? "merged" : l.broughtIn && l.broughtIn.how === "changes" ? "applied as changes" : "applied";
+    const rcpt = l.broughtIn ? `  · ${how} ${new Date(l.broughtIn.ts).toISOString().slice(0, 10)}${l.broughtIn.base ? ` at ${l.broughtIn.base}` : ""}` : "";
     out.push(
       statement
         ? // SAID FIRST, DERIVED SECOND AND LABELLED AS SUCH. He can see the two disagree and decide;
@@ -509,6 +513,20 @@ function toolsFor(identity = {}) {
           // cross-check rather than the source of truth. It is a RECEIPT, not a settable verdict:
           // laneVerdict only lets it answer `unknown`, never outrank a derived `out`, because `out`
           // is proof and this is a record.
+          // HOW IT CAME IN, as a field rather than a sentence. The `broughtIn` description already
+          // asks "did it land as a commit or as changes" — but only in prose, into `status`, where
+          // no surface can branch on it. A merge puts the commits into history; an apply leaves them
+          // uncommitted in his tree, and that difference is the whole answer to "is my tree the only
+          // copy of this work". It belongs in the record, not in a sentence somebody has to read.
+          how: z
+            .enum(["merge", "changes"])
+            .optional()
+            .describe(
+              "HOW the work came in, with `broughtIn`: `merge` if you merged the branch so its " +
+                "commits are in history, `changes` if you applied the diff and it is sitting " +
+                "uncommitted in his tree. Say it — the row prints 'merged' or 'applied as changes', " +
+                "and an omitted value reads 'applied', which is the honest way of saying nobody knows."
+            ),
           broughtIn: z
             .string()
             .optional()
@@ -544,7 +562,7 @@ function toolsFor(identity = {}) {
             .optional()
             .describe("how it should read: ok = safe, warn = needs your eyes, note = neutral (default)"),
         },
-        async ({ projectCode, remove, broughtIn, status, tone, branch }) => {
+        async ({ projectCode, remove, broughtIn, how, status, tone, branch }) => {
           try {
             const st = await hub("SystemView", "lanes", [projectCode]);
             // ─── A BRANCH IS NOT A LANE UNTIL IT IS REGISTERED (his ruling, 2026-10-08) ───────
@@ -635,7 +653,7 @@ function toolsFor(identity = {}) {
               const g = await hub("SystemView", "gitState", [projectCode]);
               const base = (g && (g.head || g.sha || (g.log && g.log[0] && g.log[0].sha))) || "";
               const onto = g && g.branch ? String(g.branch) : "";
-              const rec = onLaneBroughtIn(b, { base, repo: projectCode });
+              const rec = onLaneBroughtIn(b, { base, repo: projectCode, how });
               if (!rec || !rec.ts)
                 return text(
                   `${b}: nothing recorded — no run file for this lane (its record may have been swept). ` +
