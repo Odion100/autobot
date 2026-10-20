@@ -140,6 +140,7 @@ const hooks = require("./hooks.cjs");
 const ledger = require("./ledger.cjs");
 const worklist = require("./worklist.cjs");
 const nudge = require("./nudge.cjs");
+const skillSources = require("./skillSources.cjs");
 const context = require("./context.cjs");
 const discovery = require("./discovery.cjs");
 const services = require("./services.cjs");
@@ -220,6 +221,74 @@ function systemContext() {
 // has actually moved — which is the only moment the answer could be different. Keyed per agent, and
 // a stat failure falls through to a re-read rather than serving a stale number, because being wrong
 // about staleness is the one thing this cannot afford.
+// A SKILL'S DESCRIPTION IS COMPOSED, AND NOTHING WAS WATCHING IT.
+//
+// `COMPOSED_FIELDS` below contains "skills" — but that is the def's LIST OF NAMES, and the stamp
+// beside it is `<id>.json`'s mtime. So adding a skill to an agent moved the number, while WRITING
+// the skill, or editing the description that actually gets injected, moved nothing at all. Measured
+// 2026-10-19: a skill was created and its description rewritten about fifteen times, and no session
+// ever reported stale — his words, *"I didn't get any message to update anyone's context about this
+// new skill."* He was right to be puzzled; the fingerprint could not see it.
+//
+// ONE SHARED SCAN, ON A TTL — not a stat per skill per session per poll. The rule this file already
+// lives by is that a synchronous read-and-hash per call per session is "precisely the shape that put
+// the app at 154% CPU and jammed the main process on 2026-09-12", and `list()` is polled with
+// `staleParts(s)` called twice per session per projection. Skill files are GLOBAL, so the scan has
+// no business being per-session: one pass over the resolved sources, cached for a second, shared by
+// every session that asks. Cost is therefore bounded by the clock rather than by how many rooms are
+// open — strictly cheaper than the three stats already here once two sessions exist.
+//
+// MTIMES, NOT CONTENT, for the same reason as above: a touched-but-identical file costing one
+// offered re-init is a trade worth making; a hash of every SKILL.md on every poll is not.
+const SKILLS_TTL_MS = 1000;
+let SKILLS_SCAN = { at: 0, mtimes: null };
+function skillMtimes() {
+  const now = Date.now();
+  if (SKILLS_SCAN.mtimes && now - SKILLS_SCAN.at < SKILLS_TTL_MS) return SKILLS_SCAN.mtimes;
+  const mtimes = new Map();
+  try {
+    // `cwd` is deliberately absent: a <cwd>-patterned source resolves to nothing without one, and a
+    // project-local skill is already covered by the CLAUDE.md stack part of the fingerprint.
+    for (const src of skillSources.resolved("")) {
+      for (const dir of src.dirs || []) {
+        let names = [];
+        try { names = fs.readdirSync(dir); } catch { continue; }
+        for (const name of names) {
+          try {
+            const m = fs.statSync(path.join(dir, name, "SKILL.md")).mtimeMs;
+            // FIRST SOURCE WINS, matching resolution order — a project skill shadowing a user one
+            // must not have both mtimes folded in, or shadowing would read as churn.
+            if (!mtimes.has(name)) mtimes.set(name, m);
+          } catch { /* not a skill dir */ }
+        }
+      }
+    }
+  } catch { /* no sources readable — absent is 0 below, never a crash */ }
+  SKILLS_SCAN = { at: now, mtimes };
+  return mtimes;
+}
+
+// The stamp for ONE agent: only the skills it carries, so another agent's skill churn never asks
+// this one to re-initialize. A carried name with no file on disk contributes 0 — which still
+// CHANGES the number the moment that file appears, which is the new-skill case.
+function skillsStamp(agentId) {
+  if (!agentId) return 0;
+  let names = [];
+  try {
+    const rec = definitions.get(agentId);
+    const list = rec && rec.def && rec.def.skills;
+    names = Array.isArray(list) ? list.map((x) => (typeof x === "string" ? x : (x && x.name) || "")).filter(Boolean) : [];
+  } catch { return 0; }
+  if (!names.length) return 0;
+  const mt = skillMtimes();
+  let h = 0;
+  for (const n of names.slice().sort()) {
+    const shape = `${n}=${mt.get(n) || 0}`;
+    for (let i = 0; i < shape.length; i += 1) h = (h * 31 + shape.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
 const COMPOSED_FIELDS = [
   "prompt", "skills", "tools", "disallowedTools",
   "mcpServers", "model", "effort", "thinking", "maxTurns", "background", "memory",
@@ -284,6 +353,10 @@ function compositionOf(agentId, cwd) {
   // right default: a false "up to date" is one bad paragraph, while crying stale at every write
   // teaches him to ignore the notice, which costs the real ones too.
   if (agentId) parts["Agent doc"] = composedStamp(agentId);
+  // NAMED SEPARATELY FROM THE AGENT DOC, deliberately. The panel says WHICH input moved, and
+  // "Skills" versus "Agent doc" is the difference between "a procedure you carry was rewritten" and
+  // "your own definition changed" — two different things to go and look at.
+  if (agentId) parts.Skills = skillsStamp(agentId);
   // AND THE CLAUDE.md STACK — his catch. It is composed into a session at open exactly like the
   // rest, by Claude Code rather than by us, which is precisely why it was missed: the fingerprint
   // only knew the files THIS file writes. An edit to CLAUDE.md would have left the page saying
@@ -2692,7 +2765,7 @@ function transcriptsFor(cwd, projectCode) {
 
 module.exports = {
   sendContent, startInjection, postCompactionInjection, // RFC-013 test seams
-  composedStamp, // test seam: proves which fields staleness watches, and that the hot path is cached
+  composedStamp, skillsStamp, skillMtimes, compositionOf, // test seam: proves which fields staleness watches, and that the hot path is cached
   repoHolding, // test seam: a lane's branch may live in a COUPLED repo, not the session's own folder
   purgeAgent, agentRuns,
   setThinking, thinkingOf, // the thinking knob — RFC-073's cousin: how much of the reasoning reaches the window

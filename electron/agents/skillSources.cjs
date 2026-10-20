@@ -30,7 +30,9 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const FILE = path.join(os.homedir(), ".autobot", "skill-sources.json");
+// REDIRECTABLE FOR TESTS, like the worklist store's AUTOBOT_WORKLISTS_DIR. A suite that cannot
+// point this somewhere scratch can only assert about the machine it runs on.
+const FILE = process.env.AUTOBOT_SKILL_SOURCES_FILE || path.join(os.homedir(), ".autobot", "skill-sources.json");
 
 // The defaults describe this machine as it actually is — every location verified to exist (or to be
 // a real pattern) on 2026-10-02. They are DEFAULTS: the file wins, and he can add a folder.

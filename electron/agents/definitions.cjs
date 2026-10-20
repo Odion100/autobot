@@ -23,7 +23,9 @@ const os = require("os");
 const path = require("path");
 const sources = require("./skillSources.cjs");
 
-const DIR = path.join(os.homedir(), ".autobot", "agents");
+// REDIRECTABLE FOR TESTS, same reason as skillSources.FILE: a suite that exercises the roster
+// must never get the keys to the real one.
+const DIR = process.env.AUTOBOT_AGENT_DEFS_DIR || path.join(os.homedir(), ".autobot", "agents");
 
 // Deliberately NOT ~/.autobot/agents.json — that file holds RUNS and was renamed
 // to sessions.json in the same change. A directory of definitions beside a file
