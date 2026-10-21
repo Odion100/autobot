@@ -425,11 +425,32 @@ function inputQueue() {
   let wake = null;
   let done = false;
   return {
-    push(msg) { buffered.push(msg); if (wake) { wake(); wake = null; } },
+    // `tag` and `meta` are optional and only membership delivery uses them today — see
+    // `mergePending`. Every other caller pushes a bare message and is unaffected.
+    push(msg, tag = null, meta = null) { buffered.push({ msg, tag, meta }); if (wake) { wake(); wake = null; } },
+    // MERGE RATHER THAN INTERRUPT AGAIN. A message still sitting in `buffered` has NOT been
+    // yielded, so the session was never going to read it as its own turn — it would only have
+    // arrived as N copies of being interrupted. Rewriting it in place therefore loses nothing.
+    //
+    // Safe by construction, not by luck: this is synchronous and `buffered.shift()` is the only
+    // way out, so if the entry is still in the array it cannot be mid-consumption. That is why
+    // the merge lives HERE, inside the closure that owns the array, instead of in the caller —
+    // from outside, `s.input` exposes no way to see what is pending, and anything that tried
+    // would be guessing at a race.
+    mergePending(tag, rewrite) {
+      if (!tag) return false;
+      const entry = buffered.find((b) => b.tag === tag);
+      if (!entry) return false;
+      const next = rewrite(entry.meta);
+      if (typeof next === "string" && entry.msg?.message?.content?.[0]) {
+        entry.msg.message.content[0].text = next;
+      }
+      return true;
+    },
     end() { done = true; if (wake) { wake(); wake = null; } },
     async *[Symbol.asyncIterator]() {
       for (;;) {
-        while (buffered.length) yield buffered.shift();
+        while (buffered.length) yield buffered.shift().msg;
         if (done) return;
         await new Promise((r) => { wake = r; });
       }
@@ -814,14 +835,49 @@ function deliverToMembers(e) {
     // Never to the room it came FROM: the project whose window pressed send already knows, and an
     // agent being told about its own document's send would answer itself.
     if (e.project && s.projectCode === e.project && e.by === "you" && !e.thread) continue;
-    const what = e.thread
-      ? `A thread you are in moved — ${e.project}:${e.path}, thread ${e.thread}. ${e.summary || ""}`
-      : `A document you are a member of was updated — ${e.project}:${e.path}. ${e.summary || ""}`;
-    const full =
-      `${what}\n\nRead the file rather than trusting this line — it is current and this is a ` +
+    const tail =
+      `\n\nRead the file rather than trusting this line — it is current and this is a ` +
       `summary. You are on it because the document says so (\`::members\`), which is also how ` +
       `you stop being on it.`;
+    // ONE DOCUMENT, ONE WAKE — his instruction: "make sure the way you guys receive messages
+    // doesn't overwhelm." Several sends against the same document, arriving before the session
+    // has taken its next turn, are N interruptions that buy nothing: delivery is consumed at the
+    // next turn either way, so the agent was never going to read them separately.
+    const headline = (m) =>
+      m.threads.length > 1
+        ? `${m.threads.length} threads you are in moved — ${e.project}:${e.path}: ${m.threads.join(", ")}.`
+        : m.threads.length === 1
+          ? `A thread you are in moved — ${e.project}:${e.path}, thread ${m.threads[0]}.`
+          : `A document you are a member of was updated — ${e.project}:${e.path}.`;
+    const compose = (m) => {
+      const notes = m.summaries.filter(Boolean);
+      return `${headline(m)}${notes.length ? ` ${notes.join(" ")}` : ""}${tail}`;
+    };
+    const meta = { threads: e.thread ? [e.thread] : [], summaries: [e.summary || ""] };
+    const tag = `doc:${e.project || ""}:${e.path || ""}`;
     try {
+      // Merge into the undelivered one if there is one; otherwise this is a fresh interruption.
+      const merged = s.input.mergePending(tag, (m) => {
+        if (e.thread && !m.threads.includes(e.thread)) m.threads.push(e.thread);
+        if (e.summary) m.summaries.push(e.summary);
+        return compose(m);
+      });
+      const what = merged ? null : headline(meta);
+      if (merged) {
+        // The RECEIPT is SystemView's window to draw, not ours — so this reports the fact
+        // (`merged`: an update to a delivery already announced, not a new one) and lets that
+        // surface decide between collapsing the row and adding one. A receipt that cannot say
+        // which of the two it is would make the log claim N interruptions that never happened.
+        emit(s, {
+          kind: "message.landed",
+          from: e.by || "you",
+          merged: true,
+          preview: `${e.project}:${e.path} — also ${e.thread || "document"}`,
+          doc: { project: e.project || "", path: e.path || "", thread: e.thread || "", summary: e.summary || "", merged: true },
+        });
+        continue;
+      }
+      const full = compose(meta);
       s.input.push({
         type: "user",
         message: {
@@ -835,7 +891,7 @@ function deliverToMembers(e) {
         },
         parent_tool_use_id: null,
         session_id: "",
-      });
+      }, tag, meta);
       s.nextTurnFromHook = true;
       // THE RECEIPT CARRIES THE FACTS, not just a sentence. His: *"why isn't that thread log
       // expandable like most logs so you can see details?"* — a one-line note with a 140-character

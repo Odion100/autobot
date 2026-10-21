@@ -52,7 +52,12 @@ async function hub(moduleName, fn, arg) {
       res.status === 404
         ? `${moduleName}.${fn} is not on the running hub. Either THIS SESSION's tools predate it ` +
           `(the usual case — restart the desktop shell so the MCP server reloads), or the hub really ` +
-          `is serving old code (restart it: systemview start).`
+          `is serving old code. DO NOT run \`systemview start\` to fix the second one: the hub is a ` +
+          `harness-managed process (registry.cjs starts it as the SystemView app), so running the CLI ` +
+          `by hand spawns a SECOND, differently-configured process beside the real one instead of ` +
+          `restarting it — and the CLI does not reject a bad argument, it just boots and blocks. ` +
+          `A stale hub is restarted by restarting the shell; there is no agent-reachable restart, ` +
+          `so say so and ask rather than reaching for a command.`
         : `${moduleName}.${fn}: hub answered ${res.status} with non-JSON`
     );
   }
@@ -782,7 +787,15 @@ function toolsFor(identity = {}) {
         async ({ projectCode, report, threadId, text: t }) => {
           try {
             const r = await hub("Agent", "reply", { projectCode, report, threadId, text: t, as: who });
-            return text(r && r.ok ? `replied in ${threadId}` : "reply failed");
+            // The hub names the reason — an unknown thread id, and the ids that DO exist. Dropping
+            // it cost an agent four blind attempts at a thread it could not have guessed was
+            // unmatched, so this reports like its siblings (refresh/act/disconnect) rather than
+            // returning a bare failure.
+            return text(
+              r && r.ok
+                ? `replied in ${threadId}`
+                : `reply refused — ${(r && r.error) || "no reason given"}`
+            );
           } catch (e) { return fail(e); }
         }
       ),

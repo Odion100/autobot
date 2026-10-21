@@ -110,4 +110,61 @@ ok("the host registers documents:send-update");
   ok("the landing receipt carries the document, the thread and the whole text — enough to open");
 }
 
+// ONE DOCUMENT, ONE WAKE — his instruction, 2026-10-20: *"make sure the way you guys receive
+// messages doesn't overwhelm."* Several sends against one document, landing before the session has
+// taken its next turn, used to be N separate interruptions that bought nothing: delivery is
+// consumed at the next turn either way, so the agent was never going to read them apart.
+//
+// Claimed against the REAL source of inputQueue rather than a copy of its logic — a test that
+// re-implements the queue proves only that the copy works. The race is the thing worth pinning:
+// a merge must refuse once the item has been yielded, or it reports success while the rewrite
+// silently goes nowhere.
+{
+  const fs = require("fs");
+  const src = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
+  const m = /function inputQueue\(\)[\s\S]*?\n}/.exec(src);
+  assert.ok(m, "inputQueue is still there to pin");
+  const inputQueue = eval("(" + m[0].replace(/^function inputQueue/, "function") + ")");
+
+  const msg = (t) => ({ type: "user", message: { role: "user", content: [{ type: "text", text: t }] } });
+  const drain = async (q) => { const out = []; for await (const x of q) out.push(x.message.content[0].text); return out; };
+
+  await (async () => {
+    const q = inputQueue();
+    q.push(msg("first")); q.push(msg("second")); q.end();
+    assert.deepStrictEqual(await drain(q), ["first", "second"]);
+    ok("an untagged push still consumes in order — every other caller is unaffected");
+
+    const q2 = inputQueue();
+    q2.push(msg("a thread moved — bugs"), "doc:p:x.md", { threads: ["bugs"], summaries: [] });
+    const merged = q2.mergePending("doc:p:x.md", (meta) => {
+      meta.threads.push("procedure");
+      return "2 threads moved: " + meta.threads.join(", ");
+    });
+    assert.strictEqual(merged, true, "a pending item merges");
+    q2.end();
+    const out = await drain(q2);
+    assert.strictEqual(out.length, 1, "merging must not add a second wake");
+    assert.strictEqual(out[0], "2 threads moved: bugs, procedure");
+    ok("a second send against the same document rewrites the pending wake instead of adding one");
+
+    const q3 = inputQueue();
+    q3.push(msg("x"), "tag", { threads: [], summaries: [] });
+    await q3[Symbol.asyncIterator]().next();
+    assert.strictEqual(q3.mergePending("tag", () => "too late"), false);
+    ok("a consumed item REFUSES the merge — a rewrite nobody would see never reports success");
+
+    const q4 = inputQueue();
+    assert.strictEqual(q4.mergePending("nope", () => "x"), false);
+    assert.strictEqual(q4.mergePending(null, () => "x"), false);
+    ok("an unknown or absent tag refuses rather than guessing");
+  })();
+
+  // The receipt has to SAY it is a merge: the window draws the log, and a receipt that cannot
+  // distinguish "another delivery landed" from "the one you have grew" would claim interruptions
+  // that never happened.
+  assert.ok(/merged: true/.test(src), "the merge path emits a receipt marked as a merge");
+  ok("a merged landing is reported as a merge, so the window can collapse rather than add a row");
+}
+
 console.log(`\n  ${n} claims, all green — a document update is an event\n`);
