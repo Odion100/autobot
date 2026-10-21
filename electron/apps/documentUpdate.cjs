@@ -103,6 +103,13 @@ async function buildUpdate(payload = {}, absPath = "") {
       // a hook can tell "somebody answered you" from "the file moved" with one field, and an agent
       // woken by the first knows where to read before it opens anything.
       ...(payload.thread ? { thread: String(payload.thread) } : {}),
+      // A DECISION IS NOT AN EDIT, and the sender is the only one who knows which this was. The
+      // headline downstream is otherwise "a document you are a member of was updated", which sends
+      // the recipient to open a file and work out what changed — and a verdict press has nothing
+      // to work out: it is one complete fact that fits in the sentence. Carried as a flag rather
+      // than inferred from the summary's wording, because pattern-matching prose to classify an
+      // event is guessing at the one thing the sender already knows.
+      ...(payload.decision ? { decision: true } : {}),
       // Only when the document actually is an arc. An empty field on every other document would
       // make `exists` useless as a way to ask "is this an arc update?".
       ...(arc ? { arc } : {}),

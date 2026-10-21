@@ -274,4 +274,55 @@ ok("the host registers documents:send-update");
   ok("a merged delivery still counts as delivered, so told= stamps and the sweep stops owing it");
 }
 
+// A DECISION GETS ITS OWN SENTENCE — claimed against the REAL headline in sessions.cjs rather
+// than a copy of its wording, because a copy would keep passing after the original drifted.
+//
+// Why it matters: "a document you are a member of was updated" tells the recipient to go and open
+// the file and work out what changed. That is right for an edit and wrong for a press — a verdict
+// is one complete fact that already fits in the summary. The first time this harness delivered a
+// creation wearing the word "moved", the receiving agent spent a whole turn opening a document to
+// find nothing had happened, and filed it as a bug.
+{
+  const fs = require("fs");
+  const src = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
+  const m = /const deliveryHeadline = \(m\) => \{[\s\S]*?\n\};/.exec(src);
+  assert.ok(m, "the headline builder is still there to pin");
+  // HOISTED TO MODULE LEVEL by the held-delivery work, so it reads the document's address off
+  // the meta instead of closing over the event — a HELD wake composes at flush time, where the
+  // event that started it is long gone. So the address goes in with each case below.
+  const headline = eval(`(function () { ${m[0]} return deliveryHeadline; })`)();
+
+  const EV = { project: "systemview-test", path: "RFCs/RFC-072.md" };
+  const wake = (extra) => ({ ...EV, ...extra });
+
+  const one = headline(wake({ threads: [], summaries: ["approved: Ship it?"], decisions: 1 }));
+  assert.match(one, /A decision was made in a document you are on/);
+  assert.ok(!/was updated/.test(one), "a decision must not be announced as an edit");
+  ok("a single decision is announced as a decision, not as a document that was updated");
+
+  const two = headline(wake({ threads: [], summaries: ["approved: a", "answered b to: c"], decisions: 2 }));
+  assert.match(two, /2 decisions were made/);
+  ok("two decisions merged into one wake are counted, not collapsed to one");
+
+  // THE UNDER-REPORTING CASE. An ordinary edit arriving on top of a press would drop the whole
+  // wake back to "a document was updated" — which is how a decision becomes invisible by being
+  // followed by a typo.
+  const mixed = headline(wake({ threads: [], summaries: ["approved: a", "12 lines, 1 thread"], decisions: 1 }));
+  assert.match(mixed, /was updated/);
+  ok("a decision mixed with an ordinary edit falls back to the edit headline rather than claiming both");
+
+  const edit = headline(wake({ threads: [], summaries: ["12 lines, 0 threads"], decisions: 0 }));
+  assert.match(edit, /A document you are a member of was updated/);
+  ok("an ordinary edit is worded exactly as it was before");
+
+  const thread = headline(wake({ threads: ["bugs"], summaries: ["reply in thread bugs: x"], decisions: 0 }));
+  assert.match(thread, /A thread you are in moved .*thread bugs/);
+  ok("a thread reply keeps its own headline");
+
+  // Wakes written before this landed carry no `decisions` key at all.
+  const old = headline(wake({ threads: [], summaries: ["12 lines"] }));
+  assert.match(old, /was updated/);
+  ok("a wake with no decision count is read as an edit rather than throwing");
+}
+
 console.log(`\n  ${n} claims, all green — a document update is an event\n`);

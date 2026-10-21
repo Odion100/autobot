@@ -869,12 +869,23 @@ const DELIVERY_TAIL =
   `\n\nRead the file rather than trusting this line — it is current and this is a ` +
   `summary. You are on it because the document says so (\`::members\`), which is also how ` +
   `you stop being on it.`;
-const deliveryHeadline = (m) =>
-  m.threads.length > 1
-    ? `${m.threads.length} threads you are in moved — ${m.project}:${m.path}: ${m.threads.join(", ")}.`
-    : m.threads.length === 1
-      ? `A thread you are in moved — ${m.project}:${m.path}, thread ${m.threads[0]}.`
-      : `A document you are a member of was updated — ${m.project}:${m.path}.`;
+// A DECISION GETS ITS OWN SENTENCE. "A document you are a member of was updated" is the right
+// headline for an edit — it says the shape changed and the recipient should go and look. It is the
+// WRONG headline for a press: a verdict is one complete fact, the summary already carries it, and
+// sending somebody to open a file to discover what they have already been told is the same cost
+// autobot filed as a bug the first time it received a creation wearing the word "moved". So
+// decisions are counted and named, and `m.decisions` survives a merge.
+const deliveryHeadline = (m) => {
+  const where = `${m.project}:${m.path}`;
+  if (m.decisions > 0 && m.decisions === m.summaries.filter(Boolean).length)
+    return m.decisions > 1
+      ? `${m.decisions} decisions were made in a document you are on — ${where}.`
+      : `A decision was made in a document you are on — ${where}.`;
+  if (m.threads.length > 1)
+    return `${m.threads.length} threads you are in moved — ${where}: ${m.threads.join(", ")}.`;
+  if (m.threads.length === 1) return `A thread you are in moved — ${where}, thread ${m.threads[0]}.`;
+  return `A document you are a member of was updated — ${where}.`;
+};
 const composeDelivery = (m) => {
   const notes = m.summaries.filter(Boolean);
   return `${deliveryHeadline(m)}${notes.length ? ` ${notes.join(" ")}` : ""}${DELIVERY_TAIL}`;
@@ -913,6 +924,9 @@ function deliverToMembers(e) {
       path: e.path || "",
       threads: e.thread ? [e.thread] : [],
       summaries: [e.summary || ""],
+      // A DECISION IS COUNTED, not inferred. The sender flags it (`documentUpdate.cjs`), and
+      // the count rides the meta so a HELD delivery composed at flush time still knows.
+      decisions: e.decision ? 1 : 0,
     };
     const tag = `doc:${e.project || ""}:${e.path || ""}`;
     try {
@@ -922,6 +936,11 @@ function deliverToMembers(e) {
       const mergeInto = (m) => {
         if (e.thread && !m.threads.includes(e.thread)) m.threads.push(e.thread);
         if (e.summary) m.summaries.push(e.summary);
+        // A MERGE MUST NOT UNDER-REPORT A DECISION. An edit arriving on top of a press would
+        // otherwise drop the whole wake back to "a document was updated", which is how a decision
+        // becomes invisible by being followed by a typo. `m.decisions` is absent on wakes written
+        // before this landed, so it is coerced rather than assumed.
+        m.decisions = (m.decisions || 0) + (e.decision ? 1 : 0);
         return composeDelivery(m);
       };
       const held = s.pendingDeliveries ? s.pendingDeliveries.get(tag) : null;
