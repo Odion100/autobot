@@ -290,6 +290,51 @@ function remove(id) {
 // never rewritten, which is what makes the history safe to index later (§6) without staleness
 // bookkeeping.
 // ---------------------------------------------------------------------------------------------
+// A REPORT POINTER IS A CLAIM, NOT A REPORT — and 29 of 66 of them were pointing at nothing.
+//
+// The job document tells an agent to DELETE a report once its subject is settled: a lane lands, a
+// question is answered, a wrong report is superseded. Nothing updates the run record that
+// announced it, so `reports` accumulates pointers to files that were removed on purpose. Measured
+// 2026-10-21 across this job's own runs: 66 pointers, 29 of them dangling — 44%. One of those was
+// created an hour earlier by a run correcting its own mistake, exactly as instructed.
+//
+// The hub already learned this rule for its own index and says so in `api/reports.js`: *"an
+// indexed name is a CLAIM, not a report… a name is only handed over while its file answers."* The
+// run record is the same shape of lie and never got the same treatment.
+//
+// FILTERED ON READ, NEVER PRUNED ON DISK. The record is append-only by design — that is what makes
+// the history safe to index later — so a reader that rewrote it to tidy up would be destroying the
+// evidence that a report once existed. The file keeps everything; the answer offers what is real.
+//
+// THE ROOT COMES FROM THE FILENAME. A report is filed as `.systemview/report.<projectCode>.<…>.md`,
+// so the project is already in the path and no field has to be added to records already on disk.
+// A project nobody can resolve is UNKNOWN rather than missing: dropping a pointer because the
+// project list moved would hide a real report, which is the failure this is fixing in reverse.
+function projectsFile() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".autobot", "projects.json"), "utf8")) || {};
+  } catch {
+    return {};
+  }
+}
+
+function reportExists(p) {
+  const rel = String(p || "").trim();
+  if (!rel) return false;
+  if (rel.startsWith("/")) return fs.existsSync(rel);
+  const m = /report\.([^.]+)\./.exec(rel.split("/").pop() || "");
+  if (!m) return true; // not a shape we can resolve — do not claim it is gone
+  const root = projectsFile()[m[1]];
+  if (!root) return true; // project unknown: unresolvable is not the same as absent
+  return fs.existsSync(path.join(root, rel));
+}
+
+/** The reports a run really handed over, newest last — the same list minus what no longer exists. */
+function liveReports(rec) {
+  const all = Array.isArray(rec && rec.reports) ? rec.reports : [];
+  return all.filter((r) => r && reportExists(r.path));
+}
+
 function runsOf(id) {
   let names = [];
   try { names = fs.readdirSync(runsDirOf(id)); } catch { return []; }
@@ -297,6 +342,12 @@ function runsOf(id) {
     .filter((n) => n.endsWith(".json"))
     .map((n) => readJson(path.join(runsDirOf(id), n)))
     .filter(Boolean)
+    // What is OFFERED is what still exists. `reports` on disk keeps everything; this is the only
+    // place a caller sees the list, so this is where the claim has to become true.
+    .map((rec) => {
+      const live = liveReports(rec);
+      return { ...rec, reports: live, report: live.length ? live[live.length - 1] : null };
+    })
     .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
 }
 
@@ -425,7 +476,7 @@ function rateRun(id, runId, { rating, note = "" } = {}) {
   return next;
 }
 
-module.exports = {
+module.exports = { liveReports, reportExists,
   DIR,
   dirOf,
   ownerOf,

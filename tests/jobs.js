@@ -292,6 +292,59 @@ try {
     ok("absent, not denied — an app with no grant has no methods to call");
   }
 
+
+// A REPORT POINTER IS A CLAIM, NOT A REPORT — 29 of 66 were pointing at nothing.
+//
+// The job document instructs agents to DELETE a report once its subject settles, and nothing
+// updated the run record that announced it. The hub already learned this for its own index ("a
+// name is only handed over while its file answers"); the run record had not.
+{
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const { liveReports, reportExists } = require("../electron/agents/jobs.cjs");
+
+  const projects = (() => {
+    try { return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".autobot", "projects.json"), "utf8")); }
+    catch { return {}; }
+  })();
+  const code = Object.keys(projects)[0];
+  const root = code ? projects[code] : "";
+
+  if (code && root) {
+    const live = path.join(".systemview", `report.${code}.a-claims-fixture-${Date.now()}.md`);
+    const abs = path.join(root, live);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, "# fixture\n");
+    assert.strictEqual(reportExists(live), true);
+    ok("a report whose file is on disk is still offered");
+
+    fs.unlinkSync(abs);
+    assert.strictEqual(reportExists(live), false);
+    ok("a report whose file was deleted stops being offered");
+
+    const rec = { reports: [{ path: live, label: "gone" }, { path: live.replace(/a-claims-fixture-\d+/, "also-gone"), label: "also gone" }] };
+    assert.deepStrictEqual(liveReports(rec), []);
+    ok("a run whose every report was deleted offers none, rather than claiming two");
+  }
+
+  // UNRESOLVABLE IS NOT ABSENT. Dropping a pointer because the project list moved would hide a
+  // real report — the failure this fixes, in reverse.
+  assert.strictEqual(reportExists(".systemview/report.a-project-that-does-not-exist.thing.md"), true);
+  ok("a pointer whose project cannot be resolved is kept, never claimed missing");
+
+  assert.strictEqual(reportExists("notes/not-a-report-shape.md"), true);
+  ok("a path that is not a report filename is left alone");
+
+  assert.strictEqual(reportExists(""), false);
+  assert.strictEqual(reportExists(null), false);
+  ok("an empty pointer is not a report");
+
+  assert.deepStrictEqual(liveReports({}), []);
+  assert.deepStrictEqual(liveReports(null), []);
+  ok("a record with no reports answers empty rather than throwing");
+}
+
   console.log(`\n${pass} claims held — jobs\n`);
 } finally {
   try { jobs.remove(ID); } catch {}
