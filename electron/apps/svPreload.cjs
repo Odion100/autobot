@@ -14,6 +14,7 @@ const FULL = {
   // RFC-055 — semantic retrieval belongs to the HARNESS, so every app gets it;
   // SystemView supplies the corpus and the node types, never the runtime.
   vectors: require("./vectorsBridge.cjs")(ipcRenderer),
+  voice: require("./voiceBridge.cjs")(ipcRenderer),
 
   // RFC-055 — the context store's management half: list/edit/delete notes. Reading and
   // querying ride on `vectors` above; these are the curate verbs his surface needs.

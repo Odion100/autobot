@@ -615,6 +615,7 @@ app.whenReady().then(async () => {
   require("./apps/files-host.cjs").register(() => win); // projects/files/auth for /ide (RFC-047 seam)
   require("./apps/dictation.cjs").register();
   require("./apps/vectors-host.cjs").register(); // RFC-055 — local semantic retrieval, a harness capability
+  require("./apps/voice-host.cjs").register(); // speech OUT, the mirror of dictation — a harness capability
   require("./apps/context-host.cjs").register(); // RFC-055 — the context management surface (his curate verbs)
   // RFC-005 §7.1 — the watch loop. Only tabs that have a watch are read, and only a value that
   // actually MOVED is announced. It takes `tabs` as a getter rather than the array, so the module

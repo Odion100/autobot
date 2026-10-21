@@ -43,7 +43,10 @@ const BUILTINS = [
       // through `jobsWrite`; nothing in this surface calls save or remove. Splitting `rate` out is
       // the right fix and it belongs to the table, not to a special case here.
       "jobs:read", "jobs:write",
-      "projects", "auth", "agents", "dictation", "terminal", "components", "systemlynx",
+      // `voice` is the mirror of `dictation` and sits beside it on purpose: dictation is what the
+      // IDE HEARS, voice is what it READS BACK. Two powers, two grants — an app that transcribes
+      // does not thereby get to make the machine talk.
+      "projects", "auth", "agents", "dictation", "voice", "terminal", "components", "systemlynx",
     ],
   },
 ];

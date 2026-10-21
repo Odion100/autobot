@@ -42,7 +42,8 @@
     "smoke:split": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_SPLITSMOKE=1 node electron/launch.js",
     "smoke:app": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_APPSMOKE=1 node electron/launch.js",
     "smoke:shot": "node tests/shot.js",
-    "smoke:documents": "node tests/documents.js"
+    "smoke:documents": "node tests/documents.js",
+    "smoke:voice": "node tests/voice.js"
   },
   "repository": {
     "type": "git",
@@ -64,6 +65,7 @@
     "cheerio": "^1.0.0-rc.12",
     "chromadb": "^1.8.1",
     "dotenv": "^16.4.5",
+    "kokoro-js": "^1.2.1",
     "langchain": "^0.1.25",
     "mongoose": "^8.6.1",
     "openai": "^4.28.4",
@@ -88,5 +90,8 @@
     "systemlynx": "^3.3.2",
     "systemview-plugin": "^2.23.0",
     "vite": "^8.2.2"
+  },
+  "resolutions": {
+    "sharp": "0.35.5"
   }
 }

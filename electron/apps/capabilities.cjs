@@ -21,6 +21,11 @@
 // files:write: it mutates the index, even though nothing leaves the machine.
 const GRANTS = {
   dictation: { dictation: "*" },
+  // SPEECH OUT, the mirror of dictation and granted the same way. It is its own capability rather
+  // than riding on `dictation` because hearing the user and speaking back are different powers: an
+  // app that transcribes does not thereby get to make the machine talk, and one that reads text
+  // aloud has no business with the microphone.
+  voice: { voice: "*" },
   terminal: { terminal: "*" },
   projects: { projects: "*" },
   auth: { auth: "*" },
