@@ -167,4 +167,76 @@ ok("the host registers documents:send-update");
   ok("a merged landing is reported as a merge, so the window can collapse rather than add a row");
 }
 
+// ── THE ARC ADDRESS ON THE EVENT ───────────────────────────────────────────────────────────────
+//
+// An arc is defined in a document and has to be pickable up anywhere in the system — so the event
+// carries WHICH arc moved, not only which file did. A hook matching a path breaks silently the first
+// time somebody sharpens the kebab title; the id survives that, which is the same reason an
+// attachment stores an address (RFC-072 §5).
+{
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const pathm = require("node:path");
+  const { buildUpdate, arcIn, membersIn } = require("../electron/apps/documentUpdate.cjs");
+
+  const tmp = fs.mkdtempSync(pathm.join(os.tmpdir(), "docupdate-"));
+  const write = (name, body) => { const f = pathm.join(tmp, name); fs.writeFileSync(f, body); return f; };
+
+  const arcDoc = write("ARC-001-a-thing.md", [
+    '::arc{id=ARC-001 owner=systemview-test title="A thing"}',
+    "",
+    "::members{who=systemview-test|buapi sent=buapi:abc}",
+    "",
+    ":::objective{id=O1 state=done}",
+    "body",
+    ":::",
+  ].join("\n"));
+
+  const plainDoc = write("plan.md", "::members{who=buapi}\n\nnot an arc\n");
+
+  assert.strictEqual(arcIn(arcDoc), "ARC-001");
+  assert.strictEqual(arcIn(plainDoc), "");
+  ok("the arc id is read from the document's own ::arc line, and absent when there is none");
+
+  const a = buildUpdate({ path: "RFCs/arcs/ARC-001-a-thing.md", project: "systemview-test", summary: "O1 done" }, arcDoc);
+  assert.strictEqual(a.ok, true);
+  assert.strictEqual(a.event.arc, "ARC-001");
+  ok("an update to an arc document carries `arc` so a hook can aim at one arc");
+
+  const b = buildUpdate({ path: "plan.md", project: "systemview-test", summary: "moved" }, plainDoc);
+  assert.strictEqual(b.ok, true);
+  assert.ok(!("arc" in b.event), "a non-arc document must not carry an empty arc field");
+  ok("a document that is not an arc carries NO arc field, so `exists` is a usable question");
+
+  // MEMBERSHIP COMES FROM THE DOCUMENT. An agent names the file and a summary; it cannot invent a
+  // recipient, because the only source is the `::members` line the human edits.
+  assert.deepStrictEqual(membersIn(arcDoc), ["systemview-test", "buapi"]);
+  assert.strictEqual(a.event.members, "|systemview-test|buapi|");
+  ok("members are read from the file and still go out pipe-wrapped, so `contains: \"|buapi|\"` is exact");
+
+  // The window keeps passing its own, because it also holds the `sent=` hashes mid-edit.
+  const c = buildUpdate(
+    { path: "x.md", project: "p", members: ["only-this-one"], summary: "s" }, arcDoc);
+  assert.strictEqual(c.event.members, "|only-this-one|");
+  ok("a caller that supplies members wins — the window is mid-edit and knows more than the file");
+
+  const d = buildUpdate({ path: "nope.md", project: "p", summary: "s" }, pathm.join(tmp, "nope.md"));
+  assert.strictEqual(d.ok, false);
+  assert.match(d.error, /no members/);
+  ok("a document with no members REFUSES the send rather than announcing to nobody");
+
+  const e = buildUpdate({ summary: "s" }, arcDoc);
+  assert.strictEqual(e.ok, false);
+  assert.match(e.error, /no document path/);
+  ok("no path is a refusal, not an event with an empty one");
+
+  // A summary is what the member actually receives before they open anything, so its bound is part
+  // of the contract rather than a detail of whoever happened to call.
+  const long = buildUpdate({ path: "x.md", project: "p", summary: "z".repeat(900) }, arcDoc);
+  assert.strictEqual(long.event.summary.length, 400);
+  ok("a runaway summary is cut at 400 in the builder, not at the caller");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log(`\n  ${n} claims, all green — a document update is an event\n`);

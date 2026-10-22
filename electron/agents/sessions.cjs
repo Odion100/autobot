@@ -27,6 +27,7 @@ const HISTORY_LIMIT = 2000;
 // The session's own folder is tried FIRST — that is the common case and it costs one spawn. The
 // registry's other roots are only consulted when that misses, and the holder is returned rather
 // than a boolean so a caller can say WHERE the branch lives instead of only that it exists.
+const { buildUpdate } = require("../apps/documentUpdate.cjs");
 const PROJECTS_FILE = () => path.join(require("os").homedir(), ".autobot", "projects.json");
 function branchIn(dir, branch) {
   if (!dir || !branch) return false;
@@ -1673,6 +1674,32 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // worklist.registeredLanes for why the two axes are different and what scoping it by project
     // got wrong.
     laneRuns: () => [...worklist.registeredLanes()],
+    // AN AGENT CAN SAY "I UPDATED THIS, TELL THE MEMBERS" — with no window open anywhere. Until
+    // now the only trigger was the window's press, so an agent that moved an objective in an arc
+    // could not announce it and every member stayed behind. Injected rather than imported for the
+    // same reason as the three above: this file requires systemview.cjs and cannot be required
+    // back. The EMIT stays here, where the session host lives, so the tool builds an event and
+    // never announces one itself.
+    announceUpdate: (payload = {}) => {
+      // Resolving a project code to a folder happens HERE and not in the tool, because seven
+      // places in this shell already read projects.json and an eighth copy is worse than a
+      // slightly longer injected function.
+      let abs = "";
+      try {
+        const map = JSON.parse(fs.readFileSync(PROJECTS_FILE(), "utf8")) || {};
+        const dir = map[String(payload.project || projectCode || "")];
+        const rel = String(payload.path || "");
+        if (dir) abs = path.isAbsolute(rel) ? rel : path.join(path.resolve(dir), rel);
+      } catch {}
+      const built = buildUpdate({ ...payload, by: payload.by || projectCode }, abs);
+      if (!built.ok) return built;
+      try {
+        emitAmbient(built.event);
+      } catch (e) {
+        return { ok: false, error: (e && e.message) || "could not announce it" };
+      }
+      return { ok: true, sent: built.members, arc: built.event.arc || "", path: built.event.path };
+    },
     onReportFiled: ({ path: at, label }) => {
       const open = s.currentRun && String(s.currentRun.source || "").startsWith("job:")
         ? { job: s.currentRun.source.slice(4), runId: s.currentRun.id }

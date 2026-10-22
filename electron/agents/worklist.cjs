@@ -35,11 +35,13 @@ const TOOL_READ_NAME = `mcp__${SERVER}__${TOOL_READ}`;
 // The list is the state of the WORK; the board is the state of the CONVERSATION — drafts under
 // discussion, values being worked out, the things that otherwise float up the chat and have to be
 // re-said. One tool is the whole API: markdown in replaces the board, nothing in wipes it.
+const TOOL_ATTACH = "attach";
 const TOOL_BOARD = "whiteboard";
+const TOOL_ATTACH_NAME = `mcp__${SERVER}__${TOOL_ATTACH}`;
 const TOOL_BOARD_NAME = `mcp__${SERVER}__${TOOL_BOARD}`;
 // All names, for the allow-list: pinning `tools` without the reader leaves an
 // agent able to write a plan it can never read back.
-const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME];
+const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME];
 
 // ONE ACTIVE ITEM, enforced rather than requested (their §3 left it to me).
 // "What is it doing right now" has to be unambiguous or the rendering is a guess;
@@ -136,7 +138,7 @@ function save(owner, patch) {
     // (a set() that clobbered the board made the two features enemies). `broughtIn` was the first
     // passenger; `selfDirected` (RFC-066) is the newest, and it rides for the same reason: it is
     // stamped once at a run's birth, so every later list write is a write that does not know it.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, ...patch, updatedAt: Date.now() };
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, ...patch, updatedAt: Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
@@ -146,6 +148,9 @@ function save(owner, patch) {
     // FALSE IS ABSENT, ON PURPOSE. Every run record already on disk is commissioned work, so
     // "no key" and "false" must be the same answer — which is what makes this need no migration.
     if (!next.selfDirected) delete next.selfDirected;
+    // AN EMPTY LIST IS NO LIST. A run with nothing attached must read exactly like every run
+    // already on disk — which is what makes this need no migration (RFC-072 §11.2).
+    if (!Array.isArray(next.attachments) || !next.attachments.length) delete next.attachments;
     fs.writeFileSync(fileFor(owner), JSON.stringify(next, null, 2));
   } catch {}
 }
@@ -553,6 +558,94 @@ function markStatus(id, { text = "", tone = "", by = "", ts = 0 } = {}) {
   return status;
 }
 
+// ── ATTACHMENTS — RFC-072 §5 ────────────────────────────────────────────────────────────────────
+//
+// ONE MISSING FEATURE, SPECIAL-CASED THREE TIMES. Today a run carries things only if it is the
+// right KIND: a job run gets a report pointer, a lane gets a branch, and the nine skill runs on his
+// strip get NOTHING — open one and you get steps. That asymmetry lives in the record, not in the
+// surface, which is why no surface could fix it. His words: *"adding something to attach to a
+// specific worklist should be a simple MCP call… it shouldn't be this thing that's complicated
+// where some of the jobs say no report."*
+//
+// So: a run carries `attachments[]`, each `{ kind, ref, project, by, ts }`. The unit is the LIST,
+// and a job's list is a list like any other — there is no "jobs can, skills cannot" anywhere in
+// this.
+//
+// AN ATTACHMENT CAN BE TAKEN OFF. The RFC left this open and the first build leaned append-only —
+// a `detached` stamp, on the argument that a record which omits is a record that lies. His ruling,
+// 2026-10-22: *"obviously you need to be able to remove an attachment. How do you fix mistakes?"*
+//
+// And the append-only argument does not survive it. It was written when removal was not an option;
+// once it is, nothing would ever choose the stamp, and two verbs that look identical mean the wrong
+// one gets picked silently. Attaching the wrong report to the wrong run is a typo in the record,
+// not an event in the world — preserving it asserts a relationship nobody ever claimed.
+const ATTACH_KINDS = ["report", "branch", "document", "arc", "card", "link"];
+
+function attach(id, { kind = "", ref = "", project = "", by = "", ts = 0 } = {}) {
+  const owner = runOwner(String(id || ""));
+  const k = String(kind || "").trim().toLowerCase();
+  const r = String(ref || "").trim();
+  if (!ATTACH_KINDS.includes(k)) return { error: `unknown attachment kind "${kind}"`, kinds: ATTACH_KINDS };
+  if (!r) return { error: "an attachment needs a ref" };
+  try {
+    if (!fs.existsSync(fileFor(owner))) return { error: `no run "${id}"` };
+  } catch {
+    return { error: `no run "${id}"` };
+  }
+  const cur = readFile(owner);
+  const list = Array.isArray(cur.attachments) ? cur.attachments : [];
+  // THE SAME THING ATTACHED TWICE IS ONE ATTACHMENT, re-stamped — a procedure that attaches on
+  // every pass would otherwise grow the record without bound, and the second entry says nothing
+  // the first did not. Something removed and attached again is simply attached: there is no stamp
+  // left to clear, which is the point of having one verb.
+  const at = list.findIndex((a) => a && a.kind === k && a.ref === r && String(a.project || "") === String(project || ""));
+  const entry = {
+    kind: k,
+    ref: r,
+    ...(project ? { project: String(project).trim().slice(0, 80) } : {}),
+    by: String(by || "").trim().slice(0, 80),
+    ts: Number(ts) > 0 ? Number(ts) : Date.now(),
+  };
+  if (at === -1) list.push(entry);
+  else list[at] = entry;
+  save(owner, { attachments: list });
+  return entry;
+}
+
+/**
+ * REMOVE — it should never have been there. His ruling, 2026-10-22: *"obviously you need to be able
+ * to remove an attachment. How the fuck do you fix mistakes?"*
+ */
+function removeAttachment(id, { kind = "", ref = "", project = "" } = {}) {
+  const owner = runOwner(String(id || ""));
+  const k = String(kind || "").trim().toLowerCase();
+  const r = String(ref || "").trim();
+  const cur = readFile(owner);
+  const list = Array.isArray(cur.attachments) ? cur.attachments : [];
+  const at = list.findIndex((a) => a && a.kind === k && a.ref === r && String(a.project || "") === String(project || ""));
+  if (at === -1) return { error: `nothing attached as ${kind} ${ref}` };
+  const gone = list[at];
+  list.splice(at, 1);
+  save(owner, { attachments: list });
+  return { removed: gone };
+}
+
+// WHAT A RUN CARRIES, INCLUDING WHAT IT CARRIED BEFORE THIS EXISTED. The lane branch and the job
+// report pointer were fields; they are KINDS now, and rather than migrate every run on disk the
+// legacy shapes are read forward. A run written last week answers the same question as one written
+// today, which is the whole of "backward compatible — a run with no attachments reads as none".
+function attachmentsOf(run = {}) {
+  const out = Array.isArray(run.attachments) ? run.attachments.filter(Boolean) : [];
+  const has = (k, r) => out.some((a) => a.kind === k && a.ref === r);
+  // A `lane:` source IS a branch attachment — the branch is in the source string and always was.
+  const src = String(run.source || "");
+  if (src.startsWith("lane:")) {
+    const branch = src.slice(5);
+    if (branch && !has("branch", branch)) out.push({ kind: "branch", ref: branch, by: "", ts: run.updatedAt || 0, derived: true });
+  }
+  return out;
+}
+
 function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
   const owner = runOwner(String(id || ""));
   try {
@@ -688,6 +781,58 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
         { alwaysLoad: true }
       ),
       tool(
+        TOOL_ATTACH,
+        "Attach something to the list that is running — a report, a branch, a document, an arc " +
+          "objective. ANY list takes one: a job's, a lane's, or a plain skill run. This is how a " +
+          "run says what it PRODUCED, rather than leaving a reader a page of steps and no way to " +
+          "reach the thing. Attaching never touches a screen and never replaces the list.",
+        {
+          kind: z
+            .enum(["report", "branch", "document", "arc", "card", "link"])
+            .describe(
+              'what sort of thing it is. "arc" is an objective address like ARC-004-O2 — the ' +
+                "work that objective commissioned, pointing back at it"
+            ),
+          ref: z
+            .string()
+            .describe(
+              "the ADDRESS, never a path: a report name, a branch name, an objective like " +
+                "ARC-004-O2. A path breaks silently the first time somebody renames the file, and " +
+                'the breakage reads as "there is none" rather than "it moved"'
+            ),
+          project: z
+            .string()
+            .optional()
+            .describe("the repo it lives in, when that is not this one — an arc can live elsewhere"),
+          remove: z
+            .boolean()
+            .optional()
+            .describe("take it off — the attachment was wrong, or is no longer what this run produced"),
+        },
+        async ({ kind, ref, project, remove: off }) => {
+          const run = getRun ? getRun() : null;
+          if (!run || !run.id)
+            return {
+              content: [{
+                type: "text",
+                text: "no run is open — attachments live on a RUN, so start one with a `source` first. (A procedure's own list is the run; your session plan is not one.)",
+              }],
+            };
+          const r = off
+            ? removeAttachment(run.id, { kind, ref, project })
+            : attach(run.id, { kind, ref, project, by: run.source || "" });
+          return {
+            content: [{
+              type: "text",
+              text: r && r.error
+                ? r.error
+                : `${off ? "removed" : "attached"} ${kind} ${ref}${project ? ` (${project})` : ""} on run ${run.id}`,
+            }],
+          };
+        },
+        { alwaysLoad: true }
+      ),
+      tool(
         TOOL_READ,
         "Read your worklist — the plan you recorded for this session, plus the open run's list " +
           "if a procedure is in flight, and the whiteboard. It is harness state, so it survives a " +
@@ -756,4 +901,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { attach, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_NAMES };

@@ -43,7 +43,8 @@
     "smoke:app": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_APPSMOKE=1 node electron/launch.js",
     "smoke:shot": "node tests/shot.js",
     "smoke:documents": "node tests/documents.js",
-    "smoke:voice": "node tests/voice.js"
+    "smoke:voice": "node tests/voice.js",
+    "smoke:attachments": "node tests/attachments.js"
   },
   "repository": {
     "type": "git",

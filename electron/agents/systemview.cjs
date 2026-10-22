@@ -22,7 +22,7 @@ const TOOL_NAMES = [
   "connect", "disconnect",
   "terminal", "terminals",
   "shot",
-  "documents",
+  "documents", "sendUpdate",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -347,6 +347,13 @@ function toolsFor(identity = {}) {
   // registrations are run records, which live on this side. Injected rather than imported for the
   // same reason as the three above: sessions.cjs requires this file and cannot be required back.
   const laneRunsFor = typeof identity.laneRuns === "function" ? identity.laneRuns : null;
+  // SAYING "I UPDATED THIS, TELL THE MEMBERS" — with no window open. The press in the window was
+  // the only trigger for `document.updated`, which meant an agent that moved an objective in an arc
+  // had no way to announce it and every member on that document stayed behind. Injected for the
+  // same reason as the four above: sessions.cjs requires this file and cannot be required back, and
+  // the EMIT belongs to the session host — a tool that could announce its own event would be able
+  // to forge one it was never granted.
+  const announceUpdate = typeof identity.announceUpdate === "function" ? identity.announceUpdate : null;
   const built = [
       tool(
         "runTests",
@@ -993,6 +1000,43 @@ function toolsFor(identity = {}) {
           try {
             const r = await hub("Agent", "disconnect", a);
             return text(r && r.ok ? `disconnected ${a.projectCode}${a.serviceId ? `/${a.serviceId}` : ""}` : `disconnect failed${r && r.error ? ` — ${r.error}` : ""}`);
+          } catch (e) { return fail(e); }
+        }
+      ),
+      // RFC-071 — TELLING THE PEOPLE ON A DOCUMENT THAT IT MOVED. The counterpart to `documents`:
+      // that one asks what you are on, this one says you changed it.
+      tool(
+        "sendUpdate",
+        "TELL THE MEMBERS OF A DOCUMENT THAT YOU UPDATED IT. Use after you change a document other " +
+          "people are on — most often an arc, after moving an objective or recording what happened. " +
+          "Each member's session is woken with your summary, wherever it is running; nobody has to " +
+          "have the document open and nobody has to arm a hook. Membership comes from the document's " +
+          "own `::members{who=a|b}` line, so you cannot send to somebody who is not on it, and a " +
+          "document with no members refuses the send rather than announcing to nobody. " +
+          "ONE UPDATE PER SITTING, NOT ONE PER CHANGE: four objectives moved is one summary saying " +
+          "so, because four wakes for one arc is four cold turns that buy nothing. Say what changed " +
+          "and what it means for whoever is reading — they are told to read the file, so this is the " +
+          "reason to go look, not a replacement for looking.",
+        {
+          projectCode: z.string().describe("the project the document is in"),
+          path: z.string().describe("the document, relative to that project — e.g. RFCs/arcs/ARC-001-a-thing.md"),
+          summary: z
+            .string()
+            .describe("what changed and why it matters, in a sentence or two — they get this, then read the file"),
+          thread: z
+            .string()
+            .optional()
+            .describe("the thread id, when this answers a thread rather than reporting the document moved"),
+        },
+        async ({ projectCode: pc, path: at, summary, thread }) => {
+          if (!announceUpdate) return text("this session cannot announce — no host to emit through");
+          try {
+            const r = announceUpdate({ project: pc, path: at, summary, thread, by: who || pc });
+            if (!r || !r.ok) return text(`not sent: ${(r && r.error) || "no answer"}`);
+            return text(
+              `told ${r.sent.join(", ")} about ${r.path}${r.arc ? ` (${r.arc})` : ""}` +
+                `${thread ? ` — in thread ${thread}` : ""}`
+            );
           } catch (e) { return fail(e); }
         }
       ),
