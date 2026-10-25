@@ -68,6 +68,17 @@ function normalize(input = {}) {
   if (input.background != null) def.background = !!input.background;
   if (input.memory) def.memory = input.memory;
   if (input.effort) def.effort = input.effort;
+  // HOW MUCH OF ITS THINKING THIS AGENT SHOWS, by default — `display` is the SDK's thinkingDisplay
+  // ("summarized" | "highlights" | "omitted"; null = the raw stream) and `budget` its thinking
+  // tokens. The chat header overrides it per session; this is what a session opens on. His ask: a
+  // knob he controls, because seeing the reasoning is what lets him stop a run early instead of
+  // being asked to confirm before every step.
+  if (input.thinking && typeof input.thinking === "object") {
+    const t = {};
+    if (["summarized", "highlights", "omitted"].includes(input.thinking.display)) t.display = input.thinking.display;
+    if (input.thinking.budget != null && Number.isFinite(Number(input.thinking.budget))) t.budget = Number(input.thinking.budget);
+    def.thinking = t;
+  }
   return {
     id: input.id || idOf(name),
     name: name || input.id || "agent",

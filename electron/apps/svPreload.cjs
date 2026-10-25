@@ -212,6 +212,8 @@ const FULL = {
         // model switching — SDK menu + a request whose truth is the next re-init
         models: () => ipcRenderer.invoke("agent:models", key),
         setModel: (model) => ipcRenderer.invoke("agent:setModel", key, model),
+        thinking: () => ipcRenderer.invoke("agent:thinking", key),
+        setThinking: (t) => ipcRenderer.invoke("agent:setThinking", key, t),
         history: () => ipcRenderer.invoke("agent:history", key),
         // detaches this view; the session keeps thinking (kill is separate + deliberate)
         dispose: () => ipcRenderer.send("agent:dispose", key),

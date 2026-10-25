@@ -77,6 +77,8 @@ function register(surfaceOf) {
   // model switching — setModel is a request; truth arrives on the next re-init
   ipcMain.handle("agent:models", (_e, key) => sessions.models(key));
   ipcMain.handle("agent:setModel", (_e, key, model) => sessions.setModel(key, model));
+  ipcMain.handle("agent:thinking", (_e, key) => sessions.thinkingOf(key));
+  ipcMain.handle("agent:setThinking", (_e, key, t) => sessions.setThinking(key, t));
   ipcMain.handle("agent:history", (_e, key) => sessions.history(key));
   // dispose detaches THIS view — the session keeps thinking (same contract as terminals)
   ipcMain.on("agent:dispose", (e, key) => unwire(key, e.sender));

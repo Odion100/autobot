@@ -217,7 +217,7 @@ function systemContext() {
 // about staleness is the one thing this cannot afford.
 const COMPOSED_FIELDS = [
   "prompt", "skills", "tools", "disallowedTools",
-  "mcpServers", "model", "effort", "maxTurns", "background", "memory",
+  "mcpServers", "model", "effort", "thinking", "maxTurns", "background", "memory",
 ];
 const STAMP_CACHE = new Map(); // agentId -> { mtime, stamp }
 function composedStamp(agentId) {
@@ -380,6 +380,9 @@ function sdkOptionsOf(def = {}) {
   if (def.tools?.length)
     o.allowedTools = [...def.tools, ...worklist.TOOL_NAMES, discovery.TOOL_NAME, ...services.TOOL_NAMES, ...context.TOOL_NAMES];
   if (def.disallowedTools?.length) o.disallowedTools = def.disallowedTools;
+  // The thinking BUDGET is a start option; the DISPLAY is not (the SDK only has a live setter for
+  // it), so the display is applied right after `system/init` — see the init handler.
+  if (def.thinking && def.thinking.budget != null) o.thinking = { type: "enabled", budgetTokens: Number(def.thinking.budget) };
   // PER-AGENT SKILL CARRY (his design — the profile's toggle writes def.skills). The SDK's own
   // context filter: a listed set enables exactly those; absent/empty forwards nothing, which is
   // the SDK's "no override" = all discovered — the same back-compat the UI promises. This line
@@ -1074,6 +1077,12 @@ async function pump(s) {
       if (m.type === "system" && m.subtype === "init") {
         s.sdkSessionId = m.session_id;
         s.model = m.model; // rides usage events so the meter knows its real window
+        // The display mode has no start-time option — the SDK's live setter is the only door — so
+        // the agent's default is applied the moment the session is up. Fire-and-forget: a refused
+        // setter must not take the init down with it.
+        if (s.thinking && (s.thinking.display || s.thinking.budget != null)) {
+          try { s.query.setMaxThinkingTokens(s.thinking.budget ?? null, s.thinking.display || null).catch(() => {}); } catch {}
+        }
         // WHAT THIS AGENT ACTUALLY HAS. The init message carries the real lists —
         // tools (including our mcp__worklist__set), skills, subagents, mcp servers
         // with their connection status. The panel was printing "everything the
@@ -1113,6 +1122,7 @@ async function pump(s) {
           kind: "session.started",
           origin: s.origin || "cold", // "cold" | "reinit" | "resumed" — hookable, so a hook can mean any of them
           model: m.model,
+          thinking: s.thinking || null, // what this session shows of its reasoning — the header's knob reads it from here
           contextWindow: contextWindowOf(m.model),
           sdkSessionId: m.session_id,
           permissionMode: s.permissionMode, // gated-vs-open is decided at open; the UI needs to know which it got
@@ -1709,6 +1719,9 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     },
   });
 
+  // The agent's default; the header's knob overrides it per session (setThinking). Carried on the
+  // session so `session.started` can say it and a window can draw the knob honestly.
+  s.thinking = (agent && agent.def && agent.def.thinking) || null;
   s.query = query({
     prompt: s.input,
     options: {
@@ -1958,6 +1971,20 @@ function removeLaneByBranch(projectCode, branch) {
 // convention) and on every assistant message's own `model` stamp.
 const models = (key) => get(key).query.supportedModels();
 const setModel = async (key, model) => { await get(key).query.setModel(model); return true; };
+// HOW MUCH OF ITS THINKING THIS SESSION SHOWS — his knob. `display` is the SDK's thinkingDisplay
+// ("summarized" | "highlights" | "omitted" | null for the raw stream); `budget` its thinking tokens.
+// Unlike setModel this takes effect for the rest of the session without a re-init, so the session
+// records it and says so at once — there is no next-turn truth to wait for.
+const setThinking = async (key, { display = null, budget = null } = {}) => {
+  const s = get(key);
+  const d = ["summarized", "highlights", "omitted"].includes(display) ? display : null;
+  const b = budget != null && Number.isFinite(Number(budget)) ? Number(budget) : null;
+  await s.query.setMaxThinkingTokens(b, d);
+  s.thinking = { display: d, budget: b };
+  emit(s, { kind: "session.thinking", display: d, budget: b });
+  return s.thinking;
+};
+const thinkingOf = (key) => get(key).thinking || null;
 
 function subscribe(key, cb) {
   const s = get(key);
@@ -2256,6 +2283,7 @@ module.exports = {
   composedStamp, // test seam: proves which fields staleness watches, and that the hot path is cached
   repoHolding, // test seam: a lane's branch may live in a COUPLED repo, not the session's own folder
   purgeAgent, agentRuns,
+  setThinking, thinkingOf, // the thinking knob — RFC-073's cousin: how much of the reasoning reaches the window
   open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, stripRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this

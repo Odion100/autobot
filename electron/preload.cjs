@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld("autobot", {
         interrupt: () => ipcRenderer.invoke("agent:interrupt", key),
         models: () => ipcRenderer.invoke("agent:models", key),
         setModel: (model) => ipcRenderer.invoke("agent:setModel", key, model),
+        thinking: () => ipcRenderer.invoke("agent:thinking", key),
+        setThinking: (t) => ipcRenderer.invoke("agent:setThinking", key, t),
         dispose: () => ipcRenderer.send("agent:dispose", key),
         kill: () => ipcRenderer.invoke("agent:kill", key),
         initialEvents: history,

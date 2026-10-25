@@ -31,6 +31,7 @@ const DIR = path.join(os.homedir(), ".autobot", "hooks");
 // a hook copies instead of guessing.
 const EVENTS = [
   { name: "session.started", what: "a session opened — `origin` is cold | reinit | resumed", fields: ["origin", "model"], values: { origin: ["cold", "reinit", "resumed"] } },
+  { name: "session.thinking", what: "how much of its reasoning this session shows was changed — his knob in the chat header; `display` is summarized | highlights | omitted | null (the raw stream), `budget` its thinking tokens", fields: ["display", "budget"] },
   { name: "session.reinit", what: "the session was re-initialized on current docs", fields: ["resumedFrom", "agentId"] },
   { name: "session.ended", what: "the session finished or was interrupted", fields: ["reason"], values: { reason: ["finished", "interrupted", "error"] } },
   { name: "user.prompt", what: "a turn arrived from the human (or a visiting agent)", fields: ["text"] },
