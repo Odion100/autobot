@@ -47,6 +47,8 @@ const BUILTINS = [
       // IDE HEARS, voice is what it READS BACK. Two powers, two grants — an app that transcribes
       // does not thereby get to make the machine talk.
       "projects", "auth", "agents", "dictation", "voice", "terminal", "components", "systemlynx",
+      // The worklist cog's knobs (RFC-075 §3) — the IDE is where the nudge is configured.
+      "nudge",
     ],
   },
 ];

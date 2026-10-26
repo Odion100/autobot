@@ -28,6 +28,9 @@ const HISTORY_LIMIT = 2000;
 // registry's other roots are only consulted when that misses, and the holder is returned rather
 // than a boolean so a caller can say WHERE the branch lives instead of only that it exists.
 const { buildUpdate } = require("../apps/documentUpdate.cjs");
+const documents = require("../markdown/registry.cjs");
+const docFires = require("../markdown/fires.cjs");
+const docWrite = require("../markdown/write.cjs");
 const PROJECTS_FILE = () => path.join(require("os").homedir(), ".autobot", "projects.json");
 function branchIn(dir, branch) {
   if (!dir || !branch) return false;
@@ -135,6 +138,7 @@ const definitions = require("./definitions.cjs");
 const hooks = require("./hooks.cjs");
 const ledger = require("./ledger.cjs");
 const worklist = require("./worklist.cjs");
+const nudge = require("./nudge.cjs");
 const context = require("./context.cjs");
 const discovery = require("./discovery.cjs");
 const services = require("./services.cjs");
@@ -239,6 +243,15 @@ function composedStamp(agentId) {
   }
 }
 
+// WHEN THIS SHELL BOOTED — a composition part like any file's mtime, because the shell's own code
+// IS part of what a session runs on: its watcher, its doors, its delivery wiring all live in this
+// process. A session that outlived the process it opened under is wired to a dead one — measured
+// 2026-10-25: a session from before a shell restart wrote a registration leaf with Bash and no row
+// landed, because its watcher belonged to the old shell; nothing offered a refresh because nothing
+// counted the shell as a thing that changes. His: "I can refresh your session on the agent page
+// only when it pops up" — this is what makes it pop up.
+const SHELL_BOOT = Date.now();
+
 function compositionOf(agentId, cwd) {
   const t = (f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } };
   // KEYED BY THE NAME A HUMAN READS, not an anonymous list. "presence, the system context or this
@@ -247,6 +260,7 @@ function compositionOf(agentId, cwd) {
   const parts = {
     Presence: t(PRESENCE_FILE),
     "System context": t(SYSTEM_CONTEXT_FILE),
+    "The shell": SHELL_BOOT,
   };
   // THE AGENT DOC, FINGERPRINTED BY WHAT IS ACTUALLY COMPOSED — not by the file's mtime.
   //
@@ -552,6 +566,15 @@ function flushTurnEndHooks(s) {
   s.turnEndTimer = null;
   if (s.turnActive) return;        // something started again — a pause is not an ending
   if (s.toolsInFlight > 0) return; // work is still outstanding, whatever the message stream said
+  // HELD DELIVERIES GO FIRST — ambient document updates that arrived while a turn was running
+  // (the wake fix: a push mid-turn lands in the CLI's queue, which is HIS). The CLI is idle at
+  // this boundary, so each push starts its own turn, which is the whole point of holding them.
+  const dels = s.pendingDeliveries;
+  if (dels && dels.size) {
+    const heldDels = [...dels.entries()];
+    dels.clear();
+    for (const [tag, m] of heldDels) { try { pushDelivery(s, tag, m); } catch {} }
+  }
   const pend = s.pendingHooks;
   if (!pend || !pend.size) return;
   const held = [...pend.values()];
@@ -631,9 +654,17 @@ function carriesOf(s) {
 }
 
 function idleWakeMs(s) {
-  const carries = carriesOf(s);
-  if (!carries.length) return 0;
   const mins = [];
+  // THE NUDGE IS A LISTENER IN ITS OWN RIGHT, so it sets a floor even when the session carries no
+  // idle hook at all. Without this, `idleWakeMs` returns 0 for an agent with nothing armed, no
+  // timer runs, and a nudge delivered "on idle" is dead code that tests green — the exact failure
+  // shape of a verb with no door.
+  try {
+    const cfg = nudge.readSettings();
+    if (cfg.on && cfg.giveUpAfter) mins.push(Math.max(1, cfg.idleMin));
+  } catch {}
+  const carries = carriesOf(s);
+  if (!carries.length) return mins.length ? Math.min(...mins) * 60000 : 0;
   try {
     for (const h of hooks.list()) {
       if (h.on !== "idle" || h.enabled === false) continue;
@@ -668,6 +699,7 @@ function armIdle(s) {
     const quietMin = Math.floor((Date.now() - (s.quietSince || Date.now())) / 60000);
     if (quietMin < 1) return;
     try { fireHooks(s, { kind: "idle", quietMin }); } catch {}
+    try { maybeNudge(s, quietMin); } catch {}
   }, every);
   if (s.idleTimer.unref) s.idleTimer.unref();
 }
@@ -827,46 +859,72 @@ const ambientSubs = new Set();
 // So a `document.updated` is delivered to the sessions of the projects named in its `members`,
 // directly, by the harness. Hooks still fire for whoever carries one — they are the general
 // mechanism and this is not replacing them — but membership no longer DEPENDS on one existing.
+// It RETURNS the project codes it actually reached — RFC-073 c30: `told=` is stamped only on a
+// successful hand-off, and only this function knows which sessions took the push.
+// THE DELIVERY'S WORDS, COMPOSED FROM ITS META — module-level because a HELD delivery (below)
+// composes at FLUSH time, after every merge has landed, not at arrival. The meta carries the
+// document's own address so composition needs nothing from the event that started it.
+const DELIVERY_TAIL =
+  `\n\nRead the file rather than trusting this line — it is current and this is a ` +
+  `summary. You are on it because the document says so (\`::members\`), which is also how ` +
+  `you stop being on it.`;
+const deliveryHeadline = (m) =>
+  m.threads.length > 1
+    ? `${m.threads.length} threads you are in moved — ${m.project}:${m.path}: ${m.threads.join(", ")}.`
+    : m.threads.length === 1
+      ? `A thread you are in moved — ${m.project}:${m.path}, thread ${m.threads[0]}.`
+      : `A document you are a member of was updated — ${m.project}:${m.path}.`;
+const composeDelivery = (m) => {
+  const notes = m.summaries.filter(Boolean);
+  return `${deliveryHeadline(m)}${notes.length ? ` ${notes.join(" ")}` : ""}${DELIVERY_TAIL}`;
+};
+// One push, one wake. `nextTurnFromHook` rides along so the turn this starts is labelled as the
+// mechanism's, never as the human typing (RFC-066 §3).
+function pushDelivery(s, tag, m) {
+  s.input.push({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: composeDelivery(m) }] },
+    parent_tool_use_id: null,
+    session_id: "",
+  }, tag, m);
+  s.nextTurnFromHook = true;
+}
+
 function deliverToMembers(e) {
-  if (e.kind !== "document.updated") return;
+  const reached = [];
+  if (e.kind !== "document.updated") return reached;
   const named = String(e.members || "")
     .split("|")
     .map((x) => x.trim())
     .filter(Boolean);
-  if (!named.length) return;
+  if (!named.length) return reached;
   for (const s of sessions.values()) {
     if (!named.includes(s.projectCode)) continue;
-    // Never to the room it came FROM: the project whose window pressed send already knows, and an
-    // agent being told about its own document's send would answer itself.
-    if (e.project && s.projectCode === e.project && e.by === "you" && !e.thread) continue;
-    const tail =
-      `\n\nRead the file rather than trusting this line — it is current and this is a ` +
-      `summary. You are on it because the document says so (\`::members\`), which is also how ` +
-      `you stop being on it.`;
-    // ONE DOCUMENT, ONE WAKE — his instruction: "make sure the way you guys receive messages
-    // doesn't overwhelm." Several sends against the same document, arriving before the session
-    // has taken its next turn, are N interruptions that buy nothing: delivery is consumed at the
-    // next turn either way, so the agent was never going to read them separately.
-    const headline = (m) =>
-      m.threads.length > 1
-        ? `${m.threads.length} threads you are in moved — ${e.project}:${e.path}: ${m.threads.join(", ")}.`
-        : m.threads.length === 1
-          ? `A thread you are in moved — ${e.project}:${e.path}, thread ${m.threads[0]}.`
-          : `A document you are a member of was updated — ${e.project}:${e.path}.`;
-    const compose = (m) => {
-      const notes = m.summaries.filter(Boolean);
-      return `${headline(m)}${notes.length ? ` ${notes.join(" ")}` : ""}${tail}`;
+    // Never to the WRITER: an agent whose own tool call put the answer in the file is the one
+    // session that cannot be news to (RFC-073 §3 — the watcher fires per-session, so `by` names it).
+    // HIS press is NOT the writer's session: the old "never to the room it came from" rule skipped
+    // the project's own agent whenever HE pressed send on that project's document — he is not the
+    // agent, and the agent is exactly who should hear him. Measured 2026-10-26: *"I clicked the
+    // send update button and you didn't get no message."* `by="you"` skips nobody now.
+    if (e.by && e.by !== "you" && s.projectCode === e.by) continue;
+    const meta = {
+      project: e.project || "",
+      path: e.path || "",
+      threads: e.thread ? [e.thread] : [],
+      summaries: [e.summary || ""],
     };
-    const meta = { threads: e.thread ? [e.thread] : [], summaries: [e.summary || ""] };
     const tag = `doc:${e.project || ""}:${e.path || ""}`;
     try {
-      // Merge into the undelivered one if there is one; otherwise this is a fresh interruption.
-      const merged = s.input.mergePending(tag, (m) => {
+      // ONE DOCUMENT, ONE WAKE — his instruction: "make sure the way you guys receive messages
+      // doesn't overwhelm." A delivery already HELD for this document grows in place; one still
+      // sitting unconsumed in the input queue is rewritten there. Either way: no second wake.
+      const mergeInto = (m) => {
         if (e.thread && !m.threads.includes(e.thread)) m.threads.push(e.thread);
         if (e.summary) m.summaries.push(e.summary);
-        return compose(m);
-      });
-      const what = merged ? null : headline(meta);
+        return composeDelivery(m);
+      };
+      const held = s.pendingDeliveries ? s.pendingDeliveries.get(tag) : null;
+      const merged = held ? (mergeInto(held), true) : s.input.mergePending(tag, mergeInto);
       if (merged) {
         // The RECEIPT is SystemView's window to draw, not ours — so this reports the fact
         // (`merged`: an update to a delivery already announced, not a new one) and lets that
@@ -879,24 +937,35 @@ function deliverToMembers(e) {
           preview: `${e.project}:${e.path} — also ${e.thread || "document"}`,
           doc: { project: e.project || "", path: e.path || "", thread: e.thread || "", summary: e.summary || "", merged: true },
         });
+        reached.push(s.projectCode);
         continue;
       }
-      const full = compose(meta);
-      s.input.push({
-        type: "user",
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: full,
-            },
-          ],
-        },
-        parent_tool_use_id: null,
-        session_id: "",
-      }, tag, meta);
-      s.nextTurnFromHook = true;
+      // THE WAKE FIX (his order: "the queue is mine… why is events coming from outside being
+      // queued? you fucked up"). A user message handed to the CLI mid-turn lands in the CLI's OWN
+      // queue — his queue — and rides his next message instead of starting a turn. So a BUSY
+      // session never gets the push: the delivery is held here, beside the hooks RFC-012 already
+      // holds, and flushed at the settled boundary — where a push lands on an idle CLI and
+      // provably starts its own turn (the nudge is the proof; it fires only on idle and wakes).
+      if (s.turnActive || s.toolsInFlight > 0) {
+        s.pendingDeliveries.set(tag, meta);
+        emit(s, {
+          kind: "message.landed",
+          from: e.by || "you",
+          held: true,
+          preview: deliveryHeadline(meta).slice(0, 140),
+          doc: {
+            project: meta.project,
+            path: meta.path,
+            thread: e.thread || "",
+            summary: e.summary || "",
+            text: composeDelivery(meta),
+            held: true,
+          },
+        });
+        reached.push(s.projectCode);
+        continue;
+      }
+      pushDelivery(s, tag, meta);
       // THE RECEIPT CARRIES THE FACTS, not just a sentence. His: *"why isn't that thread log
       // expandable like most logs so you can see details?"* — a one-line note with a 140-character
       // preview is a row that can only ever be read, so the window gets the document, the thread
@@ -904,17 +973,126 @@ function deliverToMembers(e) {
       emit(s, {
         kind: "message.landed",
         from: e.by || "you",
-        preview: what.slice(0, 140),
+        preview: deliveryHeadline(meta).slice(0, 140),
         doc: {
-          project: e.project || "",
-          path: e.path || "",
+          project: meta.project,
+          path: meta.path,
           thread: e.thread || "",
           summary: e.summary || "",
-          text: full,
+          text: composeDelivery(meta),
         },
       });
+      reached.push(s.projectCode);
     } catch {}
   }
+  return reached;
+}
+
+// AN UNFINISHED RUN NUDGES ITS AGENT — the delivery half. `pickNudge` decides (purely, in
+// nudge.cjs); this pushes the turn, records that it happened, and leaves a receipt.
+//
+// IT PUSHES A TURN RATHER THAN FIRING A HOOK for the same reason document delivery does: a hook
+// only fires for an agent that carries it, so a nudge routed through one reaches whoever the human
+// remembered to tick. This is the floor every agent gets.
+//
+// THE RECEIPT IS NOT DECORATION. A nudge that only exists as an injected turn is invisible the
+// moment the transcript scrolls, and "nothing runs invisibly" is the rule this harness lives by —
+// so the window gets an event, and the COUNT is stamped on the run itself where a row can read it.
+function maybeNudge(s, quietMin) {
+  const cfg = nudge.readSettings();
+  if (!cfg.on) return null;
+  // THE SAME DERIVATION the ambient `ctxPct` uses, from the same two fields — a second formula
+  // here is how the nudge's ceiling and a hook's `{ctxPct: {lte: N}}` would start disagreeing.
+  const win = contextWindowOf(s.model);
+  const ctxPct = win && s.lastCtxSnapshot ? Math.round((s.lastCtxSnapshot / win) * 100) : null;
+  const picked = nudge.pickNudge({
+    runs: worklist.all(),
+    // THE RUN'S OWN SPELLING OF WHERE IT RAN — `session:<projectCode>:<sessionId>`, the exact
+    // string the worklist stamps (s.worklistOwner). The first wiring passed `s.id`, a property no
+    // session ever had: undefined matched nothing, the selector returned null for every agent, and
+    // the 15-claim suite stayed green because it feeds pickNudge its session directly. The nudge
+    // that "worked" had never once fired — found live, 2026-10-26, by him waiting for one.
+    session: s.worklistOwner,
+    quietMin,
+    ctxPct,
+    settings: cfg,
+  });
+  if (!picked) return null;
+  const { run, text, finalNotice } = picked;
+  try {
+    s.input.push({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text }] },
+      parent_tool_use_id: null,
+      session_id: "",
+    });
+    s.nextTurnFromHook = true;
+    const counted = worklist.markNudged(run.owner) || {};
+    emit(s, {
+      kind: "run.nudged",
+      source: run.source || "",
+      run: run.owner || "",
+      active: run.active || "",
+      done: Number(run.done) || 0,
+      total: Number(run.total) || 0,
+      count: Number(counted.count) || 1,
+      // THE ROW SHOWS WHAT WAS SAID (his: "the log is about to show me what kind of message you
+      // get from the nudge") — a receipt that hides the message is half a receipt.
+      text,
+      // THE CYCLE'S LAST WORD, SAID AS SUCH. Nudging no longer stops on a count (his rule) — the
+      // final notice names the only exits (done, or abandoned + the account) and the cycle resets.
+      finalNotice: finalNotice === true,
+      quietMin,
+    });
+  } catch {
+    return null;
+  }
+  return run;
+}
+
+// THE NUDGE'S CLOCK, READABLE (his: "see the countdown… watch it and boom"). The countdown row
+// needs the one number only this file knows: when each session went quiet. Project code → ms,
+// 0 while a turn is running — so a visible countdown always means "the clock is actually ticking".
+function quietOf() {
+  const out = {};
+  for (const s of sessions.values()) {
+    if (s && s.projectCode) out[s.projectCode] = Number(s.quietSince) || 0;
+  }
+  return out;
+}
+
+// THE COUNTDOWN IS THE SELECTOR'S ANSWER, NOT THE ROW'S OPINION (his, 2026-10-26: "I saw two
+// things counting down at the same time… but you only got one nudge"). Every list row deriving its
+// own eligibility drew N countdowns for ONE nudge — a surface promising wakes the selector never
+// makes. So the shell answers WHICH run would be picked when each session's quiet clock matures,
+// with the SAME pickNudge that will fire — evaluated at the due moment, so the cooldown and
+// give-up rules the row cannot know are already in the answer. Project code → { owner, source,
+// dueAt }; absent means nothing would be nudged, and no row should count down.
+function nudgePicks() {
+  const out = {};
+  let cfg;
+  try { cfg = nudge.readSettings(); } catch { return out; }
+  if (!cfg.on || !cfg.giveUpAfter) return out;
+  let runs;
+  try { runs = worklist.all(); } catch { return out; }
+  for (const s of sessions.values()) {
+    try {
+      if (!s || !s.projectCode || s.turnActive || s.toolsInFlight > 0 || !s.quietSince) continue;
+      const dueAt = Number(s.quietSince) + cfg.idleMin * 60000;
+      const win = contextWindowOf(s.model);
+      const ctxPct = win && s.lastCtxSnapshot ? Math.round((s.lastCtxSnapshot / win) * 100) : null;
+      const picked = nudge.pickNudge({
+        runs,
+        session: s.worklistOwner,
+        now: Math.max(dueAt, Date.now()),
+        quietMin: cfg.idleMin, // "when the clock matures" — the pick, not the maturity, is the question
+        ctxPct,
+        settings: cfg,
+      });
+      if (picked) out[s.projectCode] = { owner: picked.run.owner || "", source: picked.run.source || "", dueAt };
+    } catch {}
+  }
+  return out;
 }
 
 function emitAmbient(event = {}) {
@@ -922,7 +1100,7 @@ function emitAmbient(event = {}) {
   ambient.push(e);
   if (ambient.length > AMBIENT_LIMIT) ambient.splice(0, ambient.length - AMBIENT_LIMIT);
   for (const sub of ambientSubs) { try { sub(e); } catch {} }
-  try { deliverToMembers(e); } catch {}
+  try { e.delivered = deliverToMembers(e) || []; } catch { e.delivered = []; }
   // A COPY PER SESSION. fireHooks hands the event to hooks.fire, which reads it and does not write
   // — but emit() downstream stamps fields onto whatever it is given, and one shared object stamped
   // by several sessions is the bug that would be invisible until two agents disagreed about which
@@ -935,6 +1113,134 @@ const ambientHistory = (limit = 100) => ambient.slice(-Math.max(1, Math.min(limi
 function subscribeAmbient(fn) {
   ambientSubs.add(fn);
   return () => ambientSubs.delete(fn);
+}
+
+// RFC-073 §3 — THE ANNOUNCE DOOR. A markdown file changed (the watcher, a tool's schema, his press
+// through files:write) and this is everything that follows: ONE parse answers registration and
+// fires; the registry is upserted; each fire is routed through the member router exactly as a
+// document send is; and `told=` is stamped for precisely who was reached — plus the writer, who
+// cannot be news to. A failed hand-off stamps nothing, so the fire stays visible to the next parse,
+// which is the sweep's whole input (c30). Fire-and-forget at every call site: announcing is derived
+// behaviour and must never make a write or an emit fail.
+async function announceDocument(absPath, opts = {}) {
+  const abs = String(absPath || "");
+  if (!/\.(md|markdown)$/i.test(abs)) return { ok: true, skipped: true };
+  // THE REGISTRY IS THE FILTER (c33): a file we do not know costs a LOOKUP — and, for markdown, one
+  // bounded head-read to see whether it is INTRODUCING itself (a registration leaf near the top).
+  // No leaf, not ours → no parse. A registered document, or one carrying a leaf, pays the parse.
+  if (!documents.byPath(abs) && opts.source == null) {
+    let head = "";
+    try {
+      const fd = require("fs").openSync(abs, "r");
+      const buf = Buffer.alloc(4096);
+      head = buf.toString("utf8", 0, require("fs").readSync(fd, buf, 0, 4096, 0));
+      require("fs").closeSync(fd);
+    } catch {
+      return { ok: false, error: `cannot read ${abs}` };
+    }
+    if (!/^::(arc|rfc|report|gap)\{/m.test(head)) return { ok: true, registered: false, parsed: false };
+  }
+  const res = await docFires.scan(abs, opts.source);
+  if (!res.ok) return res;
+  if (res.registration) documents.registerParsed(abs, res.registration, res.blocks, res.text);
+  // THE REGISTRY IS THE FILTER (§3): only a registered document fires. Everything else cost one
+  // lookup and one parse that also answered "should I care".
+  const row = documents.byPath(abs);
+  if (!row) return { ok: true, registered: false, fired: 0 };
+  const { project, rel } = documents.locate(abs);
+  let fired = 0;
+  for (const f of res.fires) {
+    const built = await buildUpdate(
+      {
+        path: rel,
+        project,
+        members: f.pending,
+        by: opts.by || "",
+        summary: f.summary,
+        ...(f.thread ? { thread: f.thread } : {}),
+        docKind: row.kind,
+        docId: row.id,
+        block: f.name,
+        line: f.line,
+      },
+      abs,
+    );
+    if (!built.ok) continue;
+    const e = emitAmbient(built.event);
+    const delivered = Array.isArray(e.delivered) ? e.delivered : [];
+    // The writer already knows — its own tool call put the answer there (c31's "exactly one
+    // delivery ever happened" depends on the writer never being owed one).
+    const knows = opts.by && f.pending.includes(opts.by) ? [opts.by] : [];
+    const newly = [...new Set([...delivered, ...knows])];
+    if (!newly.length) continue; // nobody reached — stamp nothing, the sweep delivers it later
+    fired += 1;
+    const union = [...new Set([...f.told, ...newly])];
+    docWrite.writeAttr(abs, f.line, { told: union.join("|") });
+  }
+  return { ok: true, registered: true, fired };
+}
+
+// RFC-073 §3.1 — THE AGENT'S DOOR. An agent marks a claim or moves an objective through THIS, not
+// by hand-editing the line: one writer (write.cjs), so a mark written by an agent is the same write
+// a press makes — and the rules the block cannot police live here. A claim's mark carries the
+// caller's own name and the moment; `by=` cannot be spoofed through this door. A claim marked
+// without a note is REFUSED: the word is only as good as what it rests on — `met` says what was
+// done and seen, `unmet` what happens instead (c35). The write is followed by the same announce
+// every other write gets, so the mark fires to the document's audience by itself.
+async function markBlock(absPath, line, { state, note } = {}, by = "") {
+  const abs = String(absPath || "");
+  const n = Number(line) || 0;
+  let row = "";
+  try {
+    row = fs.readFileSync(abs, "utf8").split("\n")[n - 1] || "";
+  } catch {
+    return { ok: false, error: `cannot read ${abs}` };
+  }
+  const isClaim = /^\s*::claim\b/.test(row);
+  const isObjective = /^\s*:{3,}\s*objective\b/.test(row);
+  if (!isClaim && !isObjective)
+    return { ok: false, error: `line ${n} holds no ::claim and no :::objective — nothing to mark` };
+  const value = String(state || "").trim();
+  if (isClaim) {
+    if (!["met", "unmet", "not-met"].includes(value))
+      return { ok: false, error: 'a claim is marked state=met or state=unmet' };
+    if (!String(note || "").trim())
+      return {
+        ok: false,
+        error:
+          "refused: a claim marked without note= is no mark — say what was done and seen (met) or what happens instead (unmet)",
+      };
+    const w = docWrite.writeAttr(abs, n, {
+      state: value === "not-met" ? "unmet" : value,
+      by: by || "agent",
+      at: Date.now(),
+      note: String(note).trim(),
+    });
+    if (!w.ok) return w;
+  } else {
+    if (!["open", "doing", "done", "blocked"].includes(value))
+      return { ok: false, error: "an objective moves to open, doing, done or blocked" };
+    const pairs = { state: value };
+    if (String(note || "").trim()) pairs.note = String(note).trim();
+    const w = docWrite.writeAttr(abs, n, pairs);
+    if (!w.ok) return w;
+  }
+  const announced = await announceDocument(abs, { by });
+  return { ok: true, marked: isClaim ? "claim" : "objective", state: value, fired: announced.fired || 0 };
+}
+
+// RFC-073 §3 slice 4 — THE SESSION-START SWEEP. A fire that happened while nobody was running is
+// delivered when somebody is: a new session asks the registry what exists and re-announces each
+// document. `told=` makes it idempotent — a covered block is silence — so the sweep costs one parse
+// per registered document and delivers only what is still owed (c32).
+async function sweepDocuments() {
+  for (const row of documents.read()) {
+    const abs = documents.absPathOf(row);
+    if (!abs) continue;
+    try {
+      await announceDocument(abs);
+    } catch {}
+  }
 }
 
 // Rule 2: the summary is produced ONCE, here, from the tool schemas the host holds.
@@ -1002,6 +1308,9 @@ function startWatcher(s) {
       s.recentChanges.set(abs, now);
       const change = eventType === "rename" ? (fs.existsSync(abs) ? "created" : "deleted") : "edited";
       emit(s, { kind: "file.changed", path: abs, change, source: "watcher" });
+      // RFC-073: a change is one cause of a parse — register AND fire, writer named so it is
+      // stamped as told rather than woken by its own write.
+      announceDocument(abs, { by: s.projectCode }).catch(() => {});
     });
   } catch {} // recursive watch unavailable → schema half still covers Edit/Write
 }
@@ -1268,6 +1577,7 @@ async function pump(s) {
               if (fc && fc.path) {
                 s.recentChanges.set(fc.path, Date.now()); // schema half spoke — watcher stays quiet on this path
                 emit(s, { kind: "file.changed", path: fc.path, change: fc.change, source: "schema" });
+                announceDocument(fc.path, { by: s.projectCode }).catch(() => {}); // RFC-073 — same door as the watcher half
               }
             }
       } else if (m.type === "result") {
@@ -1374,6 +1684,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // by run source and seeded from the run files below so a re-init does not forget that a
     // procedure already ran. `turnSeq` counts yields, which is what makes "once per turn" real.
     pendingHooks: new Map(),
+    // THE WAKE FIX (his order, 2026-10-26: "the queue is mine… why is events coming from outside
+    // being queued?"). An ambient delivery that reaches a BUSY session is held here — keyed by
+    // document tag, merged in place — and flushed at the same settled boundary the hooks flush at,
+    // where a push lands on an idle CLI and starts its own turn. Handing it to the CLI mid-turn
+    // put it in HIS queue, riding his next message.
+    pendingDeliveries: new Map(),
     runsDone: new Map(),
     turnSeq: 0,
     turnActive: false,
@@ -1644,6 +1960,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     const jobs = require("./jobs.cjs");
     const known = jobs.list().some((j) => j.id === m[2] || j.name === m[2]);
     return known ? "" : `note: no job "${m[2]}" exists — fine if this is a namespace of your own.`;
+  }, (id, source, what) => {
+    // A STATUS OR ATTACHMENT IS NEWS THE STRIP READS OFF DISK — without an announce his rows wear
+    // yesterday's face until some unrelated run event ticks a refresh (his catch, 2026-10-26: the
+    // run he watched me declare abandoned "doesn't show any abandoned"). Same seam as
+    // whiteboard.updated: write, then say so.
+    emit(s, { kind: "run.updated", id, source, what });
   });
 
   // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
@@ -1690,7 +2012,10 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // same reason as the three above: this file requires systemview.cjs and cannot be required
     // back. The EMIT stays here, where the session host lives, so the tool builds an event and
     // never announces one itself.
-    announceUpdate: (payload = {}) => {
+    // RFC-073 §3.1 — the agent's write door, with the caller's own name stamped as `by` so a mark
+    // is attributable and cannot speak as anybody else.
+    markBlock: (absPath, line, attrs) => markBlock(absPath, line, attrs, projectCode),
+    announceUpdate: async (payload = {}) => {
       // Resolving a project code to a folder happens HERE and not in the tool, because seven
       // places in this shell already read projects.json and an eighth copy is worse than a
       // slightly longer injected function.
@@ -1701,7 +2026,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         const rel = String(payload.path || "");
         if (dir) abs = path.isAbsolute(rel) ? rel : path.join(path.resolve(dir), rel);
       } catch {}
-      const built = buildUpdate({ ...payload, by: payload.by || projectCode }, abs);
+      const built = await buildUpdate({ ...payload, by: payload.by || projectCode }, abs);
       if (!built.ok) return built;
       try {
         emitAmbient(built.event);
@@ -1797,6 +2122,9 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
 
   sessions.set(key, s);
   startWatcher(s);
+  // RFC-073 slice 4 — a session arriving is one cause of a parse: whatever fired while nobody was
+  // running is delivered now, and told= keeps it to exactly what is still owed.
+  sweepDocuments().catch(() => {});
   // THE PUMP'S PROMISE IS KEPT. Nothing awaits a session's lifetime — but re-init has to know
   // when the OLD one is actually over, because the next one resumes the same sdk session id and
   // two `claude` processes on one transcript is not a race we get to win. Fire-and-forget was
@@ -2293,6 +2621,7 @@ module.exports = {
   // who needs the store takes it from here, so the rename is one edit forever.
   EVENTS,
   emitAmbient, ambientHistory, subscribeAmbient,
+  announceDocument, sweepDocuments, markBlock,
   weights,
   loadSessionStore: loadStore,
   saveSessionStore: saveStore,
@@ -2300,5 +2629,5 @@ module.exports = {
   // yields is the kind of behaviour that is invisible when it is right and indistinguishable from
   // "the hook never fired" when it is wrong, and the only thing that separates those two readings
   // is a test that can drive the boundary without a live model on the other end.
-  TURN_SETTLE_MS, idleWakeMs, __setIdleTick, fireHooks, armTurnEnd, armIdle, flushTurnEndHooks,
+  TURN_SETTLE_MS, idleWakeMs, __setIdleTick, fireHooks, armTurnEnd, armIdle, flushTurnEndHooks, maybeNudge, quietOf, nudgePicks,
 };

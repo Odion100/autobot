@@ -40,6 +40,10 @@ const FULL = {
   files: {
     readFile: (pc, rel) => ipcRenderer.invoke("files:read", pc, rel),
     writeFile: (pc, rel, content) => ipcRenderer.invoke("files:write", pc, rel, content),
+    // RFC-073 §3 — THE WINDOW TELLS ITS SHELL ABOUT A SAVE THE HUB MADE. The documents tab writes
+    // through the hub (its own process), so the shell's parse-on-write never sees his press; this is
+    // the one-line door that closes that seam. Fire-and-forget on the caller's side.
+    noteDocument: (pc, rel) => ipcRenderer.invoke("documents:note", pc, rel),
     listFiles: (pc, rel) => ipcRenderer.invoke("files:list", pc, rel),
     search: (pc, pattern, opts) => ipcRenderer.invoke("files:search", pc, pattern, opts),
     // git: read + staging
@@ -53,6 +57,13 @@ const FULL = {
   },
   auth: {
     status: () => ipcRenderer.invoke("files:auth-status"),
+  },
+  // THE NUDGE'S SETTINGS, read and written through the harness rather than held by the window.
+  // One home: the harness is what reads these on every idle tick, so a copy the window owns is a
+  // setting that changes nothing — the same reason the send had to become an event in the host.
+  nudge: {
+    read: () => ipcRenderer.invoke("nudge:settings"),
+    write: (patch) => ipcRenderer.invoke("nudge:settings-write", patch),
   },
   // RFC-004 §3.3 — what this surface may mount. A host that renders travelling components asks
   // here; the answer is already filtered to the surface and carries resolved own-origin src URLs,

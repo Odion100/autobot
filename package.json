@@ -25,6 +25,7 @@
     "smoke:jobpath": "node tests/job-path.js",
     "dev:nowatch": "node electron/dev.js --no-watch",
     "smoke:worklist": "node tests/worklist.js",
+    "smoke:nudge": "node tests/nudge.js",
     "smoke:lanes": "node tests/lanes.js",
     "smoke:show": "node tests/show.js",
     "smoke:board": "node tests/board.js",
@@ -43,6 +44,7 @@
     "smoke:app": "AUTOBOT_SHELL_SHOW=0 AUTOBOT_APPSMOKE=1 node electron/launch.js",
     "smoke:shot": "node tests/shot.js",
     "smoke:documents": "node tests/documents.js",
+    "smoke:wake": "node tests/wake.js",
     "smoke:voice": "node tests/voice.js",
     "smoke:attachments": "node tests/attachments.js"
   },
@@ -73,7 +75,12 @@
     "puppeteer": "^19.11.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "readline": "^1.3.0"
+    "readline": "^1.3.0",
+    "remark-directive": "^2.0.1",
+    "remark-gfm": "^3.0.1",
+    "remark-parse": "^10.0.2",
+    "unified": "^10.1.2",
+    "unist-util-visit": "^4.1.2"
   },
   "config": {
     "commitizen": {

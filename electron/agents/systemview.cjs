@@ -22,7 +22,7 @@ const TOOL_NAMES = [
   "connect", "disconnect",
   "terminal", "terminals",
   "shot",
-  "documents", "sendUpdate",
+  "documents", "sendUpdate", "mark",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -354,6 +354,14 @@ function toolsFor(identity = {}) {
   // the EMIT belongs to the session host — a tool that could announce its own event would be able
   // to forge one it was never granted.
   const announceUpdate = typeof identity.announceUpdate === "function" ? identity.announceUpdate : null;
+  const markBlock = typeof identity.markBlock === "function" ? identity.markBlock : null;
+  const projectRootOf = (pc) => {
+    try {
+      const os = require("os");
+      const map = JSON.parse(require("fs").readFileSync(require("path").join(os.homedir(), ".autobot", "projects.json"), "utf8")) || {};
+      return map[String(pc || "")] || "";
+    } catch { return ""; }
+  };
   const built = [
       tool(
         "runTests",
@@ -1006,6 +1014,34 @@ function toolsFor(identity = {}) {
       // RFC-071 — TELLING THE PEOPLE ON A DOCUMENT THAT IT MOVED. The counterpart to `documents`:
       // that one asks what you are on, this one says you changed it.
       tool(
+        "mark",
+        "MARK A ::claim OR MOVE A :::objective in a registered document — the same write a press in " +
+          "the window makes, through the one writer. For a claim: state=met or unmet, and note= is " +
+          "REQUIRED — met says what you did and saw, unmet what happens instead; a mark without a " +
+          "note is refused, because the word is only as good as what it rests on. For an objective: " +
+          "state=open|doing|done|blocked, note optional (record divergence on the block). The write " +
+          "itself announces to the document's audience and stamps told= — do NOT also sendUpdate for " +
+          "the same move. by= is stamped as YOU; it cannot be set.",
+        {
+          projectCode: z.string().describe("the project the document is in"),
+          path: z.string().describe("the document, relative to that project"),
+          line: z.number().describe("the 1-based source line the ::claim or :::objective sits on"),
+          state: z.string().describe("met | unmet for a claim; open | doing | done | blocked for an objective"),
+          note: z.string().optional().describe("REQUIRED for a claim — what was done and seen, or what happens instead"),
+        },
+        async ({ projectCode: pc, path: at, line, state, note }) => {
+          if (!markBlock) return text("this session cannot mark — no host to write through");
+          try {
+            const root = projectRootOf(pc);
+            if (!root) return text(`not marked: no folder for project "${pc}"`);
+            const abs = require("path").isAbsolute(at) ? at : require("path").join(require("path").resolve(root), at);
+            const r = await markBlock(abs, line, { state, note });
+            if (!r || !r.ok) return text(`not marked: ${(r && r.error) || "no answer"}`);
+            return text(`marked the ${r.marked} on line ${line} ${r.state}${r.fired ? ` — announced to the document's audience` : ""}`);
+          } catch (e) { return fail(e); }
+        }
+      ),
+      tool(
         "sendUpdate",
         "TELL THE MEMBERS OF A DOCUMENT THAT YOU UPDATED IT. Use after you change a document other " +
           "people are on — most often an arc, after moving an objective or recording what happened. " +
@@ -1031,7 +1067,7 @@ function toolsFor(identity = {}) {
         async ({ projectCode: pc, path: at, summary, thread }) => {
           if (!announceUpdate) return text("this session cannot announce — no host to emit through");
           try {
-            const r = announceUpdate({ project: pc, path: at, summary, thread, by: who || pc });
+            const r = await announceUpdate({ project: pc, path: at, summary, thread, by: who || pc });
             if (!r || !r.ok) return text(`not sent: ${(r && r.error) || "no answer"}`);
             return text(
               `told ${r.sent.join(", ")} about ${r.path}${r.arc ? ` (${r.arc})` : ""}` +

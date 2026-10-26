@@ -9,10 +9,20 @@
 // THROWAWAY IDS ONLY. Writes agents named `smoke-hooks-*` under the real agents dir and deletes
 // them; it never touches a definition anyone uses.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
+
+// THE SUITE MUST NOT READ HIS LIVE NUDGE SETTINGS. The nudge — on by default — sets an idle-clock
+// floor for every session; that is ITS claim (tests/nudge.js #8), not this file's. The idle claims
+// below are about HOOK thresholds, so the nudge is parked off in a scratch file — otherwise this
+// suite passes or fails with whatever he last set in the cog, which is a suite reading the user's
+// live config to decide what is true.
+const nudgeScratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-hooks-"));
+process.env.AUTOBOT_NUDGE_FILE = path.join(nudgeScratch, "nudge.json");
+fs.writeFileSync(process.env.AUTOBOT_NUDGE_FILE, JSON.stringify({ on: false }));
 const defs = require("../electron/agents/definitions.cjs");
 const hooks = require("../electron/agents/hooks.cjs");
 

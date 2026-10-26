@@ -37,11 +37,13 @@ const TOOL_READ_NAME = `mcp__${SERVER}__${TOOL_READ}`;
 // re-said. One tool is the whole API: markdown in replaces the board, nothing in wipes it.
 const TOOL_ATTACH = "attach";
 const TOOL_BOARD = "whiteboard";
+const TOOL_STATUS = "status";
 const TOOL_ATTACH_NAME = `mcp__${SERVER}__${TOOL_ATTACH}`;
 const TOOL_BOARD_NAME = `mcp__${SERVER}__${TOOL_BOARD}`;
+const TOOL_STATUS_NAME = `mcp__${SERVER}__${TOOL_STATUS}`;
 // All names, for the allow-list: pinning `tools` without the reader leaves an
 // agent able to write a plan it can never read back.
-const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME];
+const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS_NAME];
 
 // ONE ACTIVE ITEM, enforced rather than requested (their §3 left it to me).
 // "What is it doing right now" has to be unambiguous or the rendering is a guess;
@@ -138,7 +140,7 @@ function save(owner, patch) {
     // (a set() that clobbered the board made the two features enemies). `broughtIn` was the first
     // passenger; `selfDirected` (RFC-066) is the newest, and it rides for the same reason: it is
     // stamped once at a run's birth, so every later list write is a write that does not know it.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, ...patch, updatedAt: Date.now() };
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, nudges: cur.nudges, ...patch, updatedAt: Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
@@ -151,14 +153,21 @@ function save(owner, patch) {
     // AN EMPTY LIST IS NO LIST. A run with nothing attached must read exactly like every run
     // already on disk — which is what makes this need no migration (RFC-072 §11.2).
     if (!Array.isArray(next.attachments) || !next.attachments.length) delete next.attachments;
+    // ABSENT IS "NEVER NUDGED", so an explicit null from an items write clears it rather than
+    // writing a zero nobody can distinguish from a count.
+    if (!next.nudges) delete next.nudges;
     fs.writeFileSync(fileFor(owner), JSON.stringify(next, null, 2));
   } catch {}
 }
 
 // The list and the board share one file, so each write patches its own half and PRESERVES the
 // other — a set() that clobbered the whiteboard would make the two features enemies.
+// MOVING THE LIST RESETS THE NUDGE COUNT, and that is what makes "nudged 3 times, no movement"
+// literally true rather than a figure of speech: the count can only accumulate across a stretch
+// where nobody touched the list. An agent that comes back, does a step and stalls again earns a
+// fresh set of nudges, which is right — it is a different stall.
 function write(owner, items, source = "") {
-  save(owner, { items, source: source || undefined });
+  save(owner, { items, source: source || undefined, nudges: null });
   return items;
 }
 
@@ -369,11 +378,18 @@ function openRunFor(session, source) {
 function writeRun(id, session, items, source, { selfDirected } = {}) {
   const owner = runOwner(id);
   let born = true;
+  let hadAbandoned = false;
   try { born = !fs.existsSync(fileFor(owner)); } catch {}
+  // MOVEMENT SPENDS THE EXCUSE (his design, 2026-10-26). An "abandoned" declaration is what stops
+  // the nudging — so a run that moves again is no longer abandoned, and keeping the word would let
+  // one old declaration excuse every future stall. Cleared alongside the nudge count, same reason.
+  try { hadAbandoned = !born && /abandon/i.test(String(((readFile(owner) || {}).status || {}).text || "")); } catch {}
   save(owner, {
     items,
     source: source || undefined,
     session,
+    nudges: null, // movement resets it — see write()
+    ...(hadAbandoned ? { status: null } : {}),
     ...(born ? { selfDirected: selfDirected === true } : {}),
   });
   // THE CLOSE IS THE ONLY MOMENT THIS IS KNOWN (RFC-067 §4). Nothing new observes anything: the
@@ -646,6 +662,32 @@ function attachmentsOf(run = {}) {
   return out;
 }
 
+// NUDGE COUNT, KEPT ON THE RUN. A run blocked on a human never completes, so the nudging has to
+// stop — and the only honest place for "how many times was this raised" is the record it is about.
+// It then stops being a throttle and becomes a FACT a surface can render: "nudged 3 times, no
+// movement" tells him more than the nudges ever told the agent.
+//
+// TAKES THE OWNER, not an id, because `all()` hands the caller an owner and the nudge picks its run
+// out of `all()`. A second id→owner conversion at the call site is where the two spellings of a
+// lane source came from.
+function markNudged(owner, { ts = 0 } = {}) {
+  const o = String(owner || "");
+  if (!o) return null;
+  let prev = {};
+  try {
+    if (!fs.existsSync(fileFor(o))) return null;
+    prev = (readFile(o) || {}).nudges || {};
+  } catch {
+    return null;
+  }
+  const nudges = {
+    count: (Number(prev && prev.count) || 0) + 1,
+    lastAt: Number(ts) > 0 ? Number(ts) : Date.now(),
+  };
+  save(o, { nudges });
+  return nudges;
+}
+
 function markBroughtIn(id, { base = "", repo = "", by = "", ts = 0 } = {}) {
   const owner = runOwner(String(id || ""));
   try {
@@ -699,6 +741,12 @@ function all() {
         // ABSENT READS FALSE. No migration: every record written before this existed was
         // commissioned by a human asking for it.
         selfDirected: r.selfDirected === true,
+        // HOW MANY TIMES THIS RUN WAS NUDGED, and when last — null when never, so a surface can
+        // render the absence rather than printing "nudged 0 times" at every untouched run.
+        nudges: r.nudges && typeof r.nudges === "object" ? r.nudges : null,
+        // WHAT THE RUN POINTS AT — the nudge's excuse check reads these (a run declared abandoned
+        // must carry its account), and a row can wear what its run produced. null, never undefined.
+        attachments: Array.isArray(r.attachments) && r.attachments.length ? r.attachments : null,
         done: items.filter((i) => i.state === "done").length,
         total: items.length,
         active: (items.find((i) => i.state === "active") || {}).text || "",
@@ -726,7 +774,7 @@ function all() {
 // these for the SDK, and a test can hold the handler and CALL it. That matters here more than usual
 // — `markBroughtIn` shipped defined, exported and tested with no door on it at all, called by
 // nothing but its own test, so zero receipts ever existed. A door is only proven by being opened.
-function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null) {
+function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null, onTouch = null) {
   return [
       tool(
         TOOL,
@@ -821,12 +869,61 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
           const r = off
             ? removeAttachment(run.id, { kind, ref, project })
             : attach(run.id, { kind, ref, project, by: run.source || "" });
+          // THE WRITE ANNOUNCES ITSELF (his catch, 2026-10-26: "it doesn't show any abandoned").
+          // The strip reads run files but only re-reads on a run EVENT — an attachment landing
+          // silently leaves his rows wearing yesterday's face until something else ticks.
+          if (!(r && r.error) && onTouch) { try { onTouch(run.id, run.source || "", off ? "attachment-removed" : "attachment"); } catch {} }
           return {
             content: [{
               type: "text",
               text: r && r.error
                 ? r.error
                 : `${off ? "removed" : "attached"} ${kind} ${ref}${project ? ` (${project})` : ""} on run ${run.id}`,
+            }],
+          };
+        },
+        { alwaysLoad: true }
+      ),
+      // THE STATUS WRITE WAS A VERB WITH NO DOOR — markStatus existed, tested, and nothing an agent
+      // carries could call it except the lane-shaped hub path (which resolves by BRANCH, so a
+      // skill or job run was unreachable). The nudge's declared ending made that a live failure:
+      // the final notice tells the agent to set the run's status to "abandoned", and a mechanism
+      // whose named exit cannot be taken is the exact 3am shape this system exists to refuse.
+      tool(
+        TOOL_STATUS,
+        "Say what is happening with the run that is open — one dated, attributed line that " +
+          "becomes the row's headline. An empty text clears it. Declaring \"abandoned\" WITH a " +
+          "report attached is the only thing besides completion that stops the idle nudging — " +
+          "the word and the account together, never either alone.",
+        {
+          text: z
+            .string()
+            .describe(
+              'the statement, e.g. "abandoned — blocked on his review" or "waiting on a rebase" — ' +
+                'or "" to retract one you got wrong'
+            ),
+        },
+        async ({ text: say }) => {
+          const run = getRun ? getRun() : null;
+          if (!run || !run.id)
+            return {
+              content: [{
+                type: "text",
+                text: "no run is open — a status lives on a RUN, so start one with a `source` first.",
+              }],
+            };
+          const res = markStatus(run.id, { text: say, by: run.source || "" });
+          // Same announce as the attachment above — a declared "abandoned" that no row shows is
+          // a record he cannot see land, which reads identical to it not landing.
+          if (res && onTouch) { try { onTouch(run.id, run.source || "", "status"); } catch {} }
+          return {
+            content: [{
+              type: "text",
+              text: !res
+                ? "the run record would not take it"
+                : res.cleared
+                  ? `status cleared on run ${run.id}`
+                  : `status on run ${run.id}: ${res.text}`,
             }],
           };
         },
@@ -901,4 +998,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { attach, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_NAMES };
+module.exports = { attach, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_NAMES };

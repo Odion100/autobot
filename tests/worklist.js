@@ -304,6 +304,55 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   ok("an agent cannot smuggle its own provenance through `set` — the host reads it off the session");
 }
 
+// ---- THE STATUS DOOR (2026-10-26) ----------------------------------------------------------
+// markStatus existed, tested, with NO caller an agent could reach except the lane-shaped hub path
+// (resolves by branch — a skill or job run was unreachable). The nudge's declared ending made that
+// a live failure: the final notice says "declare it abandoned", and a named exit that cannot be
+// taken is a verb with no door.
+{
+  const rid = worklist.newRunId();
+  worklist.writeRun(rid, "session:p-status:s1", [{ id: "1", text: "half", state: "active" }], "skill:door-test");
+  const tools = worklist.toolsFor(() => {}, () => [], null, () => "", () => ({ id: rid, source: "skill:door-test" }));
+  const statusTool = tools.find((t) => t.name === worklist.TOOL_STATUS);
+  assert.ok(statusTool, "the worklist carries a `status` tool — the abandoned declaration has a door");
+  const r = await statusTool.handler({ text: "abandoned — blocked on his word" }, {});
+  assert.ok(/abandoned/.test(r.content[0].text));
+  const row = worklist.all().find((x) => x.owner === worklist.runOwner(rid));
+  assert.ok(row.status && /abandoned/.test(row.status.text), "the declaration landed on the run record");
+  assert.equal(row.status.by, "skill:door-test", "attributed to the run's own source, never self-claimed");
+  const cleared = await statusTool.handler({ text: "" }, {});
+  assert.ok(/cleared/.test(cleared.content[0].text), "an empty text retracts — a statement nobody can take back is worse than none");
+  const bare = worklist.toolsFor(() => {}, () => [], null, () => "", () => null);
+  const r2 = await bare.find((t) => t.name === worklist.TOOL_STATUS).handler({ text: "abandoned" }, {});
+  assert.ok(/no run is open/.test(r2.content[0].text), "no open run is a refusal, not a guess");
+  ok("`status` writes the dated, attributed headline on the OPEN run, clears on empty, refuses with none open");
+}
+
+// ---- THE WRITE ANNOUNCES ITSELF (2026-10-26) -------------------------------------------------
+// His catch, watching live: a run declared abandoned showed nothing in his strip. The strip reads
+// run FILES but re-reads only on a run event — and status/attach wrote silently. `onTouch` is the
+// announce seam; sessions.cjs wires it to emit `run.updated`, which the window counts as a tick.
+{
+  const rid = worklist.newRunId();
+  worklist.writeRun(rid, "session:p-touch:s1", [{ id: "1", text: "half", state: "active" }], "skill:touch-test");
+  const touched = [];
+  const tools = worklist.toolsFor(
+    () => {}, () => [], null, () => "",
+    () => ({ id: rid, source: "skill:touch-test" }), null,
+    (id, source, what) => touched.push({ id, source, what })
+  );
+  await tools.find((t) => t.name === worklist.TOOL_STATUS).handler({ text: "abandoned — testing the announce" }, {});
+  assert.deepEqual(touched.pop(), { id: rid, source: "skill:touch-test", what: "status" }, "a status write announces itself");
+  await tools.find((t) => t.name === worklist.TOOL_ATTACH).handler({ kind: "report", ref: "the-account" }, {});
+  assert.deepEqual(touched.pop(), { id: rid, source: "skill:touch-test", what: "attachment" }, "an attachment announces itself");
+  await tools.find((t) => t.name === worklist.TOOL_ATTACH).handler({ kind: "report", ref: "the-account", remove: true }, {});
+  assert.equal(touched.pop().what, "attachment-removed", "and a removal says it was one");
+  const bad = await tools.find((t) => t.name === worklist.TOOL_ATTACH).handler({ kind: "nonsense", ref: "x" }, {});
+  assert.ok(/unknown attachment kind/.test(bad.content[0].text) && touched.length === 0, "a refused write announces NOTHING — no tick for a write that did not land");
+  assert.ok(/run\.updated/.test(fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8")), "sessions wires the seam to a run.updated emit");
+  ok("status and attachment writes announce themselves — the strip's re-read has a tick to ride");
+}
+
 // ---- CHORES: THE RESIDUE A SWEPT RUN LEAVES (RFC-067 §4) -----------------------------------
 // The board asks "did a run with this line's source close inside the current period", and
 // pruneRuns deletes closed runs after fourteen days — so a MONTHLY line would have no run left to

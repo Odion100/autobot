@@ -96,6 +96,34 @@ to see), and a closed run's row stands until his press or the retention janitor 
 itself. A recency window shipped here once and was retired — rows that vanish on a schedule read
 as work that never happened.
 
+## The nudge — a stalled run wakes its agent, until the run earns an ending
+
+An unfinished sourced run whose session goes quiet gets its agent **nudged**: the harness pushes a
+turn (`maybeNudge`, fired from the idle tick, so it always lands on an idle session) pointing back
+at the run — source, progress, the item left active. The message introduces itself as the harness's
+idle nudge and carries the worklist's mantra: **work to completion**. Settings ride the cog
+(`~/.autobot/nudge.json`): `idleMin`, `cooldownMin` per run, `giveUpAfter` as the cycle length,
+`ctxCeilingPct`, and which source prefixes count. Every nudge leaves a ⏰ row in the feed carrying
+the exact words the agent was woken with, and the count is stamped on the run file (`nudges`) —
+movement (a fresh list write) resets it.
+
+**Reaching the end of a cycle is not an ending.** The `giveUpAfter`-th nudge is the cycle's **final
+notice** — it names the only exits — and then the count wraps and the nudging continues. A run stops
+being nudged for exactly two reasons:
+
+- **It closes** — every item done. The mantra's ending.
+- **It is declared abandoned, with its account attached.** Both halves required: a `report`
+  attachment on the run (file it with `show()`, attach with `worklist attach`) saying why it cannot
+  go further, AND the run's status declared through `worklist status` with text starting
+  `abandoned`. The word without the record is testimony;
+  the record without the word is a handover nobody ended. The row wears the result —
+  *abandoned · accounted* — and **movement spends the declaration**: a run that moves again has its
+  abandoned status cleared, so one old excuse cannot cover a new stall.
+
+The window's countdown (`nudge ~Ns` on a run row) is the **selector's answer, not the row's
+opinion**: the shell ships which run `pickNudge` would actually pick (`nudgePicks()`, same function
+that fires), so only the picked row counts down — one countdown per promised nudge.
+
 ## Retention sweeps itself
 
 Closed runs are swept after two weeks. **A run that died stays** — where it died is the record. A

@@ -11,6 +11,10 @@
 // it was never granted.
 
 const fs = require("fs");
+// RFC-073 §3.1 — THE REGEX DIALECT IS RETIRED. `LINE(name)` matched only a leaf, so this file could
+// never see a container, and a second grammar beside the real one drifts (c42). The platform's own
+// parse reads the head now — same pipeline every renderer runs.
+const { parse } = require("../markdown/parse.cjs");
 
 const headOf = (abs) => {
   try {
@@ -22,13 +26,6 @@ const headOf = (abs) => {
   }
 };
 
-const attrOf = (attrs, key) => {
-  const m = new RegExp(`\\b${key}=("[^"]*"|[^\\s}]*)`).exec(attrs || "");
-  return m ? m[1].replace(/^"|"$/g, "") : "";
-};
-
-const LINE = (name) => new RegExp(`^\\s*::${name}\\{([^}]*)\\}\\s*$`, "m");
-
 const listOf = (raw) =>
   String(raw || "")
     .split(/[|,]/)
@@ -36,15 +33,23 @@ const listOf = (raw) =>
     .filter(Boolean)
     .filter((s, i, arr) => arr.indexOf(s) === i);
 
+// One bounded parse of the head answers both questions below.
+const headLeaf = async (abs, name) => {
+  const head = headOf(abs);
+  if (!head.includes(`::${name}`)) return null; // cheap first — most documents carry neither
+  const blocks = await parse(head);
+  return blocks.find((b) => b.name === name && b.kind === "leaf") || null;
+};
+
 /**
  * WHO IS ON IT, ACCORDING TO THE DOCUMENT. Membership lives in the file as a `::members` line — his
  * to edit, everyone else's to read — so an agent sending an update never passes a member list and
  * therefore cannot invent one. The window still passes its own, because it also knows the `sent=`
  * hashes and is mid-edit.
  */
-const membersIn = (abs) => {
-  const m = LINE("members").exec(headOf(abs));
-  return m ? listOf(attrOf(m[1], "who")) : [];
+const membersIn = async (abs) => {
+  const leaf = await headLeaf(abs, "members");
+  return leaf ? listOf(leaf.attrs.who) : [];
 };
 
 /**
@@ -57,9 +62,9 @@ const membersIn = (abs) => {
  * sharpens the wording. A hook matching a path breaks silently on that rename, and the breakage
  * reads as "no arc" rather than "the arc moved".
  */
-const arcIn = (abs) => {
-  const m = LINE("arc").exec(headOf(abs));
-  return m ? attrOf(m[1], "id") : "";
+const arcIn = async (abs) => {
+  const leaf = await headLeaf(abs, "arc");
+  return leaf ? String(leaf.attrs.id || "") : "";
 };
 
 /**
@@ -70,18 +75,18 @@ const arcIn = (abs) => {
  * exactly: `when: { members: { contains: "|buapi|" } }`. A bare substring would wake `buapi` for a
  * document owned by `bu`, which is the kind of mistake nobody would ever find.
  */
-function buildUpdate(payload = {}, absPath = "") {
+async function buildUpdate(payload = {}, absPath = "") {
   const path_ = String(payload.path || "").trim();
   if (!path_) return { ok: false, error: "no document path" };
 
   const given = Array.isArray(payload.members)
     ? payload.members.map((m) => String(m || "").trim()).filter(Boolean)
     : null;
-  const members = given && given.length ? given : membersIn(absPath);
+  const members = given && given.length ? given : await membersIn(absPath);
   if (!members.length)
     return { ok: false, error: "nobody to send to — the document has no members" };
 
-  const arc = String(payload.arc || "") || arcIn(absPath);
+  const arc = String(payload.arc || "") || (await arcIn(absPath));
 
   return {
     ok: true,
@@ -101,6 +106,15 @@ function buildUpdate(payload = {}, absPath = "") {
       // Only when the document actually is an arc. An empty field on every other document would
       // make `exists` useless as a way to ask "is this an arc update?".
       ...(arc ? { arc } : {}),
+      // RFC-073 c28 — A FIRE POINTS BACK AT THE THING. When the payload came from the fire scan it
+      // carries the registry kind and id, the block's name and line — enough to open the document
+      // at the block without a search. A receiver holding only a sentence is holding a
+      // notification it cannot act on. Absent on a plain send, so `exists` still answers
+      // "is this a block firing?".
+      ...(payload.docKind ? { docKind: String(payload.docKind) } : {}),
+      ...(payload.docId ? { docId: String(payload.docId) } : {}),
+      ...(payload.block ? { block: String(payload.block) } : {}),
+      ...(payload.line ? { line: Number(payload.line) } : {}),
     },
   };
 }

@@ -49,7 +49,11 @@ So `document.updated` is delivered **twice over, on purpose**:
 - **`deliverToMembers`** (`electron/agents/sessions.cjs`) runs off `emitAmbient` and pushes a turn
   into every session whose `projectCode` appears in the event's `members`. Nothing is armed, nothing
   is carried, and no agent can opt out by not having a hook — the `::members` line in the document
-  IS the subscription.
+  IS the subscription. **The push only happens at an idle session** — a message handed to the CLI
+  mid-turn lands in the CLI's own queue (the human's) and rides his next message instead of waking
+  anybody. A busy session's delivery is HELD (`s.pendingDeliveries`, merged per document while it
+  waits, receipted `held: true`) and flushed at the RFC-012 settled boundary, where the push starts
+  its own turn. `tests/wake.js` pins it.
 - **The hook system** then fans the same event out as usual, for anything that wants to do something
   EXTRA when a document moves.
 

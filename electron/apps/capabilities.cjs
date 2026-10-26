@@ -27,6 +27,12 @@ const GRANTS = {
   // aloud has no business with the microphone.
   voice: { voice: "*" },
   terminal: { terminal: "*" },
+  // The nudge's settings — read and write the knobs the harness consults on every idle tick. Its
+  // own word in the table because the lane that built the door forgot this line, and the gate
+  // (correctly) dropped the namespace for everyone: the cog rendered "no nudge door yet" against a
+  // shell that HAD the door. A capability missing from this table is absent, not denied — which is
+  // exactly why forgetting it is silent.
+  nudge: { nudge: "*" },
   projects: { projects: "*" },
   auth: { auth: "*" },
   agents: { agent: "*" },

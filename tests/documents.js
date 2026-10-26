@@ -32,7 +32,7 @@ ok("the host registers documents:send-update");
 
 {
   emitted.length = 0;
-  const r = send(null, { path: "RFCs/RFC-071.md", project: "systemview-test", members: ["buapi", "systemlynx"], by: "you", summary: "two threads answered", threads: 2 });
+  const r = await send(null, { path: "RFCs/RFC-071.md", project: "systemview-test", members: ["buapi", "systemlynx"], by: "you", summary: "two threads answered", threads: 2 });
   assert.strictEqual(r.ok, true);
   const e = emitted[0];
   assert.strictEqual(e.kind, "document.updated");
@@ -56,11 +56,11 @@ ok("the host registers documents:send-update");
 
 {
   emitted.length = 0;
-  const r = send(null, { path: "x.md", members: [] });
+  const r = await send(null, { path: "x.md", members: [] });
   assert.strictEqual(r.ok, false);
   assert.match(r.error, /no members/i);
   assert.strictEqual(emitted.length, 0, "nothing is announced when nobody would hear it");
-  const r2 = send(null, { members: ["buapi"] });
+  const r2 = await send(null, { members: ["buapi"] });
   assert.strictEqual(r2.ok, false);
   assert.match(r2.error, /path/i);
   ok("a send with no members, or no document, refuses and announces nothing");
@@ -194,45 +194,45 @@ ok("the host registers documents:send-update");
 
   const plainDoc = write("plan.md", "::members{who=buapi}\n\nnot an arc\n");
 
-  assert.strictEqual(arcIn(arcDoc), "ARC-001");
-  assert.strictEqual(arcIn(plainDoc), "");
+  assert.strictEqual(await arcIn(arcDoc), "ARC-001");
+  assert.strictEqual(await arcIn(plainDoc), "");
   ok("the arc id is read from the document's own ::arc line, and absent when there is none");
 
-  const a = buildUpdate({ path: "RFCs/arcs/ARC-001-a-thing.md", project: "systemview-test", summary: "O1 done" }, arcDoc);
+  const a = await buildUpdate({ path: "RFCs/arcs/ARC-001-a-thing.md", project: "systemview-test", summary: "O1 done" }, arcDoc);
   assert.strictEqual(a.ok, true);
   assert.strictEqual(a.event.arc, "ARC-001");
   ok("an update to an arc document carries `arc` so a hook can aim at one arc");
 
-  const b = buildUpdate({ path: "plan.md", project: "systemview-test", summary: "moved" }, plainDoc);
+  const b = await buildUpdate({ path: "plan.md", project: "systemview-test", summary: "moved" }, plainDoc);
   assert.strictEqual(b.ok, true);
   assert.ok(!("arc" in b.event), "a non-arc document must not carry an empty arc field");
   ok("a document that is not an arc carries NO arc field, so `exists` is a usable question");
 
   // MEMBERSHIP COMES FROM THE DOCUMENT. An agent names the file and a summary; it cannot invent a
   // recipient, because the only source is the `::members` line the human edits.
-  assert.deepStrictEqual(membersIn(arcDoc), ["systemview-test", "buapi"]);
+  assert.deepStrictEqual(await membersIn(arcDoc), ["systemview-test", "buapi"]);
   assert.strictEqual(a.event.members, "|systemview-test|buapi|");
   ok("members are read from the file and still go out pipe-wrapped, so `contains: \"|buapi|\"` is exact");
 
   // The window keeps passing its own, because it also holds the `sent=` hashes mid-edit.
-  const c = buildUpdate(
+  const c = await buildUpdate(
     { path: "x.md", project: "p", members: ["only-this-one"], summary: "s" }, arcDoc);
   assert.strictEqual(c.event.members, "|only-this-one|");
   ok("a caller that supplies members wins — the window is mid-edit and knows more than the file");
 
-  const d = buildUpdate({ path: "nope.md", project: "p", summary: "s" }, pathm.join(tmp, "nope.md"));
+  const d = await buildUpdate({ path: "nope.md", project: "p", summary: "s" }, pathm.join(tmp, "nope.md"));
   assert.strictEqual(d.ok, false);
   assert.match(d.error, /no members/);
   ok("a document with no members REFUSES the send rather than announcing to nobody");
 
-  const e = buildUpdate({ summary: "s" }, arcDoc);
+  const e = await buildUpdate({ summary: "s" }, arcDoc);
   assert.strictEqual(e.ok, false);
   assert.match(e.error, /no document path/);
   ok("no path is a refusal, not an event with an empty one");
 
   // A summary is what the member actually receives before they open anything, so its bound is part
   // of the contract rather than a detail of whoever happened to call.
-  const long = buildUpdate({ path: "x.md", project: "p", summary: "z".repeat(900) }, arcDoc);
+  const long = await buildUpdate({ path: "x.md", project: "p", summary: "z".repeat(900) }, arcDoc);
   assert.strictEqual(long.event.summary.length, 400);
   ok("a runaway summary is cut at 400 in the builder, not at the caller");
 
