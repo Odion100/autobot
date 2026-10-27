@@ -39,7 +39,9 @@ const DEFAULTS = Object.freeze({
   idleMin: 20,
   // Between nudges FOR THE SAME RUN. The cooldown he asked for by name.
   cooldownMin: 30,
-  // Then it stops. A run waiting on a human would otherwise be nudged until the heat death.
+  // THE CYCLE LENGTH, not a stopping point — the name is older than the rule. Reaching it is the
+  // cycle's FINAL NOTICE: the position wraps and the nudging continues until the run closes or is
+  // declared abandoned with its account attached (cycleOf, excusedOf). 0 turns the feature off.
   giveUpAfter: 3,
   // Never nudge a session fuller than this. A nudge at 95% spends the context the agent needs to
   // finish the thing it is being nudged about, which makes the nudge actively harmful.

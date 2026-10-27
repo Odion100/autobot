@@ -93,7 +93,20 @@ try {
   console.log("\nthe tool");
   const tools = W.toolsFor(() => {}, () => [], null, () => "", () => ({ id, source: "skill:test-only" }));
   t("attach is one of the worklist tools", W.TOOL_NAMES.includes("mcp__worklist__attach"));
-  t("there are four tools now, not three", tools.length === 4);
+  // BY NAME, NOT BY COUNT. This read `tools.length === 4` and went red the day `status` was added —
+  // a true failure about nothing, while the thing worth asserting (every door is actually served)
+  // was never asserted at all. A count tells you the number changed; a name tells you which door
+  // went missing, which is the only one of the two anybody can act on.
+  // `TOOL_NAMES` carries the MCP-prefixed names the harness registers; a served tool carries the
+  // bare verb. Comparing the two lists directly is how this assertion would pass for the wrong
+  // reason — so the prefix comes off first, and then the two must agree exactly.
+  const served = tools.map((x) => x.name);
+  const declared = W.TOOL_NAMES.map((n) => n.replace(/^mcp__worklist__/, ""));
+  t(
+    "every named worklist tool is actually served",
+    declared.every((n) => served.includes(n)) && served.length === declared.length,
+  );
+  t("and status is one of them", served.includes("status"));
 } finally {
   cleanup();
 }

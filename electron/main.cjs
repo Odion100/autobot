@@ -624,6 +624,23 @@ app.whenReady().then(async () => {
   require("./apps/jobs-host.cjs").register(); // RFC-005 §10 — the job API an app reads jobs through
   supervisor.boot(); // hosted agent sessions from ~/.autobot/hosted.json (none by default)
 
+  // THE SHELL AS A SERVICE — in THIS process, because that is the whole point: a separate node has
+  // no webContents, which is why `systemview/service.js` (ping/echo/info) could never answer a
+  // question about the window. Read-only doors onto the live page, served as SystemLynx methods AND
+  // as MCP tools from the same modules — so a claim about what the window renders can finally carry
+  // a living spec instead of being defended one altitude down in jsdom.
+  //
+  // Boots AFTER the registrations above and does not block any of them: if the hub or systemlynx is
+  // absent it says so once and the shell carries on. A door that will not open beats a shell that
+  // will not start.
+  require("./agents/shellService.cjs")({
+    tabsNow: () => state().tabs,
+    webContentsFor: (appId) => {
+      const t = tabs.find((x) => x.appId === appId);
+      return t && t.view && !t.view.webContents.isDestroyed() ? t.view.webContents : null;
+    },
+  });
+
   // Every start lands on the landing page — his call ("for now, I need to be in
   // this space"). Apps that adopt or autostart load in the BACKGROUND; the home
   // tab keeps the front until he goes somewhere.
