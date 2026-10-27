@@ -21,7 +21,14 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { createSdkMcpServer, tool } = require("@anthropic-ai/claude-agent-sdk");
+// THE SDK IS LOADED WHERE IT IS USED, NOT AT MODULE SCOPE — because this module has two readers
+// and only one of them wants an MCP server. `@anthropic-ai/claude-agent-sdk` is ESM-only
+// (`type: module`, no `require` export), so a top-level require makes the WHOLE module unloadable
+// to any CommonJS caller on a node older than 22.12 — and the hub runs v20.11.1 while the shell and
+// the terminal run 22+. Measured 2026-10-27: a saved spec in the hub tried to read a run record and
+// got `ERR_REQUIRE_ESM` for the SDK, a dependency it never wanted; the run-record half of the
+// nudge's law could not be defended from the one process that hosts the specs. Requiring inside
+// `toolsFor`/`serverFor` keeps the data functions reachable from anywhere.
 const { z } = require("zod");
 
 const SERVER = "worklist";
@@ -775,6 +782,7 @@ function all() {
 // — `markBroughtIn` shipped defined, exported and tested with no door on it at all, called by
 // nothing but its own test, so zero receipts ever existed. A door is only proven by being opened.
 function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null, onTouch = null) {
+  const { tool } = require("@anthropic-ai/claude-agent-sdk");
   return [
       tool(
         TOOL,
@@ -991,6 +999,7 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
 }
 
 function serverFor(...wiring) {
+  const { createSdkMcpServer } = require("@anthropic-ai/claude-agent-sdk");
   return createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: toolsFor(...wiring) });
 }
 
