@@ -46,7 +46,13 @@
     "smoke:documents": "node tests/documents.js",
     "smoke:wake": "node tests/wake.js",
     "smoke:voice": "node tests/voice.js",
-    "smoke:attachments": "node tests/attachments.js"
+    "smoke:attachments": "node tests/attachments.js",
+    "smoke:markdown-state": "node tests/markdown-state.js",
+    "smoke:markdown-parse": "node tests/markdown-parse.js",
+    "smoke:markdown-fires": "node tests/markdown-fires.js",
+    "smoke:markdown-write": "node tests/markdown-write.js",
+    "smoke:markdown-announce": "node tests/markdown-announce.js",
+    "smoke:registry": "node tests/registry.js"
   },
   "repository": {
     "type": "git",

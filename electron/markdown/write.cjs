@@ -54,6 +54,13 @@ function parseBag(inner) {
 const bagToString = (pairs) => pairs.map((p) => (p.key ? `${p.key}=${p.val}` : p.val)).join(" ");
 
 // One attribute on one line — the ported body.
+// The three characters the attribute grammar cannot round-trip, and what they become. `"` would
+// terminate the value early; `{`/`}` would confuse the end-of-line bag matcher.
+const UNWRITABLE = /["{}]/;
+const SWAP = { '"': "'", "{": "(", "}": ")" };
+const sanitizeValue = (v) => String(v).replace(/["{}]/g, (c) => SWAP[c]);
+const wouldSanitize = (v) => v != null && UNWRITABLE.test(String(v));
+
 function setOne(source, line, key, value) {
   const lines = String(source).split("\n");
   const i = line - 1;
@@ -75,7 +82,22 @@ function setOne(source, line, key, value) {
     lines[i] = next;
     return lines.join("\n");
   }
-  const encoded = value === "" || /[\s"']/.test(String(value)) ? JSON.stringify(String(value)) : String(value);
+  // THE GRAMMAR HAS NO ESCAPE, so a character the bag cannot represent must never reach the line.
+  // Measured 2026-10-25 (systemview-test, marking RFC-076): a `"` inside a note= value was escaped
+  // by JSON.stringify as \", the grammar read the backslash as data and the quote as the
+  // terminator, and the WHOLE ::claim BLOCK stopped parsing — 22 of 41 claims silently deleted
+  // while every write reported success. Braces are the same class: a `{` in a value defeats the
+  // end-of-line bag matcher above, so the NEXT write appends a second bag instead of extending the
+  // first. Both reproduce in one line and neither is visible in the receipt.
+  //
+  // SUBSTITUTE RATHER THAN REFUSE. A note is required on a claim mark and notes legitimately quote
+  // people, so refusing would block honest writes and push callers back to hand-editing — which is
+  // what the one-writer rule exists to prevent. The swap costs a character's shape; losing the
+  // block costs the claim. Never silent: writeAttr reports which keys were touched.
+  const encoded = (() => {
+    const safe = sanitizeValue(value);
+    return safe === "" || /[\s"']/.test(safe) ? JSON.stringify(safe) : safe;
+  })();
   let next;
   if (!braces) {
     next = `${row}{${key}=${encoded}}`;
@@ -110,7 +132,12 @@ function writeAttr(absPath, line, pairs) {
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
-  return { ok: true, changed: true };
+  // Say what was altered. A caller that quoted somebody deserves to know its quote became an
+  // apostrophe — silence here would just be a quieter version of the bug this closes.
+  const sanitized = Object.entries(pairs || {})
+    .filter(([, v]) => wouldSanitize(v))
+    .map(([k]) => k);
+  return { ok: true, changed: true, ...(sanitized.length ? { sanitized } : {}) };
 }
 
-module.exports = { setAttr, writeAttr };
+module.exports = { setAttr, writeAttr, sanitizeValue };

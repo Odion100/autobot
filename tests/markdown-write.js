@@ -79,4 +79,60 @@ console.log("\nwriteAttr — the file door");
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// A CHARACTER THE GRAMMAR CANNOT READ BACK MUST NEVER REACH THE LINE. Measured 2026-10-25: a `"`
+// inside a note= value was escaped by JSON.stringify as \", the grammar read the backslash as data
+// and the quote as the terminator, and the whole ::claim BLOCK stopped parsing — 22 of 41 claims
+// silently deleted while every write answered ok. Braces are the same class one step later: a `{`
+// in a value defeats the end-of-line bag matcher, so the NEXT write appends a second bag.
+//
+// Pinned by PARSING WHAT WAS WRITTEN, never by matching the output string: the bug was invisible in
+// the line (it looked plausible) and only a parse could see the block was gone.
+{
+  const { parse } = require("../electron/markdown/parse.cjs");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mdw-"));
+  const file = path.join(tmp, "claims.md");
+  const base = "::claim[Something is true]{id=c1 state=unmet}";
+
+  const survives = async (note, second) => {
+    fs.writeFileSync(file, base + "\n");
+    const r = writeAttr(file, 1, { note });
+    if (second) writeAttr(file, 1, { told: "autobot" });
+    const out = await parse(fs.readFileSync(file, "utf8"));
+    const all = (out && out.blocks) || (Array.isArray(out) ? out : []);
+    const claims = all.filter((b) => b.name === "claim");
+    return { claims, r, line: fs.readFileSync(file, "utf8") };
+  };
+
+  await (async () => {
+    const control = await survives("it works fine");
+    assert.strictEqual(control.claims.length, 1, "the control parses");
+    assert.ok(!control.r.sanitized, "a clean value reports no sanitizing");
+    ok("a plain note round-trips and reports nothing altered");
+
+    const quoted = await survives('he said "yes" to it');
+    assert.strictEqual(quoted.claims.length, 1, "a quote must not delete the block");
+    assert.ok(!/\\"/.test(quoted.line), "no backslash-escaped quote reaches the line");
+    assert.deepStrictEqual(quoted.r.sanitized, ["note"], "and the caller is TOLD its value was altered");
+    ok("a double quote in a note keeps the claim alive, and the swap is reported rather than silent");
+
+    const braced = await survives("the bag {a:1} inside", true);
+    assert.strictEqual(braced.claims.length, 1, "braces must not split the bag");
+    assert.strictEqual((braced.line.match(/\}\{/g) || []).length, 0, "a second write extends the bag, never appends one");
+    ok("a brace in a value no longer makes the next write append a second attribute bag");
+
+    for (const [what, note] of [
+      ["pipes and equals", "a|b c=d"],
+      ["an arrow", "then → e"],
+      ["backticks and brackets", "call `fn()` on [x]"],
+      ["both at once", 'he said "use {this}" loudly'],
+    ]) {
+      const r = await survives(note, true);
+      assert.strictEqual(r.claims.length, 1, `${what} must round-trip`);
+    }
+    ok("pipes, equals, arrows, backticks and brackets all still round-trip untouched");
+  })();
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log(`\n${n} claims held — the platform's write`);

@@ -216,7 +216,26 @@ async function call(service, namespace, args, { headers = {}, who = null } = {})
   const url = `${rec.url.replace(/\/+$/, "")}/${moduleName}/${fn}`;
   // SystemLynx methods are VARIADIC and `req.arguments` is an ARRAY — a caller that sends one
   // object as the whole shape mislabels every multi-arg method. Accept either, send an array.
-  const list = Array.isArray(args) ? args : args === undefined ? [] : [args];
+  //
+  // AND A JSON STRING IS THE SAME OBJECT, because that is how it actually arrives. The tool's
+  // schema is `z.any()`, and a model passing `{"selector": ".md-arc"}` often has it serialised to
+  // a STRING on the way in — which then wraps as `["{\"selector\":…}"]`, so the method destructures
+  // its parameters off a string and every one of them is undefined. The service's own guard then
+  // answers `selector is required` to a caller who sent a selector, which is the most misleading
+  // error shape there is: it blames the caller for the tier's mistake. Measured 2026-10-28 against
+  // `Window.read` — identical call, 200 and a result over raw HTTP, "selector is required" through
+  // the tool.
+  const parsed =
+    typeof args === "string" && /^\s*[[{]/.test(args)
+      ? (() => {
+          try {
+            return JSON.parse(args);
+          } catch {
+            return args; // not JSON after all — pass the string through as the argument it is
+          }
+        })()
+      : args;
+  const list = Array.isArray(parsed) ? parsed : parsed === undefined ? [] : [parsed];
   const jar = jarFor(who, service);
   const cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
   // THE JAR IS THE IDENTITY, NOT A DEFAULT (autobot-c5's find): caller headers merged last let an

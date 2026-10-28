@@ -34,6 +34,29 @@ silent total denial because `e.returnValue` sends on first assignment; an app sh
 dark because a theme object was compared to a string. Neither was visible in review and both were
 one smoke away.
 
+### A green suite cannot catch a wrong PREMISE
+
+A unit test can only test the assumption you built on, so a suite is silent about the one failure a
+door like this exists for. 2026-10-22: two chat features shipped depending on `[data-row]` being on
+every chat row — the attribute had been read off the spokebar's jump handler and assumed universal,
+and it was on HIS messages and command rows only, never on an agent's. Every test passed, because
+every test was written against the same wrong premise. **Measure the live DOM before building on a
+selector, an attribute or a class you inferred from one call site.**
+
+### And the surface can lie about WHICH CODE it is running
+
+Worse than "reasoning cannot replace looking": what you are looking at may not be running the code
+you just wrote. A long-running shell keeps the old `electron/**.cjs` in node's require cache, so an
+edit to the host is invisible to the live window — and your own writes make it worse, because they
+re-derive through the stale module. Measured 2026-10-28: marking claims drove a document's registry
+row BACKWARDS to the exact defect the change had just fixed, while a fresh derive off disk gave the
+right answer.
+
+So reading `~/.autobot/documents.json` is **not** a check on `electron/` code you just changed — it
+is a check on whatever the shell loaded at boot. Derive fresh in a new node process and compare, say
+plainly that nothing is live until the shell restarts, and never cite a live row as evidence that a
+host-side change works.
+
 ## Asking the live window — the shell serves a door for it
 
 The section above says reasoning cannot replace looking. The shell makes looking **callable**: it
@@ -53,6 +76,45 @@ AutobotShell.Docs.search({ q, corpus, limit })         # the indexed corpora, fo
 Reachable three ways, and that is the point of it being a service rather than a tool: `probe` for a
 look right now, a **saved spec** so a claim about the window can carry a living defence, and an HTTP
 MCP endpoint (`/autobotshell/api/shell-mcp`) for an agent that is not this session.
+
+### Opening it — the three doors, concretely
+
+**1 · `mcp__systemview__probe`** is the cheapest look and needs nothing set up. Reach for it first.
+
+**2 · The SystemLynx tier**, when you want the whole surface rather than one probe:
+
+```
+mcp__systemlynx__services                       # what you may attach
+mcp__systemlynx__loadService({name:"AutobotShell"})
+mcp__systemlynx__call({service:"AutobotShell", namespace:"Window.read",
+                       input:{selector:".md-arc", app:"systemview"}})
+```
+
+**`services` answers "No services are whitelisted" until the service is in
+`~/.autobot/services.json`** — and that sentence is the one real trap on this page, because it
+reads as *the capability does not exist* when the shell is serving happily on :6110. The whitelist
+is the entire security model and it is a file so it is trivial to edit (`[{ "name": "...", "url":
+"..." }]`); nothing in the codebase writes it, so an empty one stays empty forever. The shell door's
+entry:
+
+```json
+[{ "name": "AutobotShell", "url": "http://localhost:6110/autobotshell/api" }]
+```
+
+**3 · Raw HTTP**, which is also how you isolate a tier problem from a service problem. SystemLynx
+methods are variadic and the body is `__arguments`, an ARRAY — a single object-shaped method takes
+an array of one:
+
+```bash
+curl -s -X POST http://localhost:6110/autobotshell/api/Window/read \
+  -H 'Content-Type: application/json' \
+  -d '{"__arguments":[{"selector":".md-arc","app":"systemview"}]}'
+```
+
+**`app`, not `appId`** — and the method's own guard answers `selector is required` for ANY shape it
+cannot destructure, including a correct selector arriving inside the wrong wrapper. So a wrong-shape
+call blames you for the thing you got right. If raw HTTP answers and the tool does not, the fault is
+in the tier and not in your arguments.
 
 **`bundle()` is the one to reach for first when a fresh build "did not land".** The window holds its
 own swap until it costs the human nothing, and holding is CORRECT — it reads identical to a stale

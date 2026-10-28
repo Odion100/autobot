@@ -1149,22 +1149,41 @@ async function announceDocument(absPath, opts = {}) {
   if (!row) return { ok: true, registered: false, fired: 0 };
   const { project, rel } = documents.locate(abs);
   let fired = 0;
+  // TWO PASSES, AND THE SPLIT IS THE POINT. One parse can find several newly-marked blocks in one
+  // document — 41 marks in a night, 13 rows re-derived by one sweep — and each used to arrive as
+  // its own wake. The merge in `deliverToMembers` already collapses sends that are still unread,
+  // but it could never see these: `await buildUpdate` sat INSIDE the delivery loop, so the session
+  // drained the pending message between fires and the merge correctly refused a consumed item.
+  //
+  // So the awaits are hoisted and delivery is left SYNCHRONOUS. Nothing new is invented — the
+  // existing merge now sees consecutive fires for one document with nothing yielding between, and
+  // folds them into a single wake naming all of them.
+  //
+  // Safe because `buildUpdate` reads the file only for `members` and `arc`: `members` is always
+  // supplied here (`f.pending`), and the `told=` stamps below touch claim lines, never the arc —
+  // so no build depends on a write from an earlier iteration.
+  const builts = [];
   for (const f of res.fires) {
-    const built = await buildUpdate(
-      {
-        path: rel,
-        project,
-        members: f.pending,
-        by: opts.by || "",
-        summary: f.summary,
-        ...(f.thread ? { thread: f.thread } : {}),
-        docKind: row.kind,
-        docId: row.id,
-        block: f.name,
-        line: f.line,
-      },
-      abs,
-    );
+    builts.push({
+      f,
+      built: await buildUpdate(
+        {
+          path: rel,
+          project,
+          members: f.pending,
+          by: opts.by || "",
+          summary: f.summary,
+          ...(f.thread ? { thread: f.thread } : {}),
+          docKind: row.kind,
+          docId: row.id,
+          block: f.name,
+          line: f.line,
+        },
+        abs,
+      ),
+    });
+  }
+  for (const { f, built } of builts) {
     if (!built.ok) continue;
     const e = emitAmbient(built.event);
     const delivered = Array.isArray(e.delivered) ? e.delivered : [];

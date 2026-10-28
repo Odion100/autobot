@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { parse } = require("./parse.cjs");
-const { registrationOf, deriveState } = require("./blocks.cjs");
+const { registrationOf, deriveState, deriveArc, arcOfAddress } = require("./blocks.cjs");
 
 const FILE = () => process.env.AUTOBOT_DOCUMENTS || path.join(os.homedir(), ".autobot", "documents.json");
 const PROJECTS = () => process.env.AUTOBOT_PROJECTS || path.join(os.homedir(), ".autobot", "projects.json");
@@ -78,15 +78,27 @@ function locate(absPath) {
 function upsert(row = {}) {
   const dropped = Object.keys(row).filter((k) => !FIELDS.includes(k));
   const clean = {};
-  for (const k of FIELDS) if (row[k] != null && row[k] !== "") clean[k] = row[k];
+  // `undefined` means "not saying"; explicit `null` means "this is GONE". The distinction exists
+  // because a merge cannot otherwise express a removal: a field absent from the new registration
+  // was kept by the spread below, so an attribute DELETED from a document never left its row.
+  // Detaching a plan from an objective was therefore invisible — the file lost its `arc=`, the row
+  // kept it, and the arc went on counting that objective as planned forever. The row has to be
+  // able to say a relation ended, and only the parse knows that it did.
+  const gone = [];
+  for (const k of FIELDS) {
+    if (row[k] === null) gone.push(k);
+    else if (row[k] != null && row[k] !== "") clean[k] = row[k];
+  }
   if (!clean.id || !clean.kind || !clean.path) {
     return { ok: false, error: "a registration needs an id, a kind and a path", dropped };
   }
   clean.at = Date.now();
   const rows = read();
   const i = rows.findIndex((r) => r.id === clean.id);
-  if (i >= 0) rows[i] = { ...rows[i], ...clean };
-  else rows.push(clean);
+  if (i >= 0) {
+    rows[i] = { ...rows[i], ...clean };
+    gone.forEach((k) => delete rows[i][k]);
+  } else rows.push(clean);
   write(rows);
   return { ok: true, row: i >= 0 ? rows[i] : clean, updated: i >= 0, dropped };
 }
@@ -101,17 +113,83 @@ async function register(absPath, source) {
 
 /** The same registration off a parse somebody else already did — the fire scan's door (one parse). */
 function registerParsed(absPath, reg, blocks, text) {
-  if (!reg) return { ok: true, registered: false };
+  if (!reg) {
+    // A DOCUMENT THAT STOPS SAYING WHAT IT IS STOPS BEING IT. The leaf is the identity (RFC-073),
+    // so a file whose leaf was REMOVED is not a registered document any more — and before this,
+    // its row lived on forever, pointing at a file that no longer claims to be anything: the
+    // drawer listed it, the trail drew for it, and no parse would ever correct either. Removing
+    // the leaf is the honest teardown (his mock-document design needs exactly that), and the row
+    // has to follow the fact.
+    const standing = byPath(absPath);
+    if (standing) {
+      remove(standing.id);
+      return { ok: true, registered: false, removed: standing.id };
+    }
+    return { ok: true, registered: false };
+  }
   const { project, rel } = locate(absPath);
-  const r = upsert({ id: reg.id, kind: reg.kind, path: rel, project, arc: reg.arc });
+  // WHAT IT SERVED BEFORE THIS PARSE, read before the row is overwritten — because a DETACH has to
+  // move the arc it just left, and after the upsert there is nothing left to say which arc that
+  // was. Without this, removing `arc=` from a plan leaves the old arc counting that objective as
+  // planned until something else happens to re-parse the arc's own file.
+  const served = String(((get(reg.id) || {}).arc) || "").trim();
+  // `arc: reg.arc || null` — NULL, not undefined, when the leaf no longer carries one. The parse is
+  // the only thing that knows a relation was removed, so it has to be able to say so.
+  const r = upsert({ id: reg.id, kind: reg.kind, path: rel, project, arc: reg.arc || null });
   if (!r.ok) return r;
   // RFC-073 §1.4 — ONE FILE, TWO KINDS OF FIELD, and the boundary is the field: identity above is
   // written only by registration (upsert's whitelist drops anything else, `state` included); this
   // `state` is derived ONLY here, by the parse that just happened, and says when (`parsed`). It may
   // lag, it may be wiped (`state: null`), and nothing reads it as truth — only as what the last
   // parse saw.
-  const row = setState(reg.id, deriveState(blocks, reg.kind, text)) || r.row;
+  const state = deriveState(blocks, reg.kind, text);
+  // RFC-076 §4.4 slice 4 — `planned` NEEDS THE REGISTRY, and `deriveState` sees one document. So
+  // the one fact that reaches outside this file is folded in HERE, where both the blocks and the
+  // rows are in hand. No state changes because of it (that is slice 5); it only lets a surface say
+  // *"O3 has no plan attached"* without a second read.
+  if (reg.kind === "arc" && state && state.objectives) {
+    state.objectives = { ...state.objectives, ...deriveArc(blocks, reg.id, read()) };
+  }
+  const row = setState(reg.id, state) || r.row;
+  // AND A PLAN'S OWN PARSE MOVES ITS ARC (§4.4 point 3). Attaching or detaching a plan changes the
+  // arc's `planned` while the arc's FILE did not change, so nothing else would ever re-read it —
+  // the arc would sit there claiming an objective is unplanned hours after a plan landed on it.
+  // One file, only when a plan carrying an objective address is saved, and never recursive: an
+  // arc's own registration does not come back through here.
+  // BOTH ENDS OF A MOVE: the arc it now serves, and the one it stopped serving. Attaching and
+  // detaching are the same event seen from two arcs, and a plan moved from O1 to another arc's O2
+  // has to leave the first one as surely as it joins the second.
+  if (reg.kind !== "arc") {
+    new Set([String(reg.arc || "").trim(), served].filter(Boolean)).forEach(reparseArcOf);
+  }
   return { ok: true, registered: true, row, updated: r.updated };
+}
+
+/**
+ * Re-derive the arc an address belongs to, by re-reading its file.
+ *
+ * It re-READS rather than trusting anything cached, because `planned` is counted against the arc's
+ * own `::objective` blocks and those live only in that file. Silent on every failure: a missing or
+ * unreadable arc is not a reason to fail the plan's registration, and a stale `planned` is a
+ * smaller wrong than a document that would not register.
+ */
+function reparseArcOf(address) {
+  const arcId = arcOfAddress(address);
+  if (!arcId) return;
+  const arcRow = get(arcId);
+  if (!arcRow || arcRow.kind !== "arc") return;
+  const abs = absPathOf(arcRow);
+  if (!abs) return;
+  const text = readFile(abs);
+  if (text == null) return;
+  Promise.resolve(parse(text))
+    .then((blocks) => {
+      const st = deriveState(blocks, "arc", text);
+      if (st && st.objectives) st.objectives = { ...st.objectives, ...deriveArc(blocks, arcId, read()) };
+      setState(arcId, st);
+      return null;
+    })
+    .catch(() => null);
 }
 
 /** Where a row's body is on disk — the project root plus the pointer, or the pointer when absolute. */

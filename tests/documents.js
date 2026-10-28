@@ -239,4 +239,39 @@ ok("the host registers documents:send-update");
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// ONE PARSE, ONE WAKE. A single parse can find several newly-marked blocks in one document, and
+// each fire used to arrive as its own interruption — the sweep that re-derives a night's marks was
+// the worst case. The merge in deliverToMembers collapses sends that are still unread, but it can
+// only see them if NOTHING YIELDS between two deliveries: an `await` inside the delivery loop lets
+// the session drain the pending message, and the merge then correctly refuses a consumed item.
+//
+// So this pins the SHAPE, not a behaviour — the builds are awaited in their own pass and delivery
+// is synchronous. It is pinned at the source because the failure is invisible in a diff: moving
+// one `await` back inside the second loop restores the fan-out and breaks no test that watches
+// only outputs.
+{
+  const fs = require("fs");
+  const src = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
+  const fn = /async function announceDocument[\s\S]*?\n}/.exec(src);
+  assert.ok(fn, "announceDocument is still there to pin");
+
+  assert.ok(/const builts = \[\];/.test(fn[0]), "the builds are collected before anything is delivered");
+  ok("announceDocument builds every update first, in its own pass");
+
+  const delivery = /for \(const \{ f, built \} of builts\) \{[\s\S]*?\n  \}/.exec(fn[0]);
+  assert.ok(delivery, "the delivery loop is identifiable");
+  assert.ok(!/\bawait\b/.test(delivery[0]),
+    "the delivery loop must not await — an await here lets the queue drain between fires and the merge can never see them");
+  ok("delivery is synchronous, so consecutive fires for one document fold into a single wake");
+
+  // The stamp still depends on who was actually reached, so a merged delivery must still report
+  // itself as a delivery — otherwise told= never lands and the sweep re-delivers forever.
+  const deliver = /function deliverToMembers[\s\S]*?\n}/.exec(src);
+  assert.ok(deliver && /reached\.push\(s\.projectCode\)/.test(deliver[0]),
+    "a delivery reports who it reached");
+  const merged = /mergePending\([\s\S]*?reached\.push\(s\.projectCode\)/.test(deliver[0]);
+  assert.ok(merged, "the MERGED path reports delivery too — or told= never stamps and it re-sends forever");
+  ok("a merged delivery still counts as delivered, so told= stamps and the sweep stops owing it");
+}
+
 console.log(`\n  ${n} claims, all green — a document update is an event\n`);
