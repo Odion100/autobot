@@ -77,6 +77,11 @@ const EVENTS = [
   { name: "document.updated", what: "a document someone is a member of was updated — he pressed send, or it auto-updates. `members` is PIPE-WRAPPED (`|buapi|systemlynx|`) so a hook matches one exactly with `contains: \"|buapi|\"` — a bare `contains: \"bu\"` would also match `buapi`, which is how an agent ends up woken for somebody else's document. `arc` is present ONLY when the document carries an `::arc{id=…}` block, so `arc: {exists: true}` is how a hook asks \"is this an arc update?\" and `arc: \"ARC-001\"` aims at one arc — the id travels because the kebab title after it gets renamed and a path-matching hook would break silently on that", fields: ["path", "project", "members", "by", "summary", "threads", "thread", "arc"] },
   { name: "page.navigated", what: "a tab went somewhere — fires on every tab, watched or not", fields: ["url", "title", "from", "tabId"] },
   { name: "page.value-changed", what: "a value someone asked us to watch is no longer what it was", fields: ["watch", "label", "from", "to", "url", "selector"] },
+  // Ambient like page.* — the HOST samples its own processes (a page that could report its own
+  // performance could also lie about it), and a sustained burn becomes a moment instead of a
+  // machine that mysteriously crawls. Born from 2026-10-28: one CSS animation held the GPU at
+  // ~110% for an evening, through two reboots, and nothing said so.
+  { name: "perf.hot", what: "a shell process has been burning CPU — hot for ~45s of consecutive samples, announced once per process per cooldown; `pct` is of one core, `type` is gpu-process | renderer | utility | browser", fields: ["pct", "type", "pid", "sustainedSec"] },
   // NOT LISTED: `hook.fired`. It is emitted (the receipt every hook writes to the feed) but it is
   // deliberately not hookable — a hook on it would deliver a pointer, which writes a receipt,
   // which fires the hook, at input-queue speed. hooks.fire() refuses the kind; leaving it out of

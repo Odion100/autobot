@@ -526,6 +526,10 @@ ipcMain.handle("setup:remove-project", (_e, code) => {
 });
 
 app.whenReady().then(async () => {
+  // THE SHELL WATCHES ITS OWN BURNING (perf.cjs) — a process pinned hot for ~45s becomes a
+  // `perf.hot` ambient event, so "the machine feels slow" has a detector instead of a victim.
+  require("./agents/perf.cjs").start({ app, sessions });
+
   win = new BrowserWindow({
     width: 1360,
     height: 860,
