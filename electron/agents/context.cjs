@@ -835,8 +835,9 @@ function toolsFor(identity = {}) {
         "Search everything this system knows — NOTES (conventions, corrections, project facts, " +
           "lessons someone learned) and DOCUMENTATION (the embedded reference, chunked by heading) " +
           "— before guessing or re-deriving. Both come back in one answer, labelled, so you never " +
-          "have to know which half held it. An empty answer means nothing recorded matches: " +
-          "proceed, and remember() what you learn.",
+          "have to know which half held it. An empty answer means nothing matched THAT PHRASING " +
+          "— ask again from another angle before concluding it is unrecorded, then proceed and " +
+          "remember() what you learn.",
         {
           question: z.string().describe("what you want to know, in plain language"),
           scope: z.string().optional().describe("narrow to one note scope; omit to search all"),

@@ -34,6 +34,52 @@ silent total denial because `e.returnValue` sends on first assignment; an app sh
 dark because a theme object was compared to a string. Neither was visible in review and both were
 one smoke away.
 
+## Asking the live window — the shell serves a door for it
+
+The section above says reasoning cannot replace looking. The shell makes looking **callable**: it
+hosts a SystemLynx service in its own process (`electron/agents/shellService.cjs`), so its methods
+close over the live `webContents` rather than a test renderer. In-process is the whole point — a
+separate `node` has no window, which is why the older standalone service (ping/echo/info) could
+never answer a question about one.
+
+```
+AutobotShell.Window.tabs()                             # what this shell has open, honestly
+AutobotShell.Window.read({ selector, app, limit })     # the RENDERED dom: tag, class, text, hidden
+AutobotShell.Window.count({ selector, app })           # usually what an assertion wants
+AutobotShell.Window.bundle({ app })                    # running vs served, and whether a swap is HELD
+AutobotShell.Docs.search({ q, corpus, limit })         # the indexed corpora, for a retrieval check
+```
+
+Reachable three ways, and that is the point of it being a service rather than a tool: `probe` for a
+look right now, a **saved spec** so a claim about the window can carry a living defence, and an HTTP
+MCP endpoint (`/autobotshell/api/shell-mcp`) for an agent that is not this session.
+
+**`bundle()` is the one to reach for first when a fresh build "did not land".** The window holds its
+own swap until it costs the human nothing, and holding is CORRECT — it reads identical to a stale
+bundle, and that confusion once cost him his tabs six times in one session. `holding: true` is the
+hold working; it is not a reason to force anything.
+
+**Read-only, deliberately, and `executeJavaScript` is NOT exposed.** The door reads the page and
+never clicks, navigates or reloads it: the window is his instrument, and a door that could take it
+would not be a proof door. Publication is declared — a method is an MCP tool only with a schema
+*and* a name in `expose` — so the whitelist is the security boundary and it holds nothing general.
+
+### What this door cannot defend
+
+**A change-loop defence — and that is a limit on the DOOR, not a demotion of what it produces.**
+An assertion about rendered rows needs the document open, so it goes red whenever he is elsewhere:
+his navigation is not the world moving, and a spec that reports a finding because a tab is closed
+is reporting on him. The headless jest-adapter specs ride the loop; this answers *"is it true on
+the real page right now"*, which is the **confirming half** of a proof and is owed by default —
+`context("what does a proof owe besides the test chip")`. Two halves, two questions; this door
+answers one of them well and cannot answer the other at all.
+
+**So a spec hung on this door must not assert that the window is open.** `theWindowIsOpen` is
+precisely the precondition named above as disqualifying, and asserting it converts his navigation
+into a red. Assert what the page SAYS, guard on reachability, and report "not open" as a skip the
+reader can see rather than as a failure — otherwise the spec's red means nothing and the one thing
+a proof must never do is cry wolf on the change loop.
+
 ## The number-scope class of bug
 
 Four meter bugs shipped in one day, and they were the same defect in different clothes: **a number
