@@ -95,18 +95,31 @@ const firstLine = (src) =>
     .map((l) => l.trim())
     .filter(Boolean)[0] || "";
 
-/** The registration leaf among `blocks`, or null. The first one wins; a document is one thing. */
-function registrationOf(blocks) {
+/**
+ * EVERY registration leaf among `blocks`, in document order — a document may carry several
+ * identities, and each one registers its own row (his design, 2026-10-29: a spec fixture holds a
+ * spec leaf as its identity AND the mock leaf it exercises, pressable because the mock has a row).
+ * The old rule here — "the first one wins; a document is one thing" — was never a ruling: it was a
+ * brainstorm question of his, answered mid-work and mistakenly baked in as doctrine.
+ */
+function registrationsOf(blocks) {
+  const out = [];
   for (const b of blocks || []) {
     const def = REGISTRATION[b.name];
     if (!def || b.kind !== "leaf") continue;
     const id = String((b.attrs || {})[def.id] || "").trim();
     if (!id) continue;
-    const out = { kind: def.kind, id };
-    if (def.relation && b.attrs[def.relation]) out[def.relation] = String(b.attrs[def.relation]).trim();
-    return out;
+    const reg = { kind: def.kind, id };
+    if (def.relation && b.attrs[def.relation]) reg[def.relation] = String(b.attrs[def.relation]).trim();
+    out.push(reg);
   }
-  return null;
+  return out;
+}
+
+/** The PRIMARY identity — the first leaf: what the document is when one answer is needed (fires,
+ * audiences, teardown-by-identity). The further leaves register too; see registrationsOf. */
+function registrationOf(blocks) {
+  return registrationsOf(blocks)[0] || null;
 }
 
 /** True when a firing block carries its answer — the thing a subscriber would be told about. */
@@ -227,7 +240,13 @@ function deriveState(blocks, kind, source) {
   const waiting = verdicts.filter((v) => !v).length;
   const objectives = all.filter((b) => b.name === "objective");
   const objDone = objectives.filter((b) => String((b.attrs || {}).state || "").trim() === "done").length;
-  const leaf = all.find((b) => REGISTRATION[b.name] && b.kind === "leaf");
+  // THE LEAF OF THIS DERIVATION'S OWN KIND — a document can carry several leaves now, and a row's
+  // state must read its own: the spec row reads the report leaf's retain=, the mock RFC row reads
+  // the rfc leaf's settled=, out of one file. Falls back to the first leaf of any kind so a derive
+  // asked about a kind with no leaf still answers rather than throwing.
+  const leaf =
+    all.find((b) => REGISTRATION[b.name] && REGISTRATION[b.name].kind === kind && b.kind === "leaf") ||
+    all.find((b) => REGISTRATION[b.name] && b.kind === "leaf");
   const retired = !!(leaf && String((leaf.attrs || {}).retired || "").trim());
   // THE RETIREMENT CARRIES ITS REASON ONTO THE ROW (RFC-076 §4.2) — raw, ungrouped, unvalidated.
   //
@@ -308,6 +327,15 @@ function deriveState(blocks, kind, source) {
   if (kind === "report" && leaf) {
     const subtype = String((leaf.attrs || {}).as || "").trim();
     if (subtype) state.subtype = subtype;
+    // REQUIRED, BOTH OF THEM (RFC-076 §2 amendment, 2026-10-29): a report declares its subtype
+    // AND its ending — `retain=<window>` or `retain=permanent` — or the row SAYS what is missing.
+    // Surfaced, never refused: a registration that silently failed is a document the system
+    // denies exists, and a bare leaf lumped under the kind label is how six "reports" turned out
+    // to be one notice, one plan, one spec and three nobody could name.
+    const retain = String((leaf.attrs || {}).retain || "").trim();
+    if (retain) state.retain = retain;
+    const missing = [!subtype && "no subtype", !retain && "no retention"].filter(Boolean);
+    if (missing.length) state.invalid = missing.join(", ");
   }
   if (retired) state.retired = true;
   if (retiredAs) state.retiredAs = retiredAs;
@@ -425,6 +453,7 @@ module.exports = {
   LIFECYCLE,
   FIRING,
   registrationOf,
+  registrationsOf,
   hasFired,
   deriveState,
   firstLine,

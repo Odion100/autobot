@@ -478,5 +478,43 @@ console.log("\nthe leaf is the identity — remove it, and the row follows");
   reg.remove("RFC-901");
 }
 
+console.log("\na document may carry several leaves — each one is a row (his design, 2026-10-29)");
+{
+  // THE FIXTURE CASE: a spec-registered document holding the mock leaf it exercises. The spec leaf
+  // is the primary identity; the mock RFC leaf registers too, so its trail has a row to arm. Each
+  // row derives state by ITS OWN kind out of the one file.
+  const f = path.join(sv, "RFCs", "fixture-rfc-flow.md");
+  fs.writeFileSync(
+    f,
+    '::report{id=FIX-RFC-FLOW as=spec retain=permanent}\n\n' +
+      'the RFC flow, playable\n\n' +
+      '::rfc{id=MOCK-RFC-900}\n\n' +
+      ':::approval{ask="approve the mock?" verdict=approved}\nthe mock verdict\n:::\n\n' +
+      '::claim[press this mock around]{id=m1}\n'
+  );
+  const r = await reg.register(f);
+  assert.strictEqual(r.rows, 2, "two leaves, two rows");
+  const spec = reg.get("FIX-RFC-FLOW");
+  const mock = reg.get("MOCK-RFC-900");
+  assert.ok(spec && mock, "both identities stand");
+  assert.strictEqual(spec.kind, "report");
+  assert.strictEqual(mock.kind, "rfc");
+  // each row derived by its own kind: the spec row reads the report leaf (declared, so no
+  // invalid), the mock row reads the rfc's verdict off the document
+  assert.strictEqual(spec.state.subtype, "spec");
+  assert.strictEqual(spec.state.retain, "permanent");
+  assert.strictEqual(spec.state.invalid, undefined, "a declared spec leaf wears no invalid");
+  assert.strictEqual(mock.state.verdict, "approved", "the mock derives like any RFC");
+  ok("one file, two rows, each state derived by its own kind");
+
+  // remove ONLY the mock leaf → its row goes, the spec's stays — per-leaf teardown
+  fs.writeFileSync(f, '::report{id=FIX-RFC-FLOW as=spec retain=permanent}\n\nthe mock was torn out\n');
+  await reg.register(f);
+  assert.strictEqual(reg.get("MOCK-RFC-900"), null, "the torn-out leaf took its row");
+  assert.ok(reg.get("FIX-RFC-FLOW"), "and the document's own identity stands");
+  ok("a leaf removed takes its row and leaves the others — teardown is per-leaf now");
+  reg.remove("FIX-RFC-FLOW");
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} claims held — the registry`);

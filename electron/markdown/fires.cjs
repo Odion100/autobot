@@ -8,7 +8,7 @@
 // does not yet cover. There is no "already handled" list anywhere.
 const fs = require("fs");
 const { parse } = require("./parse.cjs");
-const { FIRING, registrationOf, hasFired, firstLine } = require("./blocks.cjs");
+const { FIRING, registrationOf, registrationsOf, hasFired, firstLine } = require("./blocks.cjs");
 
 const splitList = (raw) =>
   String(raw == null ? "" : raw)
@@ -88,7 +88,9 @@ async function scan(absPath, source) {
   const text = source != null ? String(source) : readFile(absPath);
   if (text == null) return { ok: false, error: `cannot read ${absPath}` };
   const blocks = await parse(text);
-  return { ok: true, text, blocks, registration: registrationOf(blocks), fires: firesOf(blocks, text) };
+  // `registration` is the PRIMARY identity (fires, audiences); `registrations` is every leaf —
+  // the registry writes one row per leaf, so the caller passes the whole list.
+  return { ok: true, text, blocks, registration: registrationOf(blocks), registrations: registrationsOf(blocks), fires: firesOf(blocks, text) };
 }
 
 function readFile(abs) {

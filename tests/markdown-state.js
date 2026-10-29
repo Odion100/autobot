@@ -166,6 +166,20 @@ const stateOf = async (...verdicts) => {
   assert.strictEqual(both.retired, true);
   ok("a retired report keeps its subtype AND its reason — two names, two meanings, one line");
 
+  // REQUIRED, BOTH (RFC-076 §2 amendment, c42/c43): a report declares its subtype AND its ending,
+  // and a leaf missing either wears what is missing on the row — surfaced, never lumped under the
+  // bare kind. A fully-declared leaf wears nothing.
+  const noSub = await rowOf(`# R\n\n::report{id=r-bare retain=14d}\n`, "report");
+  assert.strictEqual(noSub.invalid, "no subtype", "a bare as= is named, not lumped");
+  const noEnd = await rowOf(`# R\n\n::report{id=r-open as=notice}\n`, "report");
+  assert.strictEqual(noEnd.invalid, "no retention", "an undeclared ending is named");
+  const neither = await rowOf(`# R\n\n::report{id=r-naked}\n`, "report");
+  assert.strictEqual(neither.invalid, "no subtype, no retention", "both absences, both named");
+  const declared = await rowOf(`# R\n\n::report{id=r-full as=account retain=permanent}\n`, "report");
+  assert.strictEqual(declared.invalid, undefined, "a declared leaf wears no invalid");
+  assert.strictEqual(declared.retain, "permanent", "the explicit forever rides the row");
+  ok("a report leaf declares as= and retain= or the row says which is missing (c42, c43)");
+
   // The same line on a GAP, where `why=` is already spent on the rejection's reason. All three
   // coexist: the ending it took, why it was declined, and why it was then taken out of service.
   const gap = await rowOf(

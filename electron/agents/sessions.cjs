@@ -1142,7 +1142,9 @@ async function announceDocument(absPath, opts = {}) {
   }
   const res = await docFires.scan(abs, opts.source);
   if (!res.ok) return res;
-  if (res.registration) documents.registerParsed(abs, res.registration, res.blocks, res.text);
+  // EVERY leaf registers — a document can carry several identities now (the spec fixture holding
+  // the mock leaf it exercises); the primary (`res.registration`) still decides fires below.
+  if (res.registration) documents.registerParsed(abs, res.registrations || res.registration, res.blocks, res.text);
   // THE REGISTRY IS THE FILTER (§3): only a registered document fires. Everything else cost one
   // lookup and one parse that also answered "should I care".
   const row = documents.byPath(abs);
@@ -1253,6 +1255,14 @@ async function markBlock(absPath, line, { state, note } = {}, by = "") {
 // document. `told=` makes it idempotent — a covered block is silence — so the sweep costs one parse
 // per registered document and delivers only what is still owed (c32).
 async function sweepDocuments() {
+  // RFC-076 §4.6 — the retention half rides the same sweep: a report whose declared window ran
+  // out since its first read gets `retired= retiredAs=expired` written into its leaf FIRST, so
+  // the announce below re-parses the file and the row says what just became true. The clock is
+  // the reader's (the hub's opened ledger); this side only reads it.
+  try {
+    const retention = require("../markdown/retention.cjs");
+    retention.retireExpired(documents.read(), { absPathOf: documents.absPathOf });
+  } catch {}
   for (const row of documents.read()) {
     const abs = documents.absPathOf(row);
     if (!abs) continue;
@@ -1318,18 +1328,36 @@ const WATCH_IGNORE = /(^|\/)(\.git|node_modules|\.systemview|dist|build)(\/|$)/;
 function startWatcher(s) {
   try {
     s.watcher = fs.watch(s.cwd, { recursive: true }, (eventType, rel) => {
-      if (!rel) return;
-      if (WATCH_IGNORE.test(rel) || s.toolsInFlight === 0) return;
+      if (!rel || WATCH_IGNORE.test(rel)) return;
       const abs = path.join(s.cwd, rel);
+      // THE FEED LINE IS GATED; THE PARSE IS NOT. The tools-in-flight gate below exists because
+      // the feed cannot tell whose hand moved a file — but a PARSE is attribution-free (RFC-073:
+      // the write is one cause of a parse, whoever wrote). Both halves behind one gate meant a
+      // cmd-press in the window — the fixture walk, no agent tool running — wrote a leaf the
+      // registry never heard about (measured 2026-10-29: the raise press landed on disk, no row).
+      // TRAILING debounce, not leading-suppress: the LAST write wins, which also cures two chained
+      // writes parsing only the intermediate state (same night, `rfc draft && rfc off` left a row
+      // whose leaf was already a comment). `by` is stamped only when the agent's hand is the
+      // likely writer — with no tools in flight the writer is unknown, and a wrong `by` marks
+      // somebody told who never heard.
+      if (/\.(md|markdown)$/i.test(abs)) {
+        if (!s.announceTimers) s.announceTimers = new Map();
+        clearTimeout(s.announceTimers.get(abs));
+        s.announceTimers.set(
+          abs,
+          setTimeout(() => {
+            s.announceTimers.delete(abs);
+            announceDocument(abs, { by: s.toolsInFlight > 0 ? s.projectCode : "" }).catch(() => {});
+          }, 400),
+        );
+      }
+      if (s.toolsInFlight === 0) return;
       const now = Date.now();
       const last = s.recentChanges.get(abs);
       if (last && now - last < 1500) return; // debounce + schema-half dedupe
       s.recentChanges.set(abs, now);
       const change = eventType === "rename" ? (fs.existsSync(abs) ? "created" : "deleted") : "edited";
       emit(s, { kind: "file.changed", path: abs, change, source: "watcher" });
-      // RFC-073: a change is one cause of a parse — register AND fire, writer named so it is
-      // stamped as told rather than woken by its own write.
-      announceDocument(abs, { by: s.projectCode }).catch(() => {});
     });
   } catch {} // recursive watch unavailable → schema half still covers Edit/Write
 }
