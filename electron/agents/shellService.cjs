@@ -92,6 +92,52 @@ module.exports = function startShellService({ tabsNow, webContentsFor } = {}) {
       return { ok: !res.error, selector, ...res };
     },
 
+    // ── THE READ LINE — the one DECLARED exception to read-only (his call, 2026-10-28) ─────────
+    // These three speak and never click: they feed the window's own speech queue (`sv:read`,
+    // src/molecules/SpeakReply/readLine.js in systemview), where the now-playing item drives the
+    // spotlight, the scroll and the bot standing beside what is being read. Built for the
+    // how-we-work tour and deliberately general: anything on the page can be read aloud without
+    // landing a word in the chat. The text is resolved AT SPEAK TIME in the page, so what is
+    // spoken is what the page says at that moment — this door hands over pointers, never copies.
+    async enqueueRead({ items, follow, projectCode, app = "systemview" } = {}) {
+      if (!Array.isArray(items) || !items.length) return { ok: false, error: "items is required — [{selector}|{text}, …]" };
+      const clean = items
+        .map((raw) => (typeof raw === "string" ? { selector: raw } : raw || {}))
+        .filter((it) => (it.selector && typeof it.selector === "string") || (it.text && typeof it.text === "string"))
+        .map((it) => ({ selector: it.selector, text: it.text, say: it.say }));
+      if (!clean.length) return { ok: false, error: "no usable items — each needs a selector or a text" };
+      const res = await inPage(
+        app,
+        (detail) => {
+          if (!window.__svReadLine) return { queued: 0, error: "the read line is not installed in this page" };
+          window.dispatchEvent(new CustomEvent("sv:read", { detail }));
+          return { queued: detail.items.length };
+        },
+        [{ items: clean, follow: follow || undefined, projectCode: projectCode || undefined }],
+      );
+      return { ok: !res.error, ...res };
+    },
+
+    // Where the line stands — who is being read and who is waiting. Poll it to pace a tour:
+    // an empty answer is the drain.
+    async readState({ app = "systemview" } = {}) {
+      const res = await inPage(app, () => {
+        if (!window.__svReadLine) return { error: "the read line is not installed in this page" };
+        return { line: window.__svReadLine.view() };
+      });
+      return { ok: !res.error, ...res };
+    },
+
+    // Stop everything and empty the line — the brake. He speaks, this fires.
+    async stopRead({ app = "systemview" } = {}) {
+      const res = await inPage(app, () => {
+        if (!window.__svReadLine) return { error: "the read line is not installed in this page" };
+        window.__svReadLine.clear();
+        return { stopped: true };
+      });
+      return { ok: !res.error, ...res };
+    },
+
     // Just the number. Cheaper than `read` and it is what most assertions actually want: "is there
     // exactly one `no spec` chip on this document".
     async count({ selector, app = "systemview" } = {}) {
@@ -221,6 +267,39 @@ module.exports = function startShellService({ tabsNow, webContentsFor } = {}) {
         input: { app: { type: "string", description: "which app — defaults to 'systemview'" } },
         required: [],
       },
+      enqueueRead: {
+        description:
+          "READ THE PAGE ALOUD — line up items on the window's own speech queue: {selector} items speak the " +
+          "element's LIVE text at its turn (never a copy), {text} items speak in your voice between them. While " +
+          "an item plays, the page scrolls to it, it is spotlit, and the agent avatar stands beside it — each " +
+          "follower declinable via follow:{scroll,avatar}. The human's forward-click skips items and the " +
+          "followers move with it. Built for guided tours; good for reading anything on screen without putting " +
+          "a word in the chat.",
+        input: {
+          items: {
+            type: "array",
+            description: "in speaking order — [{selector:'.hww-intro', say?:'short label'} | {text:'connective line'}]",
+          },
+          follow: { type: "object", description: "per-batch switches, default both on: {scroll:bool, avatar:bool}" },
+          projectCode: { type: "string", description: "whose reading this is — routes the avatar" },
+          app: { type: "string", description: "which app's tab — defaults to 'systemview'" },
+        },
+        required: ["items"],
+      },
+      readState: {
+        description:
+          "Where the speech line stands — the item being read and the items waiting. Poll it to pace a tour: " +
+          "empty is the drain. Reads the same queue his replies and Listen presses share.",
+        input: { app: { type: "string", description: "which app — defaults to 'systemview'" } },
+        required: [],
+      },
+      stopRead: {
+        description:
+          "Stop the reading and empty the speech line — the brake. The human speaking over a tour means THIS, " +
+          "immediately; never leave a tour talking over him.",
+        input: { app: { type: "string", description: "which app — defaults to 'systemview'" } },
+        required: [],
+      },
     });
     mcp.schema("Docs", {
       search: {
@@ -247,7 +326,17 @@ module.exports = function startShellService({ tabsNow, webContentsFor } = {}) {
     // there is no `evaluate` in this file: a general code-execution door into his window would not
     // be a proof door, it would be a way to take the window.
     mcp.serve("shell-mcp", {
-      expose: ["Window.tabs", "Window.read", "Window.count", "Window.bundle", "Docs.search", "Docs.corpora"],
+      expose: [
+        "Window.tabs",
+        "Window.read",
+        "Window.count",
+        "Window.bundle",
+        "Window.enqueueRead",
+        "Window.readState",
+        "Window.stopRead",
+        "Docs.search",
+        "Docs.corpora",
+      ],
     });
 
     app.use(
