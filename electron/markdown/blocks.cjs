@@ -149,6 +149,71 @@ const PROOF_KINDS = {
   shown: ["image", "file", "diff", "logs", "branch"],
 };
 
+// THE RUNNABLE SPECS — the two blocks a machine can execute, and the ONE definition of that set.
+//
+// NOT `PROOF_KINDS.spec`, which carries `cmd` as well, and the difference is his ruling: "the CMDs
+// are not really specs. It's only run blocks and test blocks. If there is something that a CMD do,
+// you should wrap it in one of those." A `cmd` is experiential facilitation — a command HE presses
+// to feel the thing work — so it answers "is there evidence in this claim's fold" and must never
+// answer "what does the change loop re-run." Collecting cmds into a headless run would execute
+// shell he never pressed and report it as a passing proof.
+const SPECS = ["test", "run"];
+
+/**
+ * THE GRABBER. Every runnable spec in a parsed document, as an ADDRESS rather than a copy:
+ *
+ *   { kind: "test"|"run", label, title, attrs, line, end }
+ *
+ * Recorded on the registry row at save time (registry.cjs), which is the whole point — the parse
+ * already happened to derive the row's state, so every later reader GRABS the inventory out of
+ * JSON instead of re-parsing markdown to find blocks somebody already found. The hub's collector,
+ * the arc diagram's per-node counts and the drawer's progress all read the same list and none of
+ * them carries a markdown parser.
+ *
+ * The BODY is deliberately not stored. `line`/`end` is an exact span, so a runner slices the file
+ * when it is actually about to execute something — a document's text in two places is a document
+ * that can disagree with itself, and the registry is an index, not a mirror.
+ */
+function specsOf(blocks) {
+  // WHICH CLAIM A SPEC DEFENDS, by span containment. A spec inside a claim's fold IS that claim's
+  // proof, and the two are read together the moment one goes red: "if the proof is wrapped in a
+  // claim it should also say its claim… so when something fails I can look at the test and look at
+  // the claim." Without it a failing row names a document and a line number and leaves the reader
+  // to work out what was being defended.
+  //
+  // The INNERMOST containing claim wins, so a claim nested inside another attributes the spec to
+  // the one that actually holds it.
+  const claims = (blocks || []).filter((b) => b && b.name === "claim" && (b.attrs || {}).id);
+  const claimOf = (spec) => {
+    let best = null;
+    for (const c of claims) {
+      const from = Number(c.line) || 0;
+      const to = Number(c.end || c.line) || 0;
+      if (!(Number(spec.line) > from && Number(spec.end || spec.line) <= to)) continue;
+      if (!best || from > (Number(best.line) || 0)) best = c;
+    }
+    // The LINE as well as the id, so a reader can be taken straight to the claim rather than to the
+    // document that contains it. An address that only names the file still leaves you scrolling.
+    return best ? { id: String(best.attrs.id), line: Number(best.line) || 0 } : { id: "", line: 0 };
+  };
+  return (blocks || [])
+    .filter((b) => b && SPECS.includes(b.name))
+    .map((b) => ({
+      kind: b.name,
+      label: String(b.label || "").trim(),
+      title: String((b.attrs || {}).title || "").trim(),
+      // THE WHOLE ATTRIBUTE SET, so the inventory is sufficient on its own. Without it a runner
+      // would have to go back and read the opening fence to find `project=` — which is parsing
+      // markdown to finish a grab, the exact thing this exists to remove.
+      attrs: { ...(b.attrs || {}) },
+      // The claim this spec defends, or "" when it stands on its own in the document body.
+      claim: claimOf(b).id,
+      claimLine: claimOf(b).line,
+      line: Number(b.line) || 0,
+      end: Number(b.end || b.line) || 0,
+    }));
+}
+
 /** Every proof block sitting INSIDE a container's own body, counted by half. */
 function proofInside(blocks, owner) {
   const from = Number(owner.line) || 0;
@@ -460,6 +525,8 @@ module.exports = {
   deriveArc,
   arcOfAddress,
   PROOF_KINDS,
+  SPECS,
+  specsOf,
   proofInside,
   proofOwed,
   claimProved,

@@ -33,6 +33,11 @@ os.homedir = () => scratch;
 // janitor with the keys.
 process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
 fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
+// AND THE SETTINGS STORE. The retention window is a SETTING now (`nudge.json keepHours`), so the
+// sweep claim below would otherwise read whatever is configured on this machine and pass or fail
+// for a reason that has nothing to do with the code. A scratch path that does not exist reads as
+// the defaults.
+process.env.AUTOBOT_NUDGE_FILE = path.join(scratch, "nudge.json");
 
 const definitions = require("../electron/agents/definitions.cjs");
 
@@ -391,12 +396,12 @@ worklist.writeRun(
 );
 assert.equal(byWhat(definitions.boardFor("chored", now))["job:accounting"].done, true,
   "the monthly line is checked by its close");
-assert.ok(worklist.pruneRuns(now + 15 * DAY) >= 1, "two weeks on, the janitor sweeps the closed run");
+assert.ok(worklist.pruneRuns(now + 15 * DAY) >= 1, "past the window, the janitor sweeps the closed run");
 assert.deepEqual(worklist.read(worklist.runOwner(monthly)), [], "the run record is gone");
 const swept = byWhat(definitions.boardFor("chored", now))["job:accounting"];
 assert.equal(swept.done, true, "and the monthly line still reads done, not `never`");
 assert.ok(swept.at > 0, "because the close left a stamp the janitor does not sweep");
-ok("a monthly line survives the 14-day sweep — the stamp is the residue a swept run leaves");
+ok("a monthly line survives the sweep — the stamp is the residue a swept run leaves");
 
 fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip + skill sources + the chore board\n`);

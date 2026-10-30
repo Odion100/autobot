@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { parse } = require("./parse.cjs");
-const { registrationsOf, deriveState, deriveArc, arcOfAddress } = require("./blocks.cjs");
+const { registrationsOf, deriveState, deriveArc, arcOfAddress, specsOf } = require("./blocks.cjs");
 
 const FILE = () => process.env.AUTOBOT_DOCUMENTS || path.join(os.homedir(), ".autobot", "documents.json");
 const PROJECTS = () => process.env.AUTOBOT_PROJECTS || path.join(os.homedir(), ".autobot", "projects.json");
@@ -152,7 +152,11 @@ function registerParsed(absPath, reg, blocks, text) {
     if (g.kind === "arc" && state && state.objectives) {
       state.objectives = { ...state.objectives, ...deriveArc(blocks, g.id, read()) };
     }
-    const row = setState(g.id, state) || r.row;
+    // THE SPEC INVENTORY, recorded by the parse that is already in hand — so that nothing
+    // downstream has to parse markdown to find out what a document can run. Per FILE, not per
+    // leaf: a two-leaf document's rows carry the same list, and a collector walking rows dedupes
+    // by path (api/proofs.js) rather than running one document twice.
+    const row = setState(g.id, state, specsOf(blocks)) || r.row;
     if (!first) first = { row, updated: r.updated };
     // AND A PLAN'S OWN PARSE MOVES ITS ARC (§4.4 point 3) — both ends of a move, per leaf.
     if (g.kind !== "arc") {
@@ -198,12 +202,26 @@ function absPathOf(row) {
   return root ? path.join(path.resolve(String(root)), rel) : "";
 }
 
-/** Write the derived state onto a row. The parse is the only caller that should ever hold one. */
-function setState(id, state) {
+/**
+ * Write the DERIVED fields onto a row. The parse is the only caller that should ever hold these.
+ *
+ * `specs` is the document's runnable-spec inventory (blocks.cjs `specsOf`) and it rides along here
+ * rather than in a write of its own, because both come out of the same parse and two writes would
+ * mean a row that briefly carries one and not the other.
+ *
+ * `undefined` specs means "not saying" and leaves whatever stands — `registerParsed` always passes
+ * the list (empty included, which is how a document that LOST its last run block stops claiming
+ * one), while `reparseArcOf` re-derives only state and must not blank the inventory.
+ */
+function setState(id, state, specs) {
   const rows = read();
   const i = rows.findIndex((r) => r.id === id);
   if (i < 0) return null;
   rows[i] = { ...rows[i], state: state || null };
+  if (specs !== undefined) {
+    if (Array.isArray(specs) && specs.length) rows[i].specs = specs;
+    else delete rows[i].specs;
+  }
   write(rows);
   return rows[i];
 }

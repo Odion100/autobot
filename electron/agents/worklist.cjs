@@ -206,18 +206,35 @@ function markLaneRepo(id, repo) {
 // own file. Completion is OBSERVED, not declared: a run with every item done is finished; one
 // left mid-flight is the record of where it died. No state flag to lie with.
 // ---------------------------------------------------------------------------------------------
-// RETENTION — his rule: no stale logs piling up. A CLOSED run (every item done) older than two
-// weeks is a record nobody will read again; the sweep runs once per process start, quietly. A run
-// that DIED mid-list is never swept — where a procedure died is the record, and it stays until
-// someone acts on it.
-const RUN_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+// RETENTION — his rule: no stale logs piling up. A CLOSED run (every item done) is a record
+// nobody will read again; the sweep runs once per process start, quietly. A run that DIED
+// mid-list is never swept — where a procedure died is the record, and it stays until someone acts
+// on it.
+//
+// THE WINDOW IS A SETTING, NOT A CONSTANT — his ask by name: "how quickly the worklist gets
+// deleted should be added to the worklist settings." It lives in the same store the cog panel
+// already reads and writes (`nudge.json`, `keepHours`), because a number only an agent can change
+// is a number he has to ask for every time.
+//
+// READ PER SWEEP, and lazily: the janitor runs at module load, so a top-level require would make
+// every consumer of the worklist pull in the settings module to delete nothing. A store that cannot
+// be read falls back to the default rather than refusing to prune — a janitor that stops working
+// because a settings file is malformed is a worse failure than one that uses twelve hours.
+const KEEP_FALLBACK_H = 12;
+function keepMs() {
+  try {
+    return require("./nudge.cjs").readSettings().keepHours * 60 * 60 * 1000;
+  } catch {
+    return KEEP_FALLBACK_H * 60 * 60 * 1000;
+  }
+}
 // A SOURCE THAT STARTS "lane/" IS A MISSPELLED LANE, not a kind of run. Every reader keys on
 // "lane:", so this spelling files a record nothing can ever show — the write door refuses it by
 // name (sessions.cjs), and pruneRuns retires the ones already on disk. One predicate, so the
 // refusal and the janitor can never drift apart about what the dead convention looks like.
 const misspelledLane = (source) => /^lane\//.test(String(source || ""));
 
-function pruneRuns(now = Date.now()) {
+function pruneRuns(now = Date.now(), keep = keepMs()) {
   let names = [];
   try { names = fs.readdirSync(DIR); } catch { return 0; }
   let swept = 0;
@@ -239,7 +256,7 @@ function pruneRuns(now = Date.now()) {
         continue;
       }
       const items = Array.isArray(r.items) ? r.items : [];
-      if (items.length && items.every((i) => i.state === "done") && now - (r.updatedAt || 0) > RUN_KEEP_MS) {
+      if (items.length && items.every((i) => i.state === "done") && now - (r.updatedAt || 0) > keep) {
         fs.unlinkSync(path.join(DIR, n));
         swept++;
       }

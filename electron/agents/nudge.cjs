@@ -48,6 +48,17 @@ const DEFAULTS = Object.freeze({
   ctxCeilingPct: 70,
   // WHICH SOURCES COUNT — prefixes, matched literally. His: "job and skill nudge."
   sources: ["job:", "skill:"],
+  // HOW LONG A CLOSED RUN IS KEPT, in hours — his ask by name: "how quickly the worklist gets
+  // deleted should be added to the worklist settings." It lives here rather than beside the janitor
+  // because this file is already the panel's store and a constant in `worklist.cjs` is a number only
+  // an agent can change; the panel is the one surface where he can.
+  //
+  // TWELVE, down from the fortnight the constant held. Two weeks was set when a closed run was the
+  // only account a procedure left behind; a run now ATTACHES its product — a report, a branch, a
+  // fixture — so the thing worth keeping outlives the row by construction and the row is the
+  // receipt. A day of receipts is a readable drawer; a fortnight of them is the pile the rule exists
+  // to prevent. A run that DIED mid-list is never swept at any setting.
+  keepHours: 12,
 });
 
 const clampInt = (v, lo, hi, fallback) => {
@@ -73,6 +84,10 @@ function normalizeSettings(raw) {
     // An EMPTY list is not the same as an absent one: [] means nothing qualifies, which is a way
     // to turn this off that survives somebody flipping `on` back.
     sources: sources ? sources : DEFAULTS.sources.slice(),
+    // FLOOR OF 1 HOUR, not 0. "Delete closed runs instantly" reads like a tidiness setting and is
+    // really a way to lose the record of work that just finished, before anybody has read it — and
+    // it is unrecoverable, unlike every other value here.
+    keepHours: clampInt(r.keepHours, 1, 24 * 14, DEFAULTS.keepHours),
   };
 }
 

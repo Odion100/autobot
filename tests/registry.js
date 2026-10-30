@@ -516,5 +516,113 @@ console.log("\na document may carry several leaves — each one is a row (his de
   reg.remove("FIX-RFC-FLOW");
 }
 
+console.log("\nthe spec inventory — grabbing run blocks without parsing markdown");
+{
+  // HIS INSTRUCTION: "make it so that the test blocks and the run blocks can easily be grabbed so
+  // you don't have to parse it." The parse already happens here to derive state, so the row records
+  // the addresses and every later reader — the hub's collector, the arc diagram, the drawer —
+  // grabs them out of JSON.
+  const file = path.join(sv, "RFCs", "RFC-700-carries-specs.md");
+  fs.writeFileSync(
+    file,
+    "::rfc{id=RFC-700}\n\n" +
+      "::test[Math.add]\n\n" +
+      ':::run{title="Seed and chain"}\n- Math.add { "a": 1, "b": 2 }\n:::\n\n' +
+      ":::cmd\nyarn test\n:::\n",
+  );
+  await reg.register(file);
+  const row = reg.get("RFC-700");
+  assert.strictEqual(row.specs.length, 2, "two runnable specs — the cmd is not one of them");
+  assert.deepStrictEqual(
+    row.specs.map((s) => s.kind),
+    ["test", "run"],
+    "in document order, by kind",
+  );
+  assert.strictEqual(row.specs[0].label, "Math.add", "a ::test keeps its namespace as the label");
+  assert.strictEqual(row.specs[1].title, "Seed and chain", "a :::run keeps its title");
+  ok("the row carries each spec's kind, label and title — a grab is a JSON read, not a parse");
+
+  // WHICH CLAIM A SPEC DEFENDS — so a failing proof names the claim it breaks, not just a line.
+  const claimed = path.join(sv, "RFCs", "RFC-702-claimed-specs.md");
+  fs.writeFileSync(
+    claimed,
+    "::rfc{id=RFC-702}\n\n" +
+      ":::claim[the first thing]{id=c1}\n" +
+      '::::run{title="defends c1"}\n- Math.add { "a": 1 }\n::::\n' +
+      ":::\n\n" +
+      ':::run{title="stands alone"}\n- Math.add { "a": 2 }\n:::\n',
+  );
+  await reg.register(claimed);
+  const cs = reg.get("RFC-702").specs;
+  assert.strictEqual(cs.length, 2, "both run blocks collected");
+  assert.strictEqual(cs[0].claim, "c1", "a spec inside a claim's fold names that claim");
+  assert.strictEqual(cs[1].claim, "", "a spec in the document body names none — and says so as empty");
+  ok("a spec records the claim it defends, by span containment — so a red proof names what it broke");
+  reg.remove("RFC-702");
+
+  // THE SPAN IS THE ADDRESS, and it is what lets a runner slice the body out of the file without
+  // its own parser. Checked against the real lines rather than hard-coded numbers.
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  const runSpec = row.specs[1];
+  assert.ok(/^:::run/.test(lines[runSpec.line - 1]), "line points at the opening fence");
+  assert.ok(/^:::$/.test(lines[runSpec.end - 1]), "end points at the closing fence");
+  assert.ok(runSpec.end > runSpec.line, "a container spans more than one line");
+  ok("line/end is an exact span — the body is sliced at run time, never copied into the registry");
+
+  // HIS RULING, and the reason this is not `PROOF_KINDS.spec`: "the CMDs are not really specs.
+  // It's only run blocks and test blocks." A cmd collected into a headless run would execute
+  // shell he never pressed and report it as a passing proof.
+  assert.ok(!row.specs.some((s) => s.kind === "cmd"), "a cmd is never collected as a runnable spec");
+  ok("a cmd stays experiential facilitation — it proves a claim, it never joins the change loop");
+
+  // A DOCUMENT THAT STOPS CARRYING SPECS STOPS CLAIMING THEM. The field goes, rather than sitting
+  // there as an empty array that reads like an answer.
+  fs.writeFileSync(file, "::rfc{id=RFC-700}\n\nthe specs were taken out\n");
+  await reg.register(file);
+  assert.strictEqual(reg.get("RFC-700").specs, undefined, "the inventory is gone, not empty");
+  ok("losing the last spec removes the field — absence stated, not an empty list shown");
+  reg.remove("RFC-700");
+
+  // PER FILE, NOT PER LEAF — both rows of a two-leaf document carry the same inventory, which is
+  // why a collector walking rows has to dedupe by path or it runs one document twice.
+  const two = path.join(sv, "RFCs", "proofs", "mock-pair.md");
+  fs.mkdirSync(path.dirname(two), { recursive: true });
+  fs.writeFileSync(
+    two,
+    "::report{id=FIX-700 as=spec retain=permanent}\n::rfc{id=MOCK-RFC-700}\n\n" +
+      ':::run{title="the walk"}\n- Math.add { "a": 1 }\n:::\n',
+  );
+  await reg.register(two);
+  assert.deepStrictEqual(
+    reg.get("FIX-700").specs,
+    reg.get("MOCK-RFC-700").specs,
+    "one file's specs, on every row it registered",
+  );
+  ok("the inventory belongs to the FILE — a collector dedupes by path, not by row");
+  reg.remove("FIX-700");
+  reg.remove("MOCK-RFC-700");
+
+  // AND A REPARSE THAT ONLY RE-DERIVES STATE MUST NOT BLANK IT. Registering a plan moves the arc
+  // it serves (reparseArcOf), which re-derives state alone — if that wrote an empty inventory the
+  // arc's own run blocks would vanish the moment anybody attached a plan to it.
+  const arc = path.join(sv, "RFCs", "arcs", "ARC-700-has-a-run.md");
+  fs.writeFileSync(
+    arc,
+    "::arc{id=ARC-700 owner=systemview}\n\n:::objective{id=O1 owner=systemview state=open}\na\n:::\n\n" +
+      ':::run{title="the arc\'s own walk"}\n- Math.add { "a": 1 }\n:::\n',
+  );
+  await reg.register(arc);
+  assert.strictEqual(reg.get("ARC-700").specs.length, 1, "the arc carries its run block");
+  const plan = path.join(sv, "RFCs", "RFC-701-serves-o1.md");
+  fs.writeFileSync(plan, "::rfc{id=RFC-701 arc=ARC-700-O1}\n\nthe plan\n");
+  await reg.register(plan);
+  await new Promise((r) => setTimeout(r, 50)); // reparseArcOf is fire-and-forget
+  assert.strictEqual(reg.get("ARC-700").state.objectives.planned, 1, "the reparse did happen");
+  assert.strictEqual(reg.get("ARC-700").specs.length, 1, "and it left the inventory standing");
+  ok("a state-only reparse says nothing about specs — undefined is 'not saying', not 'none'");
+  reg.remove("ARC-700");
+  reg.remove("RFC-701");
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} claims held — the registry`);

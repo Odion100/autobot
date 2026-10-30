@@ -16,7 +16,7 @@ const SERVER = "systemview";
 const HUB = () => `http://localhost:${process.env.SV_PORT || 3000}/systemview/api`;
 const TOOL_NAME = (t) => `mcp__${SERVER}__${t}`;
 const TOOL_NAMES = [
-  "runTests", "probe", "projects", "logs", "stats",
+  "runTests", "runProofs", "probe", "projects", "logs", "stats",
   "show", "tv", "reply", "board", "comments",
   "nav", "refresh", "act", "highlight", "lanes",
   "connect", "disconnect",
@@ -131,13 +131,40 @@ function renderProbe(r) {
   return out.join("\n");
 }
 
+// A ROW'S NAME. A saved test is addressed by its namespace; a DOCUMENT's run block has no namespace
+// of its own worth printing (it is whatever its first step calls), so its title is the name and the
+// namespace would only repeat a method nobody asked about.
+const nsOfRow = (t) => {
+  if (t.at && t.title) return t.title;
+  return t.namespace || "(unnamed)";
+};
+
+// WHAT COULD NOT BE BUILT, beside what ran — never instead of it. A proofs run of four where a fifth
+// document could not be read is not a clean run of four, and the difference is invisible unless it
+// is printed: a silently thinner run reads as a pass.
+const problemLines = (r) =>
+  Array.isArray(r.problems) && r.problems.length
+    ? [
+        "",
+        `${r.problems.length} spec${r.problems.length === 1 ? "" : "s"} could not be built:`,
+        ...r.problems.map((p) => `  ! ${p.document || "?"}${p.line ? `#L${p.line}` : ""} — ${p.problem}`),
+      ]
+    : [];
+
 function renderRun(r) {
   if (r && r.error) return `${r.projectCode || "?"}: ${r.error}`;
   // DRY RUN IS THE LISTING (his call): what WOULD run, as bullets the feed tables know.
   if (r && r.dryRun) {
     const head = `${r.projectCode}: would run ${r.tests.length} test${r.tests.length === 1 ? "" : "s"}`;
     // the capability returns `namespace` as a string now — the three-field shape was the CLI's
-    return [head, "", ...r.tests.map((t) => `• ${t.namespace || "(unnamed)"} — "${t.title}"`)].join("\n");
+    return [
+      head,
+      "",
+      // The name ONCE. `nsOfRow` already returns the title for a document's spec, so spelling
+      // `— "${t.title}"` after it printed everything twice.
+      ...r.tests.map((t) => `• ${nsOfRow(t)}${t.at ? `  [${t.at}]` : ` — "${t.title}"`}`),
+      ...problemLines(r),
+    ].join("\n");
   }
   const total = (r.passed || 0) + (r.failed || 0);
   const head = `${r.projectCode}: ${total} test${total === 1 ? "" : "s"} — ${r.passed} passed, ${r.failed} failed`;
@@ -145,9 +172,12 @@ function renderRun(r) {
   // at a path — instead of a transcript to read. The capability returns that structured now, so this
   // reads `passed` and `failures` and stops guessing at section shapes.
   const lines = (r.tests || []).map((t) => {
-    const ns = t.namespace || "(unnamed)";
+    const ns = nsOfRow(t);
     const ms = t.ms != null ? ` ${t.ms}ms` : "";
-    if (t.passed) return `✓ ${ns} — "${t.title}"${ms}`;
+    // WHERE THE SPEC LIVES, when the collector knew — a document and a line. A failing proof whose
+    // row names only a method leaves the reader hunting for which document claimed it.
+    const at = t.at ? `  [${t.at}]` : "";
+    if (t.passed) return `✓ ${ns}${t.at ? "" : ` — "${t.title}"`}${ms}${at}`;
     const details = (t.failures || []).map((f) => {
       const at = f.namespace || f.path || "";
       const cmp =
@@ -156,7 +186,7 @@ function renderRun(r) {
           : f.message || "failed";
       return `    ${f.phase || "?"} "${f.step || ""}": ${at} → ${cmp}`;
     });
-    return [`✗ ${ns} — "${t.title}"${ms}`, ...details].join("\n");
+    return [`✗ ${ns}${t.at ? "" : ` — "${t.title}"`}${ms}${at}`, ...details].join("\n");
   });
   const foot = [];
   // WHERE IT RAN, ALWAYS — the hub has always returned this (`services[].at`) and this renderer
@@ -171,7 +201,7 @@ function renderRun(r) {
   if (Array.isArray(r.unreachable) && r.unreachable.length)
     foot.push(`did not answer: ${r.unreachable.map((u) => `${u.serviceId} (${u.at})`).join(", ")}`);
   if (r.stoppedEarly) foot.push(`stopped early — ${r.notRun} not run`);
-  return [head, "", ...lines, ...(foot.length ? ["", foot.join("  ·  ")] : [])].join("\n");
+  return [head, "", ...lines, ...problemLines(r), ...(foot.length ? ["", foot.join("  ·  ")] : [])].join("\n");
 }
 
 // THE URL IS THE POINT, not the service name. A project whose services sit on two different hosts
@@ -378,6 +408,30 @@ function toolsFor(identity = {}) {
         async ({ projectCode, namespace, bail, dryRun }) => {
           try {
             return text(renderRun(await hub("Agent", "runTests", { projectCode, namespace, bail, dryRun })));
+          } catch (e) { return fail(e); }
+        }
+      ),
+      tool(
+        "runProofs",
+        "Run the PROOFS a project's documents carry — the `:::run` and `::test` blocks living inside " +
+          "RFCs, arcs, plans and gaps — and get the results back the same shape runTests gives. This " +
+          "is how you check that a design's living specs still hold without opening the window. " +
+          "Scope it: `document` for one document's specs, `objective` for every plan on that " +
+          "objective (ARC-004-O2), `arc` for the arc's own document plus all of its plans, or none of " +
+          "them for every document in the project. `dryRun` lists what WOULD run. Note what is NOT " +
+          "collected: a `:::cmd` block is a command for the human to press, never a spec — if " +
+          "something a cmd does needs defending, wrap it in a run block.",
+        {
+          projectCode: z.string().describe("the project whose documents are collected"),
+          document: z.string().optional().describe("one document's id, e.g. RFC-076"),
+          objective: z.string().optional().describe("an objective's address, e.g. ARC-004-O2 — every plan on it"),
+          arc: z.string().optional().describe("an arc's id, e.g. ARC-004 — the arc and every plan under it"),
+          bail: z.boolean().optional().describe("stop at the first failure"),
+          dryRun: z.boolean().optional().describe("list what would run instead of running"),
+        },
+        async ({ projectCode, document, objective, arc, bail, dryRun }) => {
+          try {
+            return text(renderRun(await hub("Agent", "runProofs", { projectCode, document, objective, arc, bail, dryRun })));
           } catch (e) { return fail(e); }
         }
       ),

@@ -33,6 +33,12 @@ fs.mkdirSync(path.join(scratch, "work"), { recursive: true });
 // exercises a janitor never gets the keys to the real house.
 process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
 fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
+// AND THE SETTINGS STORE, for the same reason one step further out: the retention window is now a
+// SETTING (`nudge.json keepHours`), so without this override the janitor claims below would read
+// whatever he has configured on this machine and pass or fail for a reason that has nothing to do
+// with the code. A scratch path that does not exist reads as the defaults, which is what a claim
+// about the default window needs.
+process.env.AUTOBOT_NUDGE_FILE = path.join(scratch, "nudge.json");
 
 const worklist = require("../electron/agents/worklist.cjs");
 const sessions = require("../electron/agents/sessions.cjs");
@@ -231,13 +237,37 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
     const deadRun = worklist.newRunId();
     worklist.writeRun(oldRun, "session:t-probe", [{ id: "1", text: "done long ago", state: "done" }], "skill:old");
     worklist.writeRun(deadRun, "session:t-probe", [{ id: "1", text: "died here", state: "active" }], "skill:dead");
-    const future = Date.now() + 15 * 24 * 60 * 60 * 1000;
-    const swept = worklist.pruneRuns(future);
-    assert.ok(swept >= 1, "the old closed run was swept");
-    assert.deepEqual(worklist.read(worklist.runOwner(oldRun)), [], "closed + old = gone");
+    // THE WINDOW IS PINNED FROM BOTH SIDES, not merely exceeded: a sweep at eleven hours must
+    // leave the closed run standing, and one at thirteen must take it. A single far-future call
+    // passed just as happily when the window was fourteen days, so it claimed nothing about it.
+    const fresh = worklist.pruneRuns(Date.now() + 11 * 60 * 60 * 1000);
+    assert.equal(worklist.read(worklist.runOwner(oldRun))[0].text, "done long ago",
+      "eleven hours on, a closed run is still there — the window is twelve");
+    assert.equal(fresh, 0, "nothing is swept before the window");
+    const swept = worklist.pruneRuns(Date.now() + 13 * 60 * 60 * 1000);
+    assert.ok(swept >= 1, "thirteen hours on, the closed run is swept");
+    assert.deepEqual(worklist.read(worklist.runOwner(oldRun)), [], "closed + past the window = gone");
     assert.equal(worklist.read(worklist.runOwner(deadRun))[0].text, "died here",
       "a run that died mid-list is NEVER swept — where it died is the record");
-    ok("retention: closed runs age out after two weeks; died runs stay until someone acts");
+    ok("retention: closed runs age out after twelve hours; died runs stay until someone acts");
+
+    // AND THE WINDOW IS HIS TO SET — "how quickly the worklist gets deleted should be added to the
+    // worklist settings." Twelve is the default, not the rule, so the claim has to be that the
+    // SETTING decides: the same run that survived eleven hours above is swept at two when the
+    // setting says one.
+    const settable = worklist.newRunId();
+    worklist.writeRun(settable, "session:t-probe", [{ id: "1", text: "closed", state: "done" }], "skill:settable");
+    require("../electron/agents/nudge.cjs").writeSettings({ keepHours: 1 });
+    assert.equal(worklist.pruneRuns(Date.now() + 30 * 60 * 1000), 0, "half an hour in, a one-hour window keeps it");
+    assert.ok(worklist.pruneRuns(Date.now() + 2 * 60 * 60 * 1000) >= 1, "two hours in, a one-hour window takes it");
+    assert.deepEqual(worklist.read(worklist.runOwner(settable)), []);
+    // A FLOOR OF ONE HOUR, because "delete instantly" reads like tidiness and is really a way to
+    // lose the record of work that just finished, unrecoverably.
+    assert.equal(require("../electron/agents/nudge.cjs").writeSettings({ keepHours: 0 }).settings.keepHours, 1,
+      "zero is clamped to an hour — the one destructive knob has a floor");
+    fs.rmSync(process.env.AUTOBOT_NUDGE_FILE, { force: true });
+    ok("retention: the window is the worklist SETTING, floored at an hour, not a constant");
+
     fs.unlinkSync(worklist.DIR + "/run-" + deadRun + ".json");
   }
 
