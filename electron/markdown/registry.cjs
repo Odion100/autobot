@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { parse } = require("./parse.cjs");
-const { registrationsOf, deriveState, deriveArc, arcOfAddress, specsOf } = require("./blocks.cjs");
+const { registrationsOf, refusalsOf, deriveState, deriveArc, arcOfAddress, specsOf } = require("./blocks.cjs");
 
 const FILE = () => process.env.AUTOBOT_DOCUMENTS || path.join(os.homedir(), ".autobot", "documents.json");
 const PROJECTS = () => process.env.AUTOBOT_PROJECTS || path.join(os.homedir(), ".autobot", "projects.json");
@@ -103,10 +103,37 @@ function upsert(row = {}) {
   return { ok: true, row: i >= 0 ? rows[i] : clean, updated: i >= 0, dropped };
 }
 
+/**
+ * EVERY ROW THIS FILE OWNS — a document may carry several leaves, so a path is not one row.
+ * `byPath` answers the first; teardown needs all of them.
+ */
+function rowsAtPath(absPath) {
+  const { project, rel } = locate(absPath);
+  const abs = path.resolve(absPath);
+  return read().filter((r) => (r.project === project && r.path === rel) || r.path === abs);
+}
+
+/**
+ * A FILE THAT IS GONE IS NOT REGISTERED — reap its rows, and say what was reaped.
+ *
+ * This is the one file event the registry had no answer for. A leaf TORN DOWN was handled (the
+ * parse finds no registration and the row is dropped), and a leaf CHANGED was handled, but a
+ * document DELETED hit `cannot read` and returned a refusal — which left its rows standing with
+ * their lifecycles still running. Measured 2026-10-30: four report rows outlived their files,
+ * silently dropped by every reader at read time rather than removed, so nothing retired them and
+ * nothing could. A row is a claim that a document exists; when it does not, the claim goes.
+ */
+function reapMissing(absPath) {
+  const rows = rowsAtPath(absPath);
+  if (!rows.length) return { ok: true, registered: false, reaped: [] };
+  rows.forEach((r) => remove(r.id));
+  return { ok: true, registered: false, reaped: rows.map((r) => r.id) };
+}
+
 /** Parse a file, and if it carries a registration leaf, register it. The one door the triggers call. */
 async function register(absPath, source) {
   const text = source != null ? String(source) : readFile(absPath);
-  if (text == null) return { ok: false, error: `cannot read ${absPath}` };
+  if (text == null) return reapMissing(absPath);
   const blocks = await parse(text);
   return registerParsed(absPath, registrationsOf(blocks), blocks, text);
 }
@@ -116,6 +143,10 @@ async function register(absPath, source) {
  * 2026-10-29 — the spec fixture holding the mock leaf it exercises), and each leaf gets its own
  * row, deriving state by its own kind out of the one file. */
 function registerParsed(absPath, reg, blocks, text) {
+  // A MALFORMED LEAF IS A FAULT, NOT AN ABSENCE. The parse already computed why it could not be
+  // registered; saying nothing made it indistinguishable from a document that claimed nothing, so
+  // the author never learned and no row ever appeared. The refusal rides the answer.
+  const refused = refusalsOf(blocks);
   const regs = (Array.isArray(reg) ? reg : reg ? [reg] : []).filter(Boolean);
   const { project, rel } = locate(absPath);
   // A DOCUMENT THAT STOPS SAYING WHAT IT IS STOPS BEING IT. The leaf is the identity (RFC-073),
@@ -129,9 +160,11 @@ function registerParsed(absPath, reg, blocks, text) {
   const dropped = standing.filter((r) => !keep.has(r.id));
   dropped.forEach((r) => remove(r.id));
   if (!regs.length) {
+    // NOTHING REGISTERED — and `refused` is what separates "this document claims nothing" from
+    // "this document tried and got it wrong". Only the second deserves to reach whoever wrote it.
     return dropped.length
-      ? { ok: true, registered: false, removed: dropped.map((r) => r.id).join("|") }
-      : { ok: true, registered: false };
+      ? { ok: true, registered: false, removed: dropped.map((r) => r.id).join("|"), refused }
+      : { ok: true, registered: false, refused };
   }
   let first = null;
   for (const g of regs) {
@@ -163,7 +196,7 @@ function registerParsed(absPath, reg, blocks, text) {
       new Set([String(g.arc || "").trim(), served].filter(Boolean)).forEach(reparseArcOf);
     }
   }
-  return { ok: true, registered: true, row: first.row, updated: first.updated, rows: regs.length };
+  return { ok: true, registered: true, row: first.row, updated: first.updated, rows: regs.length, refused };
 }
 
 /**
@@ -269,4 +302,4 @@ function noteFile(absPath) {
   return register(abs).catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
 
-module.exports = { FIELDS, read, upsert, register, registerParsed, setState, noteFile, list, get, byPath, remove, locate, absPathOf, file: FILE };
+module.exports = { FIELDS, read, upsert, register, registerParsed, setState, noteFile, list, get, byPath, rowsAtPath, reapMissing, remove, locate, absPathOf, file: FILE };

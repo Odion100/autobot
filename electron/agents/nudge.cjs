@@ -48,17 +48,23 @@ const DEFAULTS = Object.freeze({
   ctxCeilingPct: 70,
   // WHICH SOURCES COUNT — prefixes, matched literally. His: "job and skill nudge."
   sources: ["job:", "skill:"],
-  // HOW LONG A CLOSED RUN IS KEPT, in hours — his ask by name: "how quickly the worklist gets
-  // deleted should be added to the worklist settings." It lives here rather than beside the janitor
-  // because this file is already the panel's store and a constant in `worklist.cjs` is a number only
-  // an agent can change; the panel is the one surface where he can.
+  // HOW LONG A CLOSED RUN IS KEPT — AND IT IS TWO NUMBERS, because they are two kinds of thing.
   //
-  // TWELVE, down from the fortnight the constant held. Two weeks was set when a closed run was the
-  // only account a procedure left behind; a run now ATTACHES its product — a report, a branch, a
-  // fixture — so the thing worth keeping outlives the row by construction and the row is the
-  // receipt. A day of receipts is a readable drawer; a fortnight of them is the pile the rule exists
-  // to prevent. A run that DIED mid-list is never swept at any setting.
-  keepHours: 12,
+  // His ask was about the LISTS: "how quickly the worklist gets deleted should be added to the
+  // worklist settings." Applied to every run record it emptied his jobs and lanes tabs — 93 job and
+  // lane sources left closed-run residue in `.chore-stamps.json` with no record behind it. His
+  // correction: "I never meant the job lanes… I was only talking about what is the list. If I was
+  // talking about all of them, I would have said the work lists."
+  //
+  // The reasoning that justified twelve hours — a run attaches its product, so the row is only a
+  // receipt — is TRUE OF A SKILL RUN and false of a lane. A skill's list is a procedure's own
+  // bookkeeping, read the day it ran and never again. A lane is a BRANCH somebody may come back to
+  // in a fortnight, with a report pointer and a bring-in receipt hanging off it; sweeping its record
+  // orphans the branch and loses what came of it.
+  //
+  // A run that DIED mid-list is never swept at either setting.
+  keepHours: 12, // closed SKILL and session lists — the receipts
+  keepWorkHours: 24 * 14, // closed JOB and LANE runs — the things with artifacts attached
 });
 
 const clampInt = (v, lo, hi, fallback) => {
@@ -88,6 +94,9 @@ function normalizeSettings(raw) {
     // really a way to lose the record of work that just finished, before anybody has read it — and
     // it is unrecoverable, unlike every other value here.
     keepHours: clampInt(r.keepHours, 1, 24 * 14, DEFAULTS.keepHours),
+    // A LONGER FLOOR, deliberately: a lane's record is the only thing tying a branch to the work it
+    // came from, so "sweep it within the hour" is not a tidiness choice anybody should be offered.
+    keepWorkHours: clampInt(r.keepWorkHours, 24, 24 * 90, DEFAULTS.keepWorkHours),
   };
 }
 

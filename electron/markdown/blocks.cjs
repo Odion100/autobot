@@ -116,6 +116,32 @@ function registrationsOf(blocks) {
   return out;
 }
 
+/**
+ * WHAT THE PARSE REFUSED, AND WHY — the half that used to be thrown away.
+ *
+ * `registrationsOf` walks every block and `continue`s past the ones it cannot use. That silence is
+ * the defect: a malformed leaf registers nothing and reads exactly like a document that never
+ * claimed anything, so the author learns nothing and the row never appears. Measured 2026-10-30 —
+ * a report was filed carrying TWO `::report` leaves, one of them unregistered and flagged on screen
+ * as "no subtype, no retention", and nothing anywhere said so; the write was parsed, the fault was
+ * computed, and the knowledge was discarded.
+ *
+ * A separate function rather than a changed return, because `registrationsOf` has callers that
+ * index and iterate it — a refusal is new information, not a new shape for the old answer.
+ */
+function refusalsOf(blocks) {
+  const out = [];
+  for (const b of blocks || []) {
+    const def = REGISTRATION[b.name];
+    if (!def) continue; // not a registration block at all — nothing was being claimed
+    if (b.kind !== "leaf")
+      out.push({ name: b.name, line: Number(b.line) || 0, why: `::${b.name} must be a LEAF — one line, no body` });
+    else if (!String((b.attrs || {})[def.id] || "").trim())
+      out.push({ name: b.name, line: Number(b.line) || 0, why: `::${b.name} carries no ${def.id}= — nothing to register it as` });
+  }
+  return out;
+}
+
 /** The PRIMARY identity — the first leaf: what the document is when one answer is needed (fires,
  * audiences, teardown-by-identity). The further leaves register too; see registrationsOf. */
 function registrationOf(blocks) {
@@ -519,6 +545,7 @@ module.exports = {
   FIRING,
   registrationOf,
   registrationsOf,
+  refusalsOf,
   hasFired,
   deriveState,
   firstLine,

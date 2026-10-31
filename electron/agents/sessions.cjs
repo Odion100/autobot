@@ -1251,7 +1251,32 @@ async function announceDocument(absPath, opts = {}) {
   if (!res.ok) return res;
   // EVERY leaf registers — a document can carry several identities now (the spec fixture holding
   // the mock leaf it exercises); the primary (`res.registration`) still decides fires below.
-  if (res.registration) documents.registerParsed(abs, res.registrations || res.registration, res.blocks, res.text);
+  const reg = res.registration
+    ? documents.registerParsed(abs, res.registrations || res.registration, res.blocks, res.text)
+    : null;
+  // A LEAF THAT COULD NOT REGISTER GOES BACK TO WHOEVER WROTE IT. His design: *"if you file it
+  // incorrectly, the system should be able to pick that up and send a message to the agent who
+  // wrote it — which we should be able to know because they called the bash to write it. And that
+  // message as a log that I can see, that you can fix."*
+  //
+  // BOTH HALVES WERE ALREADY HERE AND NEITHER WAS JOINED TO THE OTHER. The parse computes the
+  // fault (`refusalsOf`) and `registerParsed` now returns it; `opts.by` has always carried the
+  // session whose tool was in flight when the write landed. So the only thing missing was this
+  // line: the answer was being discarded one statement after it was computed. An ambient event
+  // rather than a private message, because a fault he cannot see is the same silence in a
+  // different place — this reaches the author's session AND his log.
+  if (reg && reg.refused && reg.refused.length)
+    emitAmbient({
+      kind: "document.refused",
+      by: opts.by || "",
+      project: documents.locate(abs).project || "",
+      path: documents.locate(abs).rel || abs,
+      refused: reg.refused,
+      // The wording is the message, so it is composed once here rather than by each reader.
+      text: `${reg.refused.length} registration leaf${reg.refused.length === 1 ? "" : "es"} refused in ${
+        documents.locate(abs).rel || abs
+      } — ${reg.refused.map((r) => `line ${r.line}: ${r.why}`).join("; ")}`,
+    });
   // THE REGISTRY IS THE FILTER (§3): only a registered document fires. Everything else cost one
   // lookup and one parse that also answered "should I care".
   const row = documents.byPath(abs);

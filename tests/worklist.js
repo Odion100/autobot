@@ -268,6 +268,40 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
     fs.rmSync(process.env.AUTOBOT_NUDGE_FILE, { force: true });
     ok("retention: the window is the worklist SETTING, floored at an hour, not a constant");
 
+    // WORK IS NOT A RECEIPT, AND ONE WINDOW FOR BOTH EMPTIED HIS JOBS AND LANES TABS. A `skill:`
+    // list is a procedure's own bookkeeping; a `lane:` run IS the lane's registration, so sweeping
+    // it does not lose a receipt, it unregisters the branch and puts it beyond the only verb
+    // allowed to clear it. The split landed with the suite count unchanged, which is exactly how a
+    // later tidy-up collapses it back to one number — so both families are pinned here, together.
+    {
+      const listRun = worklist.newRunId();
+      const laneRun = worklist.newRunId();
+      const jobRun = worklist.newRunId();
+      const closed = [{ id: "1", text: "closed", state: "done" }];
+      worklist.writeRun(listRun, "session:t-probe", closed, "skill:a-receipt");
+      worklist.writeRun(laneRun, "session:t-probe", closed, "lane:lane/t-probe-branch");
+      worklist.writeRun(jobRun, "session:t-probe", closed, "job:t-probe-job");
+      require("../electron/agents/nudge.cjs").writeSettings({ keepHours: 1, keepWorkHours: 24 });
+      worklist.pruneRuns(Date.now() + 2 * 60 * 60 * 1000);
+      assert.deepEqual(worklist.read(worklist.runOwner(listRun)), [],
+        "two hours past a one-hour list window, the receipt is gone");
+      assert.equal(worklist.read(worklist.runOwner(laneRun))[0].text, "closed",
+        "the SAME sweep leaves the lane run standing — its window is the work one, not the list one");
+      assert.equal(worklist.read(worklist.runOwner(jobRun))[0].text, "closed",
+        "and the job run with it");
+      worklist.pruneRuns(Date.now() + 25 * 60 * 60 * 1000);
+      assert.deepEqual(worklist.read(worklist.runOwner(laneRun)), [],
+        "past the WORK window the lane run does age out — a longer window, not an exemption");
+      assert.deepEqual(worklist.read(worklist.runOwner(jobRun)), []);
+      // A FLOOR OF A DAY on the work window, and it is a different floor for a different reason:
+      // an hour is survivable for a receipt and is not survivable for the only record tying a
+      // branch to the work it came from.
+      assert.equal(require("../electron/agents/nudge.cjs").writeSettings({ keepWorkHours: 1 }).settings.keepWorkHours, 24,
+        "an hour is clamped up to a day — a lane's record is not an hour's worth of tidiness");
+      fs.rmSync(process.env.AUTOBOT_NUDGE_FILE, { force: true });
+      ok("retention: a lane or job run gets the WORK window, so a sweep of the lists never unregisters a branch");
+    }
+
     fs.unlinkSync(worklist.DIR + "/run-" + deadRun + ".json");
   }
 

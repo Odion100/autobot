@@ -220,21 +220,33 @@ function markLaneRepo(id, repo) {
 // every consumer of the worklist pull in the settings module to delete nothing. A store that cannot
 // be read falls back to the default rather than refusing to prune — a janitor that stops working
 // because a settings file is malformed is a worse failure than one that uses twelve hours.
+// WORK HAS ARTIFACTS; A LIST IS A RECEIPT. A `job:` or `lane:` run ties a branch, a report pointer
+// and a bring-in receipt to the work they came from, so sweeping its record orphans all three. A
+// `skill:` run is a procedure's own bookkeeping — read the day it ran, never again.
+//
+// Applying ONE window to both emptied his jobs and lanes tabs: 93 job/lane sources were left with
+// closed-run residue in the chore stamps and no record behind it. His correction, and it is the
+// whole rule: "I never meant the job lanes… I was only talking about what is the list."
+const WORK_SOURCE = /^(job|lane):/;
 const KEEP_FALLBACK_H = 12;
-function keepMs() {
+const KEEP_WORK_FALLBACK_H = 24 * 14;
+function windows() {
   try {
-    return require("./nudge.cjs").readSettings().keepHours * 60 * 60 * 1000;
+    const s = require("./nudge.cjs").readSettings();
+    return { list: s.keepHours * 3600000, work: s.keepWorkHours * 3600000 };
   } catch {
-    return KEEP_FALLBACK_H * 60 * 60 * 1000;
+    return { list: KEEP_FALLBACK_H * 3600000, work: KEEP_WORK_FALLBACK_H * 3600000 };
   }
 }
+const keepFor = (source, w) => (WORK_SOURCE.test(String(source || "")) ? w.work : w.list);
 // A SOURCE THAT STARTS "lane/" IS A MISSPELLED LANE, not a kind of run. Every reader keys on
 // "lane:", so this spelling files a record nothing can ever show — the write door refuses it by
 // name (sessions.cjs), and pruneRuns retires the ones already on disk. One predicate, so the
 // refusal and the janitor can never drift apart about what the dead convention looks like.
 const misspelledLane = (source) => /^lane\//.test(String(source || ""));
 
-function pruneRuns(now = Date.now(), keep = keepMs()) {
+function pruneRuns(now = Date.now(), keep = null) {
+  const w = keep == null ? windows() : { list: keep, work: keep };
   let names = [];
   try { names = fs.readdirSync(DIR); } catch { return 0; }
   let swept = 0;
@@ -256,7 +268,7 @@ function pruneRuns(now = Date.now(), keep = keepMs()) {
         continue;
       }
       const items = Array.isArray(r.items) ? r.items : [];
-      if (items.length && items.every((i) => i.state === "done") && now - (r.updatedAt || 0) > keep) {
+      if (items.length && items.every((i) => i.state === "done") && now - (r.updatedAt || 0) > keepFor(r.source, w)) {
         fs.unlinkSync(path.join(DIR, n));
         swept++;
       }

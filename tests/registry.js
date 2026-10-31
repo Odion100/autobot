@@ -129,9 +129,11 @@ console.log("\nnoteFile — the door the triggers call");
   assert.strictEqual(reg.get("RFC-000"), null);
   ok("anything that is not markdown is skipped without being read");
 
+  // A PATH THAT CANNOT BE READ IS A DOCUMENT THAT IS NOT THERE, and the answer is a reap rather
+  // than a refusal: the one thing it must never do is throw into the emit that called it.
   const gone = await reg.noteFile(path.join(sv, "RFCs", "never-existed.md"));
-  assert.ok(!gone.ok && /cannot read/.test(gone.error));
-  ok("a path that cannot be read answers with an error — it never throws into the emit that called it");
+  assert.ok(gone.ok && !gone.registered && Array.isArray(gone.reaped) && !gone.reaped.length);
+  ok("a path that cannot be read answers calmly — nothing registered, nothing reaped, nothing thrown");
 }
 
 console.log("\nstate — derived by the parse alone, wipeable, never identity");
@@ -622,6 +624,88 @@ console.log("\nthe spec inventory — grabbing run blocks without parsing markdo
   ok("a state-only reparse says nothing about specs — undefined is 'not saying', not 'none'");
   reg.remove("ARC-700");
   reg.remove("RFC-701");
+}
+
+// ---- A DELETED DOCUMENT TAKES ITS ROWS WITH IT ------------------------------------------------
+//
+// The one file event the registry had no answer for. A leaf torn down was handled and a leaf
+// changed was handled, but a file DELETED returned `cannot read` and left its rows standing with
+// their lifecycles still running — four report rows outlived their files on his disk, dropped by
+// every reader at read time rather than removed, so nothing retired them and nothing could.
+{
+  const doomed = path.join(sv, "RFCs", "RFC-800-about-to-be-deleted.md");
+  fs.writeFileSync(doomed, "::rfc{id=RFC-800}\n\nhere now\n");
+  await reg.register(doomed);
+  assert.ok(reg.get("RFC-800"), "registered while the file exists");
+
+  fs.rmSync(doomed);
+  const after = await reg.register(doomed);
+  assert.deepEqual(after.reaped, ["RFC-800"], "the reap NAMES what it took — a silent sweep is not an account");
+  assert.strictEqual(after.registered, false);
+  assert.strictEqual(reg.get("RFC-800"), null, "a row is a claim the document exists; the file is gone, so the claim goes");
+  ok("a deleted document takes its rows with it, instead of leaving a lifecycle running on nothing");
+
+  // AND SEVERAL LEAVES IN ONE FILE GO TOGETHER. A path is not one row (his design, 2026-10-29 —
+  // the spec fixture carrying the mock leaf it exercises), so reaping the first and stopping would
+  // leave the rest behind, which is the same bug with a smaller number.
+  const twin = path.join(sv, "RFCs", "RFC-801-two-leaves.md");
+  fs.writeFileSync(twin, "::rfc{id=RFC-801}\n\n::report{id=REP-801}\n\ntwo leaves, one file\n");
+  await reg.register(twin);
+  assert.strictEqual(reg.rowsAtPath(twin).length, 2, "one file, two rows");
+  fs.rmSync(twin);
+  const both = await reg.register(twin);
+  assert.deepEqual(both.reaped.sort(), ["REP-801", "RFC-801"], "both rows named");
+  assert.strictEqual(reg.rowsAtPath(twin).length, 0, "and both gone");
+  ok("every row a deleted file owned is reaped, not just the first one found");
+
+  // A PATH THE REGISTRY NEVER KNEW IS NOT AN ERROR. The watcher fires on deletes it does not care
+  // about, and a refusal there would make noise out of nothing.
+  const stranger = path.join(sv, "RFCs", "never-registered.md");
+  const none = await reg.register(stranger);
+  assert.deepEqual(none.reaped, [], "nothing to reap, and nothing said about it");
+  assert.strictEqual(none.ok, true, "a delete the registry never cared about is not a failure");
+  ok("a file the registry never held reaps nothing and refuses nothing");
+}
+
+// ---- A MALFORMED LEAF IS A FAULT, NOT AN ABSENCE ---------------------------------------------
+//
+// His design, 2026-10-30: *"When you write a file, we already pick it up and register it if it has
+// the leaf. If you file it incorrectly, the system should be able to pick that up and send a
+// message to the agent who wrote it — and that message as a log that I can see, that you can fix."*
+// The parse already computed the fault and threw it away, which is why a report filed carrying two
+// `::report` leaves registered one, flagged the other on screen as "no subtype, no retention", and
+// said nothing to anybody.
+{
+  const twoLeaves = path.join(sv, "RFCs", "RFC-810-one-good-one-broken.md");
+  fs.writeFileSync(twoLeaves, '::rfc{id=RFC-810}\n\n::report{}\n\nthe second leaf claims nothing\n');
+  const r = await reg.register(twoLeaves);
+  assert.strictEqual(r.registered, true, "the good leaf still registers — one fault does not void the document");
+  assert.strictEqual(r.refused.length, 1, "and the broken one is REPORTED rather than skipped");
+  assert.match(r.refused[0].why, /carries no id=/, "the refusal says what is wrong, in words");
+  assert.strictEqual(r.refused[0].line, 3, "and WHERE — a fault with no line is a fault nobody can fix");
+  assert.strictEqual(r.refused[0].name, "report");
+  ok("a leaf that cannot register is reported with its line and its reason, not dropped in silence");
+
+  // THE DISTINCTION THAT MAKES IT USEFUL. A document claiming nothing is the normal case and must
+  // stay quiet; only a document that TRIED and got it wrong has anything to tell its author.
+  const plain = path.join(sv, "RFCs", "RFC-811-just-prose.md");
+  fs.writeFileSync(plain, "# no leaf here\n\njust words\n");
+  const quiet = await reg.register(plain);
+  assert.strictEqual(quiet.registered, false);
+  assert.deepEqual(quiet.refused, [], "a document that claims nothing refuses nothing — silence is correct here");
+  ok("claiming nothing and getting it wrong are different answers, and only one of them speaks");
+
+  // A CONTAINER WHERE A LEAF BELONGS. `:::report` with a body is the other way to get this wrong,
+  // and it is the one that looks most like it worked.
+  const fat = path.join(sv, "RFCs", "RFC-812-leaf-with-a-body.md");
+  fs.writeFileSync(fat, ':::report{id=REP-812}\na body where a leaf belongs\n:::\n');
+  const fatR = await reg.register(fat);
+  assert.strictEqual(fatR.registered, false, "a container is not a leaf, so nothing registers");
+  assert.strictEqual(fatR.refused.length, 1);
+  assert.match(fatR.refused[0].why, /must be a LEAF/);
+  ok("a registration block written as a container is refused by name, not quietly ignored");
+
+  reg.remove("RFC-810");
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
