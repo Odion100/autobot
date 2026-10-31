@@ -18,7 +18,7 @@ const TOOL_NAME = (t) => `mcp__${SERVER}__${t}`;
 const TOOL_NAMES = [
   "runTests", "runProofs", "probe", "projects", "logs", "stats",
   "tv", "reply", "board", "comments",
-  "nav", "refresh", "act", "highlight", "lanes",
+  "nav", "refresh", "act", "lanes",
   "connect", "disconnect",
   "terminal", "terminals",
   "shot",
@@ -990,23 +990,6 @@ function toolsFor(identity = {}) {
           try {
             const r = await hub("Agent", "act", { projectCode, [kind]: target, as: who, say });
             return text(r && r.ok ? r.label : `act refused — ${(r && r.error) || "no reason given"}`);
-          } catch (e) { return fail(e); }
-        }
-      ),
-      tool(
-        "highlight",
-        "Point at something in the open window — a row, a region — without navigating.",
-        {
-          projectCode: z.string(),
-          target: z.string().optional().describe("Service.Module.method — fuzzy, resolved against the live tree"),
-          file: z.string().optional().describe("a repo-relative file path, instead of a namespace"),
-          say: z.string().optional(),
-        },
-        async ({ projectCode, target, file, say }) => {
-          try {
-            const r = await hub("Agent", "highlight", { projectCode, ...(file ? { file } : { namespace: target }), as: who, say });
-            if (!r || !r.ok) return text(`highlight refused — ${(r && r.error) || "no reason given"}${r && r.candidates ? `\n  ${r.candidates.slice(0, 8).join("\n  ")}` : ""}`);
-            return text(r.label);
           } catch (e) { return fail(e); }
         }
       ),
