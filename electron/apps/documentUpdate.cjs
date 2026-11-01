@@ -110,6 +110,11 @@ async function buildUpdate(payload = {}, absPath = "") {
       // than inferred from the summary's wording, because pattern-matching prose to classify an
       // event is guessing at the one thing the sender already knows.
       ...(payload.decision ? { decision: true } : {}),
+      // A FAULT RIDES THE SAME WAY A DECISION DOES — flagged by the sender, never inferred. It is
+      // what lets the headline say "something you wrote is broken" instead of "a document you are
+      // a member of was updated", which is the wrong sentence for a block reporting itself from a
+      // chat: there is no document, and the recipient is the author rather than a member.
+      ...(payload.fault ? { fault: true } : {}),
       // Only when the document actually is an arc. An empty field on every other document would
       // make `exists` useless as a way to ask "is this an arc update?".
       ...(arc ? { arc } : {}),

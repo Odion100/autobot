@@ -956,6 +956,12 @@ const DELIVERY_TAIL =
   `\n\nRead the file rather than trusting this line — it is current and this is a ` +
   `summary. You are on it because the document says so (\`::members\`), which is also how ` +
   `you stop being on it.`;
+// A FAULT IS NOT AN UPDATE, AND THE TAIL IS WRONG FOR IT TWICE OVER: there is nothing to go and
+// read — the summary IS the whole fact — and the recipient is not on it by `::members`, it is on
+// it because it WROTE the thing that broke. A block reporting itself from the chat was arriving
+// as "a document you are a member of was updated", pointing at a chat transcript. His catch:
+// *"why does this say document? It's not coming from the document."*
+const FAULT_TAIL = `\n\nThis is yours to fix where you wrote it. Nothing to open — the line above is the whole fact.`;
 // A DECISION GETS ITS OWN SENTENCE. "A document you are a member of was updated" is the right
 // headline for an edit — it says the shape changed and the recipient should go and look. It is the
 // WRONG headline for a press: a verdict is one complete fact, the summary already carries it, and
@@ -970,12 +976,26 @@ const deliveryHeadline = (m) => {
       : `A decision was made in a document you are on — ${where}.`;
   if (m.threads.length > 1)
     return `${m.threads.length} threads you are in moved — ${where}: ${m.threads.join(", ")}.`;
+  if (m.faults > 0 && m.faults === m.summaries.filter(Boolean).length) {
+    // A FAULT NAMES A PLACE, NOT A FILE. `.systemview/chats/<project>.<room>.jsonl` is the room's
+    // COMMAND log — 103 of 107 lines in his were `command` records — not the conversation, which
+    // lives in the agent runtime's own transcript outside the project entirely. So printing that
+    // path invited somebody to open the wrong thing, and there is no right thing to open: the
+    // summary is the whole fact. His catch: "how is that the chat?"
+    const spot = /^\.systemview\/chats\//.test(m.path || "") ? `the ${m.project} chat` : where;
+    return m.faults > 1
+      ? `${m.faults} things you wrote are broken — in ${spot}.`
+      : `Something you wrote is broken — in ${spot}.`;
+  }
   if (m.threads.length === 1) return `A thread you are in moved — ${where}, thread ${m.threads[0]}.`;
   return `A document you are a member of was updated — ${where}.`;
 };
 const composeDelivery = (m) => {
   const notes = m.summaries.filter(Boolean);
-  return `${deliveryHeadline(m)}${notes.length ? ` ${notes.join(" ")}` : ""}${DELIVERY_TAIL}`;
+  // ALL FAULTS, OR THE DOCUMENT TAIL. A merge that mixed a fault with a real edit still has a file
+  // worth opening, so the stronger instruction wins rather than the last one in.
+  const allFaults = m.faults > 0 && m.faults === notes.length;
+  return `${deliveryHeadline(m)}${notes.length ? ` ${notes.join(" ")}` : ""}${allFaults ? FAULT_TAIL : DELIVERY_TAIL}`;
 };
 // One push, one wake. `nextTurnFromHook` rides along so the turn this starts is labelled as the
 // mechanism's, never as the human typing (RFC-066 §3).
@@ -1014,6 +1034,9 @@ function deliverToMembers(e) {
       // A DECISION IS COUNTED, not inferred. The sender flags it (`documentUpdate.cjs`), and
       // the count rides the meta so a HELD delivery composed at flush time still knows.
       decisions: e.decision ? 1 : 0,
+      // Flagged by the sender like `decision`, never inferred from the wording — a headline that
+      // pattern-matched prose would be guessing at the one thing the sender knows for certain.
+      faults: e.fault ? 1 : 0,
     };
     const tag = `doc:${e.project || ""}:${e.path || ""}`;
     try {
@@ -1028,6 +1051,7 @@ function deliverToMembers(e) {
         // becomes invisible by being followed by a typo. `m.decisions` is absent on wakes written
         // before this landed, so it is coerced rather than assumed.
         m.decisions = (m.decisions || 0) + (e.decision ? 1 : 0);
+        m.faults = (m.faults || 0) + (e.fault ? 1 : 0);
         return composeDelivery(m);
       };
       const held = s.pendingDeliveries ? s.pendingDeliveries.get(tag) : null;
