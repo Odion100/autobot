@@ -708,5 +708,48 @@ console.log("\nthe spec inventory — grabbing run blocks without parsing markdo
   reg.remove("RFC-810");
 }
 
+{
+  // WHO IS ON IT, ON THE ROW — the read that makes "which arcs am I on" answerable without
+  // opening every document in every project. Members come off the document's own `::members`
+  // line; an arc also counts the owner of every objective, because being handed one objective is
+  // the commonest way to be working an arc without being listed on it.
+  const arc = path.join(sv, "RFCs", "arcs", "ARC-820-members.md");
+  fs.mkdirSync(path.dirname(arc), { recursive: true });
+  fs.writeFileSync(
+    arc,
+    "::arc{id=ARC-820 owner=systemview-test title=\"members land on the row\"}\n\n" +
+      "::members{who=systemview-test|bu}\n\n" +
+      "::objective{id=O1 owner=agentci state=open title=\"somebody else's objective\"}\n" +
+      "::objective{id=O2 owner=systemview-test state=open title=\"mine\"}\n",
+  );
+  await reg.register(arc);
+  const row = reg.get("ARC-820");
+  assert.deepEqual(row.members, ["systemview-test", "bu"], "the document's members are on the row");
+  assert.deepEqual(row.owners.sort(), ["agentci", "systemview-test"], "every objective owner counts as on it");
+  ok("an arc's members and its objective owners are recorded on the registry row");
+
+  // A RELATION THAT ENDED HAS TO BE SAYABLE. A field merely absent from the next registration is
+  // kept by the merge, so somebody removed from `::members` would stay on the row forever — the
+  // same bug `arc: null` exists to prevent.
+  fs.writeFileSync(arc, "::arc{id=ARC-820 owner=systemview-test title=\"members land on the row\"}\n\nno members now\n");
+  await reg.register(arc);
+  const after = reg.get("ARC-820");
+  assert.ok(!after.members, "removing the members line removes them from the row, not just from the file");
+  assert.ok(!after.owners, "and the objectives went with it");
+  ok("membership removed from the document is removed from the row");
+
+  // ONLY AN ARC COUNTS OWNERS. An RFC's blocks are not objectives, and a row claiming owners it
+  // does not have would answer a membership question with a false yes.
+  const plan = path.join(sv, "RFCs", "RFC-820-a-plan.md");
+  fs.writeFileSync(plan, "::rfc{id=RFC-820 arc=ARC-820-O1}\n\n::members{who=bu}\n");
+  await reg.register(plan);
+  assert.deepEqual(reg.get("RFC-820").members, ["bu"]);
+  assert.ok(!reg.get("RFC-820").owners, "owners is an arc's field — nothing else claims one");
+  ok("owners is derived for arcs only");
+
+  reg.remove("ARC-820");
+  reg.remove("RFC-820");
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} claims held — the registry`);

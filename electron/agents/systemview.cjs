@@ -22,7 +22,7 @@ const TOOL_NAMES = [
   "connect", "disconnect",
   "terminal", "terminals",
   "shot",
-  "documents", "sendUpdate", "mark",
+  "documents", "registry", "sendUpdate", "mark",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -1119,6 +1119,49 @@ function toolsFor(identity = {}) {
             return text(
               [`${r.withMembers} document${r.withMembers === 1 ? "" : "s"} with members · ${r.withUpdates} with unsent updates`, ...lines].join("\n")
             );
+          } catch (e) { return fail(e); }
+        }
+      ),
+      // THE REGISTRY, FOR AGENTS. It has existed since RFC-073 and had exactly one consumer — the
+      // window. So an agent could not ask the one question the registry is for: which documents
+      // exist, of which kind, and which of them am I on. It read the folder instead, which is the
+      // source RFC-073 retired.
+      tool(
+        "registry",
+        "THE REGISTERED DOCUMENTS — every arc, RFC, gap and report the system knows, by what they " +
+          "DECLARED in their leaf, not by where the file sits. Ask it before reading a folder: a " +
+          "path convention is not the source of truth and a document moves. Every filter is " +
+          "optional, and leaving `projectCode` off is the point — `{kind: \"arc\", member: \"<you>\"}` " +
+          "answers \"which arcs am I on\" ACROSS projects, which matters because an arc routinely " +
+          "lives in a repo you do not work in. You are ON a document if its `::members{who=}` names " +
+          "you OR you own one of its objectives. Each row carries its id, kind, path, project, the " +
+          "arc it serves, derived state, and `stale` when the file has changed since the last parse.",
+        {
+          projectCode: z.string().optional().describe("one project; omit to ask every project at once"),
+          kind: z.enum(["arc", "rfc", "gap", "report"]).optional(),
+          arc: z.string().optional().describe("only documents serving this arc or objective, e.g. ARC-004-O2"),
+          member: z.string().optional().describe("only documents you are on — a member, or the owner of an objective"),
+        },
+        async (a) => {
+          try {
+            const r = await hub("Agent", "documentsRegistry", { ...a });
+            const list = Array.isArray(r) ? r : (r && r.rows) || [];
+            if (r && r.error) return text(`no answer: ${r.error}`);
+            if (!list.length) {
+              // AN EMPTY ANSWER SAYS WHAT IT ASKED. "nothing" reads as "there is nothing", and the
+              // commonest cause is a filter that was narrower than the asker realised.
+              const said = Object.entries(a).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");
+              return text(`no registered document matches ${said || "an unfiltered ask"}`);
+            }
+            const lines = list.map((d) => {
+              const bits = [d.kind, d.id];
+              if (d.project) bits.push(`in ${d.project}`);
+              if (d.arc) bits.push(`serves ${d.arc}`);
+              if (d.stale) bits.push("STALE — file newer than the parse");
+              if (d.missing) bits.push("MISSING — the path leads nowhere");
+              return `${bits.join(" · ")}\n    ${d.path}`;
+            });
+            return text([`${list.length} document${list.length === 1 ? "" : "s"}`, ...lines].join("\n"));
           } catch (e) { return fail(e); }
         }
       ),

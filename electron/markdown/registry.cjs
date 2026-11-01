@@ -18,6 +18,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { parse } = require("./parse.cjs");
+// One split, not two: `members` here and an audience in fires.cjs must agree about what "a|b" means.
+const { splitList } = require("./fires.cjs");
 const { registrationsOf, refusalsOf, deriveState, deriveArc, arcOfAddress, specsOf } = require("./blocks.cjs");
 
 const FILE = () => process.env.AUTOBOT_DOCUMENTS || path.join(os.homedir(), ".autobot", "documents.json");
@@ -25,7 +27,14 @@ const PROJECTS = () => process.env.AUTOBOT_PROJECTS || path.join(os.homedir(), "
 
 // The only fields a row may carry. `arc` is the one relation (an RFC's `arc=`), and it is an id, not
 // content. Anything else handed to `upsert` is dropped on the floor, loudly, in the returned row.
-const FIELDS = ["id", "kind", "path", "project", "arc", "at"];
+// WHO IS ON IT IS IDENTITY, SO IT LIVES ON THE ROW. "Which arcs am I on" could only be asked one
+// project at a time, by an agent that already knew which projects to ask — the knowledge the
+// question was supposed to supply. Membership was readable only by opening every document, and an
+// arc is routinely stored in a project the agent working it does not live in. `members` is the
+// document's `::members{who=}`; `owners` is the distinct set of `owner=` on an arc's objectives,
+// because being handed one objective is the commonest way to be on an arc without being listed on
+// it. Both are ids, like `arc` — never content.
+const FIELDS = ["id", "kind", "path", "project", "arc", "members", "owners", "at"];
 
 function read() {
   try {
@@ -166,6 +175,18 @@ function registerParsed(absPath, reg, blocks, text) {
       ? { ok: true, registered: false, removed: dropped.map((r) => r.id).join("|"), refused }
       : { ok: true, registered: false, refused };
   }
+  // Read once for the whole file: the members line is the document's, not a leaf's, so every row
+  // this file produces carries the same one.
+  const membersLine = (blocks || []).find((b) => b.name === "members" && b.kind === "leaf");
+  const members = membersLine ? splitList(membersLine.attrs.who) : [];
+  const owners = [
+    ...new Set(
+      (blocks || [])
+        .filter((b) => b.name === "objective")
+        .map((b) => String((b.attrs && b.attrs.owner) || "").trim())
+        .filter(Boolean),
+    ),
+  ];
   let first = null;
   for (const g of regs) {
     // WHAT IT SERVED BEFORE THIS PARSE, read before the row is overwritten — because a DETACH has
@@ -174,7 +195,18 @@ function registerParsed(absPath, reg, blocks, text) {
     const served = String(((get(g.id) || {}).arc) || "").trim();
     // `arc: g.arc || null` — NULL, not undefined, when the leaf no longer carries one. The parse
     // is the only thing that knows a relation was removed, so it has to be able to say so.
-    const r = upsert({ id: g.id, kind: g.kind, path: rel, project, arc: g.arc || null });
+    // `|| null` on both, for the same reason `arc` carries it: the parse is the only thing that can
+    // say a relation ENDED, and a field merely absent from the new registration would be kept by
+    // the merge — so somebody removed from `::members` would stay on the row forever.
+    const r = upsert({
+      id: g.id,
+      kind: g.kind,
+      path: rel,
+      project,
+      arc: g.arc || null,
+      members: members.length ? members : null,
+      owners: g.kind === "arc" && owners.length ? owners : null,
+    });
     if (!r.ok) return r;
     // RFC-073 §1.4 — identity above is written only by registration; this `state` is derived ONLY
     // here, by the parse that just happened, BY THIS ROW'S OWN KIND — the spec row reads the
