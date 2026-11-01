@@ -1208,6 +1208,20 @@ function emitAmbient(event = {}) {
   if (ambient.length > AMBIENT_LIMIT) ambient.splice(0, ambient.length - AMBIENT_LIMIT);
   for (const sub of ambientSubs) { try { sub(e); } catch {} }
   try { e.delivered = deliverToMembers(e) || []; } catch { e.delivered = []; }
+  // EVERY WAKE IS WRITTEN DOWN, because until now none of them were. The log recorded sessions
+  // starting and ending and hooks firing, and said nothing about the thing that most often puts an
+  // agent to work: an ambient event delivered to it. So "what woke you, and why" was answerable
+  // only by the agent's own account of itself — the weakest evidence there is — and a delivery
+  // that reached NOBODY left no trace at all, which is the case worth seeing most: a message sent
+  // into a room with no live session looks identical to one that was never sent.
+  try {
+    const who = Array.isArray(e.delivered) && e.delivered.length ? e.delivered.join(", ") : "nobody live";
+    const why = String(e.summary || e.text || "").replace(/\s+/g, " ").trim().slice(0, 160);
+    logLife(
+      { key: `ambient/${e.project || "-"}` },
+      `woke ${who} — ${e.kind}${e.by ? ` from ${e.by}` : ""}${why ? `: ${why}` : ""}`,
+    );
+  } catch {}
   // A COPY PER SESSION. fireHooks hands the event to hooks.fire, which reads it and does not write
   // — but emit() downstream stamps fields onto whatever it is given, and one shared object stamped
   // by several sessions is the bug that would be invisible until two agents disagreed about which
