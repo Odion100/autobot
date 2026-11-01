@@ -146,4 +146,24 @@ console.log("\nscan — one parse, three answers");
   ok("lists split on | and , with quotes stripped — the one list rule everywhere");
 }
 
+{
+  // A COMMIT RECORD IS AN ACCOUNT, NOT A DECISION, so it must not wake anybody. Fifteen records
+  // written into one report in an evening woke every member fifteen times, for work they already
+  // knew about — his catch, with the threads untouched: "is this still sending you updates for no
+  // reason?" What tells somebody the work landed is the objective reaching done, which fires.
+  const doc = [
+    "::members{who=a|b}",
+    "",
+    "::commit{sha=deadbee}",
+    "",
+    ":::approval{ask=\"ship it?\" verdict=approved}",
+    "approving commits to the thing",
+    ":::",
+  ].join("\n");
+  const names = (await fires(doc)).map((f) => f.name);
+  assert.ok(!names.includes("commit"), "a recorded commit does not fire");
+  assert.ok(names.includes("approval"), "and a verdict beside it still does");
+  ok("a commit record is an account and wakes nobody; the decision beside it still does");
+}
+
 console.log(`\n${n} claims held — the fire scan`);

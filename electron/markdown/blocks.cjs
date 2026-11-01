@@ -66,10 +66,20 @@ const FIRING = {
     done: "done",
     summary: (b) => `${b.attrs.id || "objective"} is done — ${firstLine(b.src)}`,
   },
-  commit: {
-    answer: "sha",
-    summary: (b) => `committed ${b.attrs.sha} — ${b.label || b.attrs.message || ""}`.trim(),
-  },
+  // A COMMIT RECORD IS AN ACCOUNT, NOT A DECISION — so it does not fire, and this is the one
+  // entry removed from this map rather than added to it.
+  //
+  // `sha=` is written when a commit that ALREADY HAPPENED is recorded in a document. Nothing is
+  // decided by writing it down: the decision was the commit, somewhere else, and the block is
+  // bookkeeping that a reader consults rather than news a member has to be woken for. The cost
+  // was measured the obvious way — fifteen records added to one report in an evening woke every
+  // member of that report fifteen times, for work they already knew about, with the threads
+  // untouched. His catch: "these threads aren't even changing, is this still sending you updates
+  // for no reason?"
+  //
+  // WHAT STILL TELLS SOMEBODY THE WORK LANDED is the objective moving to `done`, or a claim being
+  // marked — both decisions, both already firing. Nothing is lost by this except the noise.
+  // commit: { answer: "sha" } — deliberately absent.
   reply: {
     // a reply has no answer attribute: the block existing is the decision
     answer: null,
