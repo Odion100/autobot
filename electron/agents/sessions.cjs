@@ -1469,6 +1469,11 @@ const WATCH_IGNORE = /(^|\/)(\.git|node_modules|dist|build)(\/|$)/;
 // So the folder is quiet in the FEED and transparent to the PARSE. Markdown anywhere gets parsed;
 // everything else in there stays out of the event stream.
 const FEED_ONLY_IGNORE = /(^|\/)\.systemview(\/|$)/;
+// SCOPED TO THIS SESSION'S OWN WORKTREE, and that bound is real: cross-repo work is expected —
+// an objective routinely lives in an arc held by another project — and a markdown write into THAT
+// repo by a shell command is seen by neither half. The schema half still covers it (Edit and Write
+// name the path, wherever it points), so the uncovered case is precisely "a heredoc into another
+// repo", and the honest answer is to say so rather than to watch every project on the machine.
 function startWatcher(s) {
   try {
     s.watcher = fs.watch(s.cwd, { recursive: true }, (eventType, rel) => {
@@ -1504,7 +1509,22 @@ function startWatcher(s) {
       const change = eventType === "rename" ? (fs.existsSync(abs) ? "created" : "deleted") : "edited";
       emit(s, { kind: "file.changed", path: abs, change, source: "watcher" });
     });
-  } catch {} // recursive watch unavailable → schema half still covers Edit/Write
+  } catch (e) {
+    // A WATCHER THAT NEVER STARTED USED TO SAY NOTHING, which is the worst shape a degradation can
+    // take: the system silently drops to Edit/Write-only, a shell heredoc moving an objective
+    // announces to nobody, and the agent reads a job document promising that "any write the
+    // harness can see" is enough. Recursive watch is unavailable on some platforms and under some
+    // mounts, so this is a real state — it just has to be a SAID one.
+    s.watcherOff = String((e && e.message) || e || "recursive watch unavailable");
+    // Said where it is READ, not into an event kind nothing renders — a message delivered to a
+    // branch that ignores it is the same silence wearing a different hat.
+    logLife(
+      s,
+      "WATCHER DID NOT START — a markdown write by a shell command (heredoc, sed, git checkout) " +
+        "will not register or announce in this session; Edit and Write still do, because the tool " +
+        `names the path. ${s.watcherOff}`,
+    );
+  }
 }
 
 // Compress a tool result to something a feed can show without drowning in bytes. The harness's
