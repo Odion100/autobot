@@ -22,7 +22,7 @@ const TOOL_NAMES = [
   "connect", "disconnect",
   "terminal", "terminals",
   "shot",
-  "documents", "registry", "sendUpdate", "mark",
+  "documents", "registry", "commitLinks", "sendUpdate", "mark",
 ].map(TOOL_NAME);
 
 async function hub(moduleName, fn, arg) {
@@ -1162,6 +1162,39 @@ function toolsFor(identity = {}) {
               return `${bits.join(" · ")}\n    ${d.path}`;
             });
             return text([`${list.length} document${list.length === 1 ? "" : "s"}`, ...lines].join("\n"));
+          } catch (e) { return fail(e); }
+        }
+      ),
+      // DO THE COMMITS AND THE DOCUMENTS AGREE. Agents commit their own work, so the record has to
+      // be checkable rather than trusted — and it is only checkable if the link is written in a
+      // form a parser reads, in both directions.
+      tool(
+        "commitLinks",
+        "CHECK THAT COMMITS AND DOCUMENTS POINT AT EACH OTHER. A commit says what it served with a " +
+          "`Serves: <id>` git trailer — the id off the document's own leaf (ARC-004-O2, RFC-073, " +
+          "G-12, a report id), repeated for several. The document says it back with a " +
+          "`::commit{sha=…}` block. This reads both sides and reports only the disagreements: " +
+          "`oneWay` (the commit names the document, the document does not carry the sha), " +
+          "`dangling` (serves an id nothing registered), `unclaimed` (the document names a sha " +
+          "whose commit points elsewhere), `unlinked` (served nothing — fine for a typo, a hole " +
+          "for a slice). Run it on your own work before you report it done.",
+        {
+          projectCode: z.string(),
+          since: z.number().optional().describe("how many commits back to read (default 200, max 2000)"),
+        },
+        async (a) => {
+          try {
+            const r = await hub("Agent", "commitLinks", { ...a });
+            if (!r || r.ok === false) return text(`no answer: ${(r && r.error) || "the hub said nothing"}`);
+            const head = `${r.checked} commits read · ${r.linked} carry a Serves trailer · ${r.documents} registered documents`;
+            if (r.agreed) return text(`${head}\n\nthe two directions agree — nothing to fix${r.unlinked.length ? ` (${r.unlinked.length} commits serve nothing, which is only a hole if they landed a slice)` : ""}`);
+            const say = (label, rows, line) => (rows.length ? [`\n${label} (${rows.length})`, ...rows.map(line)] : []);
+            return text([
+              head,
+              ...say("ONE WAY — the commit names it, the document does not carry the sha", r.oneWay, (x) => `  ${x.sha.slice(0, 8)} serves ${x.id} — add ::commit{sha=${x.sha.slice(0, 8)}} to ${x.path}`),
+              ...say("DANGLING — serves an id nothing registered", r.dangling, (x) => `  ${x.sha.slice(0, 8)} serves ${x.id} — ${x.subject}`),
+              ...say("UNCLAIMED — the document names a sha that does not point back", r.unclaimed, (x) => `  ${x.path} names ${x.sha} — that commit does not serve ${x.id}`),
+            ].join("\n"));
           } catch (e) { return fail(e); }
         }
       ),

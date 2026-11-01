@@ -1456,7 +1456,19 @@ function fileChangeOf(name, input = {}) {
 // agent has tools in flight: the same directory is also the user's, and a watcher
 // can't tell whose hand moved a file — tools-in-flight is the honest gate. Paths the
 // schema half just emitted are deduped for a beat so Edit/Write don't double-fire.
-const WATCH_IGNORE = /(^|\/)(\.git|node_modules|\.systemview|dist|build)(\/|$)/;
+const WATCH_IGNORE = /(^|\/)(\.git|node_modules|dist|build)(\/|$)/;
+// `.systemview` IS NOISE IN THE FEED AND NOT IN THE PARSE, and conflating those cost every report
+// written there its registration. The folder holds the chats, the boards, the comment stores and
+// the manifests — JSON churning constantly, which is why it was ignored outright. But reports live
+// there too, and a document's identity is its LEAF, never its folder (RFC-073). The outright
+// ignore meant the watcher never saw a report file appear, and `show()` — the hub-side filing verb
+// that used to register it instead — has been retired. So a report written as a plain file, which
+// is now the only way to write one, registered NOWHERE: measured 2026-11-01, two written in one
+// session, neither in the registry, each silently absent from every list that reads it.
+//
+// So the folder is quiet in the FEED and transparent to the PARSE. Markdown anywhere gets parsed;
+// everything else in there stays out of the event stream.
+const FEED_ONLY_IGNORE = /(^|\/)\.systemview(\/|$)/;
 function startWatcher(s) {
   try {
     s.watcher = fs.watch(s.cwd, { recursive: true }, (eventType, rel) => {
@@ -1483,6 +1495,7 @@ function startWatcher(s) {
           }, 400),
         );
       }
+      if (FEED_ONLY_IGNORE.test(rel)) return; // parsed above if it is markdown; never a feed line
       if (s.toolsInFlight === 0) return;
       const now = Date.now();
       const last = s.recentChanges.get(abs);
