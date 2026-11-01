@@ -17,9 +17,14 @@
 // was a member while buAPI heard nothing"). Hooks stay available to anyone wanting more; this is
 // the floor everybody gets.
 //
-// WHAT IT MUST NOT BECOME: a thing that nags forever. A run blocked on a human never completes, so
-// the count is kept ON THE RUN and the nudging stops — and the count is then a fact a surface can
-// render ("nudged 3 times, no movement"), which is more useful than the nudge was.
+// WHAT IT MUST NOT BECOME: a thing that nags with nothing to show for it. A run blocked on a human
+// never completes on its own, so the count is kept ON THE RUN — and the count is then a fact a
+// surface can render ("nudged 3 times, no movement"), which is more useful than the nudge was.
+//
+// THE NUDGING ITSELF DOES NOT TIME OUT. There are exactly two endings: the run CLOSES, or it is
+// DECLARED abandoned with its account attached (excusedOf). Reaching the end of a cycle is a FINAL
+// NOTICE and the position wraps — a deadline the agent can simply outlast is a deadline that
+// teaches it to wait, which is the one thing a nudge may not teach.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");

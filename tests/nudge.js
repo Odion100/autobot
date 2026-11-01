@@ -4,7 +4,7 @@
 //   1. `source` is the whole selection rule: a run with one qualifies, the session's own plan never
 //      does, and a source outside the configured list is ignored.
 //   2. A completed run is never nudged, and neither is an empty one.
-//   3. The cooldown holds, the give-up stops, and 0 means never.
+//   3. The cooldown holds, the cycle's end is a FINAL NOTICE rather than a stop, and 0 means never.
 //   4. The context ceiling refuses — but an UNKNOWN context is not treated as full.
 //   5. The nudge NAMES the item left active, so it is already the briefing.
 //   6. Moving the list RESETS the count, which is what makes "no movement" literally true.
