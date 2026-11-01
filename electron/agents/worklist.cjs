@@ -631,7 +631,14 @@ function markStatus(id, { text = "", tone = "", by = "", ts = 0 } = {}) {
 // once it is, nothing would ever choose the stamp, and two verbs that look identical mean the wrong
 // one gets picked silently. Attaching the wrong report to the wrong run is a typo in the record,
 // not an event in the world — preserving it asserts a relationship nobody ever claimed.
-const ATTACH_KINDS = ["report", "branch", "document", "arc", "card", "link"];
+// THE FOUR REGISTERED KINDS, PLUS THE THREE THINGS THAT ARE NOT DOCUMENTS. `rfc` and `gap` were
+// missing, and their absence was not cosmetic: a run could name the ARC it served and the PROJECT
+// it ran in, and not the PLAN it executed — which is the one thing the work is actually judged
+// against. The alternative was `document`, under which an RFC is indistinguishable from any other
+// file on the run, so the first question anybody asks of a finished run ("which plan was this?")
+// had no answer in the record. A gap had the same hole: closing one is work, and the run closing
+// it could not say which.
+const ATTACH_KINDS = ["report", "branch", "document", "arc", "rfc", "gap", "card", "link"];
 
 function attach(id, { kind = "", ref = "", project = "", by = "", ts = 0 } = {}) {
   const owner = runOwner(String(id || ""));
@@ -886,10 +893,13 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
           "reach the thing. Attaching never touches a screen and never replaces the list.",
         {
           kind: z
-            .enum(["report", "branch", "document", "arc", "card", "link"])
+            .enum(["report", "branch", "document", "arc", "rfc", "gap", "card", "link"])
             .describe(
-              'what sort of thing it is. "arc" is an objective address like ARC-004-O2 — the ' +
-                "work that objective commissioned, pointing back at it"
+              'what sort of thing it is. The four registered kinds say what COMMISSIONED the ' +
+                'work and each takes the id off its own leaf: "arc" is an objective address like ' +
+                'ARC-004-O2, "rfc" the plan being executed (RFC-073), "gap" the problem being ' +
+                'closed (G-12), "report" an account. Attach the plan as "rfc" and not as ' +
+                '"document" — under "document" nobody can tell which file was the contract'
             ),
           ref: z
             .string()

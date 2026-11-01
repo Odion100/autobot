@@ -53,6 +53,19 @@ try {
 
   console.log("\nit refuses what it cannot resolve");
   t("an unknown kind is refused and names the kinds", !!W.attach(id, { kind: "wat", ref: "x" }).error);
+
+  // A RUN MUST BE ABLE TO NAME THE PLAN IT EXECUTED. It could say which arc and which project and
+  // not which RFC — so the record answered "what commissioned this?" with the objective and left
+  // the contract the work is judged against as an untyped `document`.
+  t("rfc is a kind, so the plan is nameable", !W.attach(id, { kind: "rfc", ref: "RFC-073" }).error);
+  t("gap is a kind, so a closed problem is nameable", !W.attach(id, { kind: "gap", ref: "G-12" }).error);
+  const kinds = (read().attachments || []).map((x) => x.kind);
+  t("both land on the run as their own kind, not as document", kinds.includes("rfc") && kinds.includes("gap"));
+  t("and the four registered kinds are all attachable", ["arc", "rfc", "gap", "report"].every((k) => W.ATTACH_KINDS.includes(k)));
+  // Put the run back as this file's later arithmetic expects to find it — the two above are about
+  // the KINDS being accepted, not about what this run ends up carrying.
+  W.removeAttachment(id, { kind: "rfc", ref: "RFC-073" });
+  W.removeAttachment(id, { kind: "gap", ref: "G-12" });
   t("an empty ref is refused — an attachment with no address points nowhere", !!W.attach(id, { kind: "report", ref: "  " }).error);
   t("a run that does not exist is refused", !!W.attach("nosuchrun", { kind: "report", ref: "x" }).error);
 
