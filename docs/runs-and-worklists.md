@@ -112,10 +112,13 @@ notice** — it names the only exits — and then the count wraps and the nudgin
 being nudged for exactly two reasons:
 
 - **It closes** — every item done. The mantra's ending.
-- **It is declared abandoned, with its account attached.** Both halves required: a `report`
-  attachment on the run (file it with `show()`, attach with `worklist attach`) saying why it cannot
-  go further, AND the run's status declared through `worklist status` with text starting
-  `abandoned`. The word without the record is testimony;
+- **It is declared abandoned, with its account attached.** Both halves required: an attachment on
+  the run saying why it cannot go further — `worklist attach` by ADDRESS (a report name, a branch,
+  a card), never a path — AND the run's status declared through `worklist status` with text
+  starting `abandoned`. A report is written as a file carrying its own `::report{id= as= retain=}`
+  leaf and opened with `nav`; there is no filing verb. ORDER MATTERS: `attach` is refused once the
+  run has closed, so it lands before the write that finishes the list, not after. The word without
+  the record is testimony;
   the record without the word is a handover nobody ended. The row wears the result —
   *abandoned · accounted* — and **movement spends the declaration**: a run that moves again has its
   abandoned status cleared, so one old excuse cannot cover a new stall.
