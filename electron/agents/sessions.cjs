@@ -1037,6 +1037,7 @@ function deliverToMembers(e) {
       // Flagged by the sender like `decision`, never inferred from the wording — a headline that
       // pattern-matched prose would be guessing at the one thing the sender knows for certain.
       faults: e.fault ? 1 : 0,
+      fault: !!e.fault,
     };
     const tag = `doc:${e.project || ""}:${e.path || ""}`;
     try {
@@ -1066,7 +1067,7 @@ function deliverToMembers(e) {
           from: e.by || "you",
           merged: true,
           preview: `${e.project}:${e.path} — also ${e.thread || "document"}`,
-          doc: { project: e.project || "", path: e.path || "", thread: e.thread || "", summary: e.summary || "", merged: true },
+          doc: { project: e.project || "", path: e.path || "", thread: e.thread || "", summary: e.summary || "", merged: true, fault: !!e.fault },
         });
         reached.push(s.projectCode);
         continue;
@@ -1091,6 +1092,12 @@ function deliverToMembers(e) {
             summary: e.summary || "",
             text: composeDelivery(meta),
             held: true,
+            // THE RECEIPT HAS TO SAY WHAT IT IS, not only the message inside it. The window draws
+            // a row per delivery and labelled every one "document updated" off the event kind —
+            // so a block reporting its own breakage showed up in HIS log as a document update,
+            // which is not what happened. The body was already right; the row was not, and the
+            // row is what he reads without expanding anything.
+            fault: !!e.fault,
           },
         });
         reached.push(s.projectCode);
@@ -1111,6 +1118,7 @@ function deliverToMembers(e) {
           thread: e.thread || "",
           summary: e.summary || "",
           text: composeDelivery(meta),
+          fault: !!e.fault,
         },
       });
       reached.push(s.projectCode);
