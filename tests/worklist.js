@@ -104,6 +104,27 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
     "an all-done run is finished, not resumable");
   ok("completion is observed — every item done closes the run, no flag to lie with");
 
+  // RESUMED BY THE AGENT, NOT BY THE SESSION. With the match on the whole session key, tomorrow's
+  // session writing the same source minted a SECOND run and left the first open forever — the work
+  // done under a fresh id while the original sat unfinished and nudging, with no way to tell a
+  // resumed procedure from an abandoned one.
+  const rid2 = worklist.newRunId();
+  worklist.writeRun(rid2, "session:sv:morning", [{ id: "1", text: "step one", state: "active" }], "skill:assignment");
+  assert.equal(worklist.openRunFor("session:sv:afternoon", "skill:assignment"), rid2,
+    "another session of the SAME agent resumes the run rather than minting a second");
+  ok("an open run is the agent's — it is resumed from whichever of its sessions is standing");
+
+  assert.equal(worklist.openRunFor("session:buapi:1", "skill:assignment"), null,
+    "another agent's run is not resumable from here");
+  ok("...and another agent's run is not");
+
+  // The write re-stamps where it ran, so "died in place" keeps meaning something: the record says
+  // the LAST session that touched it, which is also the one it died in if nobody touches it again.
+  worklist.writeRun(rid2, "session:sv:afternoon", [{ id: "1", text: "step one", state: "active" }], "skill:assignment");
+  assert.equal(worklist.all().find((r) => r.owner === worklist.runOwner(rid2)).session, "session:sv:afternoon",
+    "the place follows the last session to touch it");
+  ok("the session field becomes a stamp — where it last ran, not who may hear about it");
+
   const rec = worklist.all().find((r) => r.owner === worklist.runOwner(rid));
   assert.equal(rec.source, "skill:study");
   assert.equal(rec.session, "session:t-probe");

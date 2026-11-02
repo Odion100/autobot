@@ -209,5 +209,33 @@ console.log("the countdown is the selector's answer — the door ships the pick"
   ok("the window's countdown reads WHICH run the selector would pick — one countdown per promised nudge");
 }
 
+// ---- SESSION AGNOSTIC — THE RUN IS THE AGENT'S -------------------------------------------------
+// Work owed to an AGENT used to die with the session it was given to: an assignment handed over in
+// the morning kept nudging a session that was idle or gone, and the job that fired into a fresh one
+// at noon could not see it. The owner is the agent; the session is only where the run last ran.
+{
+  const other = { session: "session:sv:99" };          // same agent, a different session of it
+  const alien = { session: "session:buapi:1" };        // another agent entirely
+
+  assert.ok(pick(other), "a run from another session OF THE SAME AGENT is still nudged");
+  ok("an assignment opened in this morning's session reaches the agent in this afternoon's");
+
+  assert.equal(pick(alien), null, "another agent's run is not this agent's to be nudged about");
+  ok("the match is the agent, not every session on the machine");
+
+  // AND THE NUDGE SAYS SO. The rest of that message assumes the agent is holding the list; a list
+  // written by a session that no longer exists has to be read cold, and silence about that reads
+  // as "you were just doing this".
+  assert.ok(/DIFFERENT SESSION/.test(pick(other).text), "the text says where the run came from");
+  assert.ok(!/DIFFERENT SESSION/.test(pick().text), "...and stays quiet when it is this session's own run");
+  ok("a run arriving from elsewhere is announced as such, and one from here is not");
+
+  // A SESSION WITH NO PROJECT IN ITS KEY (the terminal door's `session:<key>`) hears only itself —
+  // treating every unplaceable session as one agent would have them nudged about each other's work.
+  assert.ok(nudge.sameAgent("session:k1", "session:k1"), "an unplaceable session matches itself");
+  assert.ok(!nudge.sameAgent("session:k1", "session:k2"), "...and nothing else");
+  ok("an unplaceable session is its own agent — no project, no sharing");
+}
+
 console.log(`\n  ${pass} claims, all green — an unfinished run nudges its agent\n`);
 fs.rmSync(scratch, { recursive: true, force: true });

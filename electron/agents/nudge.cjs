@@ -168,7 +168,7 @@ function excusedOf(run) {
   return atts.some((a) => a && a.kind === "report");
 }
 
-function nudgeText(run, cfg) {
+function nudgeText(run, cfg, { session } = {}) {
   const done = Number(run.done) || 0;
   const total = Number(run.total) || 0;
   const active = String(run.active || "").trim();
@@ -183,7 +183,15 @@ function nudgeText(run, cfg) {
     `The rule this enforces is the worklist's own mantra: WORK TO COMPLETION. A sourced run is a ` +
     `procedure the system is watching — it completes only when every item is done, and nothing ` +
     `else marks it complete. Read \`worklist get\` before acting — this line is a summary and the ` +
-    `list is the state.`;
+    `list is the state.` +
+    // A RUN CAN NOW ARRIVE FROM ANOTHER SESSION, and the rest of this message assumes the agent is
+    // holding that list in its head. It is not: a list written by a session that no longer exists
+    // has to be read cold, and a nudge that does not say so reads as "you were just doing this".
+    (session && run.session && String(run.session) !== String(session)
+      ? `\n\nTHIS RUN WAS OPENED IN A DIFFERENT SESSION of yours — the work is owed by you, not ` +
+        `by that session, which is why it reached you here. You are not holding this list: read ` +
+        `it, and read the whiteboard with it, before you decide anything about it.`
+      : "");
   // ORDINARY NUDGES STAY CLEAN (his: the exit is named only on the final notice). Naming the
   // abandonment door every time would advertise the way out of work; the cycle's last word is
   // where it belongs, beside the fact that the nudging does not otherwise stop.
@@ -196,8 +204,9 @@ function nudgeText(run, cfg) {
   return (
     `${head}\n\nThis is the cycle's FINAL NOTICE — and it is not a stopping point: the cycle ` +
     `resets and the nudging continues until this run earns one of its two endings. Either drive ` +
-    `the list to done, or end it honestly: file the account as a report (\`show()\`) saying why it ` +
-    `cannot go further, attach it to this run (\`worklist attach\`, kind \`report\`), and declare ` +
+    `the list to done, or end it honestly: write the account as a report document (a file with a ` +
+    `\`::report\` leaf) saying why it cannot go further, attach it to this run ` +
+    `(\`worklist attach\`, kind \`report\`), and declare ` +
     `it (\`worklist status\`, text starting "abandoned"). The report and the word together are ` +
     `what stop the nudging — nothing else does.`
   );
@@ -210,6 +219,27 @@ function nudgeText(run, cfg) {
  * the decision separable is what lets the rules be tested without standing up a session, and the
  * rules are the part that goes wrong.
  */
+// WHOSE RUN IT IS. A run used to be nudged only inside the session that opened it, which meant
+// work owed to an AGENT died with the session it was given to: an assignment handed over in the
+// morning kept nudging a session that was idle or gone, and the job that fired into a fresh one
+// at noon was blind to it. The owner is the agent, and in this harness the agent slot IS the
+// project code carried in the session key (`session:<projectCode>:<id>`), so the comparison is
+// the place rather than the whole string.
+//
+// A SESSION WITH NO PROJECT FALLS BACK TO ITSELF. `session:<key>` from the terminal door has no
+// project in it, and treating every such session as one agent would have them nudging each other
+// about lists they never wrote — so an unplaceable session only ever hears about its own runs.
+const placeOf = (session) => {
+  const m = /^session:([^:]+):/.exec(String(session || ""));
+  return m ? m[1] : "";
+};
+const sameAgent = (a, b) => {
+  const pa = placeOf(a);
+  const pb = placeOf(b);
+  if (!pa || !pb) return String(a || "") === String(b || "");
+  return pa === pb;
+};
+
 function pickNudge({ runs = [], session = "", now = Date.now(), quietMin = 0, ctxPct = null, settings } = {}) {
   const cfg = settings || readSettings();
   if (!cfg.on) return null;
@@ -220,7 +250,7 @@ function pickNudge({ runs = [], session = "", now = Date.now(), quietMin = 0, ct
   if (ctxPct != null && Number(ctxPct) > cfg.ctxCeilingPct) return null;
 
   const candidates = (runs || []).filter((r) => {
-    if (!r || String(r.session || "") !== String(session || "")) return false;
+    if (!r || !sameAgent(r.session, session)) return false;
     if (!sourceCounts(r.source, cfg.sources)) return false;
     const total = Number(r.total) || 0;
     const done = Number(r.done) || 0;
@@ -241,7 +271,7 @@ function pickNudge({ runs = [], session = "", now = Date.now(), quietMin = 0, ct
   // most likely still holding in its head.
   candidates.sort((a, b) => (Number(a.updatedAt) || 0) - (Number(b.updatedAt) || 0));
   const run = candidates[0];
-  return { run, text: nudgeText(run, cfg), ...cycleOf(run, cfg) };
+  return { run, text: nudgeText(run, cfg, { session }), ...cycleOf(run, cfg) };
 }
 
-module.exports = { DEFAULTS, FILE, normalizeSettings, readSettings, writeSettings, sourceCounts, nudgeText, pickNudge, cycleOf, excusedOf };
+module.exports = { DEFAULTS, FILE, normalizeSettings, readSettings, writeSettings, sourceCounts, nudgeText, pickNudge, cycleOf, excusedOf, sameAgent };

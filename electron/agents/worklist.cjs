@@ -394,9 +394,16 @@ const allDone = (items) => items.length > 0 && items.every((i) => i.state === "d
 // The comeback: a harness restart mid-run must not orphan the run. The newest unfinished run
 // with this source, started by this session, is still THE run — resume it instead of minting a
 // second id and leaving a corpse that reads as died-at-step-3.
+// THE MATCH IS THE AGENT, NOT THE SESSION — the other half of making a run session-agnostic, and
+// the half that is easy to miss. With `r.session === session` a NEW session writing the same
+// source minted a second run and left the first one open forever: the work was done under a fresh
+// id while the original sat at 3/9, nudging, with nobody able to tell a resumed procedure from an
+// abandoned one. An agent resumes its own open run wherever it is standing.
 function openRunFor(session, source) {
+  const place = placeOf(session);
+  const mine = (r) => (place && place !== "-" ? placeOf(r.session) === place : r.session === session);
   const hit = all().find(
-    (r) => r.owner.startsWith("run:") && r.source === source && r.session === session && !allDone(r.items)
+    (r) => r.owner.startsWith("run:") && r.source === source && mine(r) && !allDone(r.items)
   );
   return hit ? hit.owner.slice(4) : null;
 }
