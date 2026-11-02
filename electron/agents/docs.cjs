@@ -138,13 +138,32 @@ function splitLong(sec, maxChars = MAX_CHARS, minChars = MIN_CHARS) {
 // Corpora — configured, never hardcoded. That is the difference between a pipeline for two repos
 // and a feature someone else can point at their own docs.
 //
-// `kind` decides who can FIND it. It is a VISIBILITY choice, never an approval tier:
-//   permanent — published reference: a search that names no corpus reads these, and only these.
-//               Wrong chunk? Fix the FILE and re-index.
+// `kind` decides HOW LONG it is meant to live. It is a lifecycle choice, never an approval tier:
+//   permanent — published reference: it outlives the task that produced it. Wrong chunk? Fix the
+//               FILE and re-index.
 //   working   — private research: written to a file, embedded, and queried instead of being read
 //               back whole. Invisible unless someone names the corpus; its author drops it.
 // Either kind is an agent's to create (the door is context.cjs, and `working` is its default).
 // Promotion is just a re-index with the other kind — same collection, nothing re-embedded.
+//
+// `agents` decides WHO FINDS IT WITHOUT ASKING, and it is a separate axis because `kind` was doing
+// both jobs and only one of them was ever a decision. Sixteen permanent corpora, ~1,500 chunks,
+// ranked on cosine alone: a question about report subtypes came back with two chapters from a
+// bookkeeping corpus above this system's own reasoning, because `account` is a word in both
+// domains. More corpora makes that monotonically worse, so audience is a field, not a tuning knob.
+//   "everyone"            — published to every agent's unscoped search
+//   ["slot", "slot"]      — those agents' unscoped searches read it; nobody else's does
+//   absent                — everyone. The legacy reading, so a corpus indexed before this existed
+//                           never disappears from anybody by silence.
+// A NEW permanent corpus belongs to the agent that made it, because publishing to every agent is a
+// decision and silence must not make it. Changing it later is one call, and an agent may make that
+// call for a corpus the same way a human can.
+//
+// SCOPE IS A DEFAULT, NEVER A WALL. Naming a corpus reads it whatever the audience says — the
+// override has to be unconditional or "go look at the accounting docs" becomes unanswerable and
+// the agent re-derives from source, which is worse than the noise this fixes. And a search that
+// withholds SAYS SO, naming the corpora: an agent cannot ask for a corpus it does not know exists,
+// so an unnamed withholding is blindness dressed as an empty answer.
 // ---------------------------------------------------------------------------------------------
 function corpora() {
   try {
@@ -153,6 +172,27 @@ function corpora() {
   } catch {
     return [];
   }
+}
+
+// The audience, normalised. A string is a single name or the word `everyone`; a list is the named
+// agents; absent is everyone (see above). Empty list is NOT everyone — it is "nobody but a caller
+// who names it", which is a legitimate thing to want and an easy thing to erase by being clever.
+function audienceOf(corpus) {
+  const a = corpus && corpus.agents;
+  if (a === undefined || a === null) return "everyone";
+  if (Array.isArray(a)) return a.map((x) => String(x).trim()).filter(Boolean);
+  const one = String(a).trim();
+  if (!one || one === "everyone" || one === "*" || one === "all") return "everyone";
+  return one.split(/[\s,]+/).filter(Boolean);
+}
+
+/** Does this agent read this corpus without naming it? A caller with no slot reads everything —
+ *  withholding from an identity the system could not establish punishes the wrong party. */
+function carries(corpus, slot) {
+  const who = audienceOf(corpus);
+  if (who === "everyone") return true;
+  if (!slot) return true;
+  return who.includes(String(slot));
 }
 
 function saveCorpora(list) {
@@ -299,16 +339,32 @@ function indexedState(collection) {
 // changes an existing corpus's kind and keeps everything else. That is PROMOTION — finished
 // research becoming documentation other agents can find — and it costs no embeddings, because the
 // collection is named after the corpus, not after its kind.
-async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind } = {}) {
+async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, agents, as } = {}) {
   let corpus = corpusNamed(name);
 
-  if (!corpus || root || glob || exclude || kind) {
+  if (!corpus || root || glob || exclude || kind || agents !== undefined) {
+    const nextKind = kind || (corpus && corpus.kind) || "working";
+    // THE AUDIENCE, AND THE ONE CASE THAT IS NOT INHERITANCE: a corpus coming into being as
+    // permanent, or being promoted into permanent, with nothing said about who it is for. That is
+    // where the default lands on the MAKER — publishing to every agent is a decision, and the
+    // absence of a word must not make it. Everywhere else the existing audience carries over, so
+    // a plain refresh can never quietly re-publish something.
+    const born = !corpus || (nextKind === "permanent" && (!corpus || corpus.kind !== "permanent"));
+    const audience =
+      agents !== undefined
+        ? agents
+        : corpus && corpus.agents !== undefined
+          ? corpus.agents
+          : born && nextKind === "permanent" && as
+            ? [String(as)]
+            : undefined;
     const next = {
       name,
-      kind: kind || (corpus && corpus.kind) || "working",
+      kind: nextKind,
       root: root ? path.resolve(root) : corpus && corpus.root,
       glob: glob || (corpus && corpus.glob) || "**/*.md",
       ...(exclude ? { exclude } : corpus && corpus.exclude ? { exclude: corpus.exclude } : {}),
+      ...(audience !== undefined ? { agents: audience } : {}),
     };
     if (!next.root) throw new Error(`no corpus "${name}" — pass a root to create one, or add it to ${CONFIG}`);
     // A root that does not exist indexes zero files and reports success, which reads as "my research
@@ -408,9 +464,17 @@ function staleness(corpus, source, hash) {
 // `{ q, source: "research/vendor-api.md" }` — the compartmentalisation is a good filter, never a
 // second system.
 //
-// With no corpus named, only PERMANENT corpora are searched. A working corpus is an agent's own
-// research dump, and it must not surface in someone else's question about the framework.
-async function search({ q, corpus, source, limit = 5, min = 0 } = {}) {
+// With no corpus named, only PERMANENT corpora are searched, and only those this agent CARRIES
+// (see the audience note above). A working corpus is an agent's own research dump and must not
+// surface in someone else's question about the framework; a permanent corpus somebody else's
+// expert carries is the same problem one layer up.
+//
+// THE UNCARRIED ONES ARE STILL SEARCHED, AND THAT IS DELIBERATE. They cost the same vectors query
+// they cost today, and their hits come back as `withheld` — a count and the corpus names, never
+// the text. Dropping them before the search would make the answer cheaper and the blindness
+// permanent: an agent cannot name a corpus it has never heard of, and `corpus:` is the override
+// that makes scoping safe.
+async function search({ q, corpus, source, limit = 5, min = 0, as = null } = {}) {
   if (!q || !String(q).trim()) return { error: "a question is required" };
   const all = corpora();
   const wanted = corpus
@@ -418,7 +482,10 @@ async function search({ q, corpus, source, limit = 5, min = 0 } = {}) {
     : all.filter((c) => (c.kind || "permanent") === "permanent");
   if (corpus && !wanted.length) return { error: `no corpus "${corpus}"`, corpora: all.map((c) => c.name) };
 
+  // NAMING A CORPUS READS IT, WHATEVER THE AUDIENCE SAYS.
+  const mine = (c) => !!corpus || carries(c, as);
   const out = [];
+  const held = new Map();
   for (const c of wanted) {
     let hits = [];
     try {
@@ -432,6 +499,13 @@ async function search({ q, corpus, source, limit = 5, min = 0 } = {}) {
     }
     for (const h of hits || []) {
       const m = (h && h.meta) || {};
+      if (!mine(c)) {
+        const row = held.get(c.name) || { corpus: c.name, hits: 0, best: 0 };
+        row.hits += 1;
+        row.best = Math.max(row.best, Number(h.score) || 0);
+        held.set(c.name, row);
+        continue;
+      }
       out.push({
         text: h.text,
         score: h.score,
@@ -446,7 +520,14 @@ async function search({ q, corpus, source, limit = 5, min = 0 } = {}) {
     }
   }
   out.sort((a, b) => (b.score || 0) - (a.score || 0));
-  return { q: String(q), searched: wanted.map((c) => c.name), results: out.slice(0, Math.max(1, Number(limit) || 5)) };
+  const withheld = [...held.values()].sort((a, b) => b.best - a.best);
+  return {
+    q: String(q),
+    searched: wanted.filter(mine).map((c) => c.name),
+    results: out.slice(0, Math.max(1, Number(limit) || 5)),
+    // Said, never silently dropped — this is the line that makes `corpus:` reachable.
+    ...(withheld.length ? { withheld } : {}),
+  };
 }
 
 // Cheap because `corpus` is a first-class field from day one — miserable to add later.
@@ -485,6 +566,7 @@ function listCorpora() {
     return {
       name: c.name,
       kind: c.kind || "permanent",
+      agents: audienceOf(c),
       root: c.root,
       glob: c.glob || "**/*.md",
       matched,
@@ -502,6 +584,8 @@ module.exports = {
   corpora,
   saveCorpora,
   corpusNamed,
+  audienceOf,
+  carries,
   collectionOf,
   filesOf,
   globToRe,

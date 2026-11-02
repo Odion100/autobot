@@ -192,6 +192,55 @@ try {
   eq("and leaves the root alone", docs.corpusNamed("vendor-api").root, path.join(root, "research"));
   await docs.drop("vendor-api");
 
+  // ---- AUDIENCE ------------------------------------------------------------------------------
+  // `kind` says how long a corpus lives; `agents` says who finds it without asking. They were one
+  // field and only the lifecycle half was ever a decision — which is how a question about report
+  // subtypes came back carrying a bookkeeping corpus above this system's own chapters.
+  console.log("\nan audience is a separate axis from a lifetime");
+  fs.mkdirSync(path.join(root, "others"), { recursive: true });
+  fs.writeFileSync(path.join(root, "others", "ledger.md"), "# Ledger\n\nthe readme body belongs to somebody else's domain entirely, and it matches anyway.\n");
+  await docs.index("theirs", { root: path.join(root, "others"), glob: "ledger.md", kind: "permanent", agents: ["other-agent"] });
+
+  const mine = await docs.search({ q: "readme body", as: "smoke-agent" });
+  ok("a corpus I do not carry stays out of my unscoped search", !mine.searched.includes("theirs"));
+  ok("...and its hits are not in my results", !(mine.results || []).some((r) => r.corpus === "theirs"));
+
+  // THE WITHHOLDING IS SAID. An agent cannot name a corpus it has never heard of, so silence here
+  // is blindness wearing the face of an empty answer — and `corpus:` is the way back in.
+  const held = (mine.withheld || []).find((w) => w.corpus === "theirs");
+  ok("the answer NAMES what it held back, with a count", !!held && held.hits > 0);
+  ok("...and a score, so the caller can judge whether to go and look", typeof held.best === "number");
+
+  // SCOPE IS A DEFAULT, NEVER A WALL.
+  const asked = await docs.search({ q: "readme body", corpus: "theirs", as: "smoke-agent" });
+  ok("naming it reads it regardless of the audience", asked.results.length > 0);
+  ok("and nothing is withheld from a search that named its corpus", !asked.withheld);
+
+  const theirs = await docs.search({ q: "readme body", as: "other-agent" });
+  ok("the agent it IS for reads it unscoped", theirs.searched.includes("theirs"));
+
+  // A session the harness could not identify is not blinded — withholding from an unknown caller
+  // punishes the wrong party, and every cron and headless run is one.
+  const anon = await docs.search({ q: "readme body" });
+  ok("a caller with no slot still reads everything permanent", anon.searched.includes("theirs"));
+
+  console.log("\na new permanent corpus belongs to the agent that made it");
+  fs.mkdirSync(path.join(root, "fresh"), { recursive: true });
+  fs.writeFileSync(path.join(root, "fresh", "n.md"), "# Fresh\n\na brand new permanent corpus with nothing said about who it is for.\n");
+  await docs.index("fresh", { root: path.join(root, "fresh"), glob: "n.md", kind: "permanent", as: "maker-agent" });
+  eq("silence does not publish it to everyone", docs.audienceOf(docs.corpusNamed("fresh")), ["maker-agent"]);
+
+  // A PLAIN REFRESH MUST NEVER RE-PUBLISH. The default only lands when a corpus BECOMES permanent.
+  await docs.index("fresh", { as: "someone-else" });
+  eq("a refresh by another agent leaves the audience alone", docs.audienceOf(docs.corpusNamed("fresh")), ["maker-agent"]);
+  await docs.index("fresh", { agents: "everyone", as: "someone-else" });
+  eq("and publishing is one explicit call", docs.audienceOf(docs.corpusNamed("fresh")), "everyone");
+
+  // THE SIXTEEN THAT PREDATE THIS. A corpus with no audience field reads as everyone, so nothing
+  // disappears from anybody by silence — the backfill is a decision somebody makes, not a default
+  // that quietly hides work.
+  ok("a corpus indexed before audiences existed is still everyone's", docs.carries({ name: "legacy", kind: "permanent" }, "anybody"));
+
   console.log("\ndrop removes what was embedded, never what was written");
   const d = await docs.drop("scratch");
   ok("the collection is gone", !store.has("docs-scratch"));

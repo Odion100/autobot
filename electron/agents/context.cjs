@@ -1011,18 +1011,32 @@ function toolsFor(identity = {}) {
             const wantDocs = kind !== "notes";
             const hits = wantNotes ? await search(scopes, { question, scope, k }) : [];
             let sections = [];
+            let withheld = [];
             if (wantDocs) {
               try {
-                const r = await docs.search({ q: question, corpus, source, limit: k });
+                // `as` is the CALLER, and it is what makes an unscoped search read this agent's
+                // corpora rather than all sixteen. It comes from the harness's own knowledge of
+                // the session, never from the question — an identity the caller can type is not
+                // an identity.
+                const r = await docs.search({ q: question, corpus, source, limit: k, as: identity.slot || null });
                 sections = (r && r.results) || [];
+                withheld = (r && r.withheld) || [];
               } catch {
                 /* a corpus that was never indexed is an empty half, not a failure */
               }
             }
+            // WHAT WAS HELD BACK IS SAID, NEVER DROPPED. An agent cannot ask for a corpus it has
+            // never heard of, so a scoped search that stays silent about the rest is blindness
+            // wearing the face of an empty answer. Naming them is also the way back in: `corpus:`
+            // reads one whatever its audience says.
+            const heldLine = withheld.length
+              ? `\n\nAlso matched in corpora you do not carry — pass corpus:"<name>" to read one: ` +
+                withheld.map((w) => `${w.corpus} (${w.hits}, best ${Number(w.best || 0).toFixed(2)})`).join(" · ")
+              : "";
             const blind = hits.failed ? `\n(warning: ${hits.failed} scope(s) could not be searched — this answer may be incomplete)` : "";
             if (!hits.length && !sections.length)
               return {
-                content: [{ type: "text", text: `Nothing recorded scores above ${FLOOR} for that${wantDocs ? ", and no documentation section matches it" : ""}. Empty means nothing matched THAT question — try another angle before concluding it is unrecorded. If you learn the answer, remember() it.` }],
+                content: [{ type: "text", text: `Nothing recorded scores above ${FLOOR} for that${wantDocs ? ", and no documentation section matches it" : ""}. Empty means nothing matched THAT question — try another angle before concluding it is unrecorded. If you learn the answer, remember() it.${heldLine}` }],
               };
             // WRITTEN FOR A READER — his rule: these are OUR logs, and they come out human. The
             // same words serve the model and the chat; nothing downstream reformats them.
@@ -1050,7 +1064,7 @@ function toolsFor(identity = {}) {
               parts.push(`${hits.length === 1 ? "One note matches" : hits.length + " notes match"} — learned, and editable with remember(id=) / forget():\n\n` + lines.join("\n\n"));
             if (sections.length)
               parts.push(`${sections.length} documentation section(s) — derived from files; to change one, fix the file and re-index:\n\n` + docLines.join("\n\n"));
-            return { content: [{ type: "text", text: parts.join("\n\n") + blind }] };
+            return { content: [{ type: "text", text: parts.join("\n\n") + heldLine + blind }] };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }
@@ -1272,15 +1286,16 @@ function toolsFor(identity = {}) {
       ),
       tool(
         "docsList",
-        "What documentation corpora exist — name, kind, how many files and chunks, when each was " +
-          "last indexed, and how many chunks have drifted from the file on disk.",
+        "What documentation corpora exist — name, kind, WHO CARRIES IT (an unscoped search reads " +
+          "only the ones you carry; naming one reads it regardless), how many files and chunks, " +
+          "when each was last indexed, and how many chunks have drifted from the file on disk.",
         {},
         async () => {
           try {
             const rows = docs.listCorpora();
             if (!rows.length) return { content: [{ type: "text", text: "No corpora configured yet (~/.autobot/corpora.json)." }] };
             const body = rows
-              .map((c) => `${c.name}  [${c.kind}]  ${c.files} files · ${c.chunks} chunks${c.stale ? ` · ${c.stale} STALE` : ""}${c.lastIndexed ? ` · indexed ${c.lastIndexed}` : " · never indexed"}\n    ${c.root}  ${c.glob}`)
+              .map((c) => `${c.name}  [${c.kind}${c.kind === "permanent" ? ` · ${c.agents === "everyone" ? "everyone" : (c.agents.join(", ") || "named only")}` : ""}]  ${c.files} files · ${c.chunks} chunks${c.stale ? ` · ${c.stale} STALE` : ""}${c.lastIndexed ? ` · indexed ${c.lastIndexed}` : " · never indexed"}\n    ${c.root}  ${c.glob}`)
               .join("\n");
             return { content: [{ type: "text", text: body }] };
           } catch (e) {
@@ -1327,8 +1342,8 @@ function toolsFor(identity = {}) {
           "research you wrote to a file, embedded so you can query it back instead of re-reading the " +
           "whole thing (`working`, the default) — or producing CONTEXT THE SYSTEM KEEPS, retrievable " +
           "by anyone, outliving the task that produced it (`permanent`). That is the `kind` " +
-          "distinction, and only you can know which it is; a search that names no corpus reads " +
-          "permanent ones and only those. " +
+          "distinction, and only you can know which it is; a search that names no corpus reads the " +
+          "permanent corpora THIS agent carries, so `agents` is the second half of publishing. " +
           "INDEXING PUBLISHES: a wrong document that is indexed answers confidently, so run docsPlan " +
           "and read the document first.",
         {
@@ -1336,9 +1351,22 @@ function toolsFor(identity = {}) {
           root: z.string().optional().describe("absolute path to the folder holding the files — required to CREATE a corpus"),
           glob: z.string().optional().describe("which files under root, e.g. `**/*.md` (the default) or `vendor-api.md`"),
           exclude: z.array(z.string()).optional().describe("globs to leave out — a corpus is defined as much by what it omits"),
+          agents: z
+            .union([z.string(), z.array(z.string())])
+            .optional()
+            .describe(
+              "WHO FINDS IT WITHOUT ASKING — the audience, and a separate question from `kind`. " +
+                "`\"everyone\"` publishes it to every agent's unscoped search; a list of agent slots " +
+                "publishes it to those agents alone. A NEW permanent corpus defaults to YOU, because " +
+                "publishing to every agent is a decision and saying nothing must not make it — so pass " +
+                "`everyone` the moment a corpus is genuinely the system's. Scoping is never a wall: " +
+                "anyone naming the corpus reads it regardless, and a search that holds a corpus back " +
+                "says so by name. Changing this on a corpus you did not make is allowed and is " +
+                "sometimes exactly right — say in the chat that you did it."
+            ),
           kind: z.enum(["working", "permanent"]).optional().describe("PURPOSE, not permission. `working` = the vector store used as a mechanism for yourself: your own research, never surfacing in anyone else's search unless they name it, yours to drop with docsDrop when the job is done. Permanent = context the system keeps for whoever comes next. Producing durable context is your job, not something to bring to the human. `working` is the DEFAULT, so saying nothing still gets you a private scratch corpus; pass `permanent` when you mean other agents to find it, and passing it on an existing working corpus PROMOTES that corpus — same files, nothing re-embedded."),
         },
-        async ({ name, root, glob, exclude, kind }) => {
+        async ({ name, root, glob, exclude, kind, agents }) => {
           try {
             // TWO DIFFERENT GUARDS LIVED HERE UNDER ONE RATIONALE, AND ONLY ONE OF THEM IS REAL.
             //
@@ -1361,10 +1389,18 @@ function toolsFor(identity = {}) {
               if (c && (c.kind || "permanent") === "permanent")
                 return { content: [{ type: "text", text: `"${name}" is a permanent corpus and others retrieve from it — repointing its root or glob rewrites it out from under them. Refresh it by name alone, or pick a new name for a corpus of your own.` }], isError: true };
             }
-            const r = await docs.index(name, { root, glob, exclude, kind });
+            const r = await docs.index(name, { root, glob, exclude, kind, agents, as: identity.slot || null });
+            // THE AUDIENCE IS ONLY SAID FOR A PERMANENT CORPUS, because a working one is invisible
+            // unless somebody names it whatever its audience field says — printing a carrier list
+            // beside it would describe a reach it does not have.
+            const who = docs.audienceOf(docs.corpusNamed(name) || {});
+            const carried =
+              r.kind === "permanent"
+                ? ` · ${who === "everyone" ? "everyone" : `carried by ${who.join(", ") || "nobody until somebody names it"}`}`
+                : "";
             return {
               content: [{ type: "text", text:
-                `${r.corpus} [${r.kind}] → ${r.collection}\n` +
+                `${r.corpus} [${r.kind}${carried}] → ${r.collection}\n` +
                 `${r.files} files · ${r.indexed} chunks embedded · ${r.skipped} unchanged (skipped)` +
                 `${r.changedFiles ? ` · ${r.changedFiles} files changed` : ""}${r.removed ? ` · ${r.removed} removed` : ""}` }],
             };

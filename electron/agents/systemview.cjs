@@ -883,8 +883,8 @@ function toolsFor(identity = {}) {
                 "finishes its own work is the party with an interest, and asked at the end whether the work " +
                 "needed proving it will say no. An absent `report` is the honest \"nobody has decided yet\", " +
                 "which is the group a context-maintenance board pass sweeps for — so declaring one on a card " +
-                "you reviewed is part of reviewing it. `context(\"which report do I file and how long should " +
-                "it last\")` for which kind and why."
+                "you reviewed is part of reviewing it. `context(\"which report kind should I file, and why is " +
+                "its window that length\")` for which kind and why."
             ),
           state: z
             .enum(["resolved", "reviewed", "partial", "blocked", "open"])
