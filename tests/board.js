@@ -120,4 +120,34 @@ const board = () =>
   ok("a refusal arrives whole — an agent that cannot read why will aim the same wrong id again");
 }
 
+// ── 7 · THE DECLARATION IS DECLARED, AND REACHES THE HUB ─────────────────────────────────────
+// `report=` is what the card owes, decided before the work starts. The tool is the only door an
+// agent has to it, and a parameter missing from the input schema is one the SDK strips silently —
+// so a skill telling an agent to declare one would be telling it to call something inert.
+{
+  const t = board();
+  assert.ok(t.inputSchema && t.inputSchema.report, "report is declared on the input schema");
+  assert.ok(/spec/.test(t.inputSchema.report.description || ""), "...and the description names the kinds, or no agent passes one");
+
+  calls.length = 0;
+  answer = { ok: true, card: 1792153875664, report: "spec", was: "" };
+  const out = said(await board().handler({ projectCode: "board-test", at: 1792153875664, report: "spec" }, {}));
+  const sent = calls.find((c) => c.fn === "board");
+  assert.strictEqual(sent.args.report, "spec", "the declaration was passed through, not dropped");
+  assert.strictEqual(sent.args.at, 1792153875664, "...on the card it was aimed at");
+  assert.ok(/spec/.test(out), out);
+  ok("a report declaration reaches the hub with its card — the parameter exists, is described, and is not swallowed");
+}
+
+// An EMPTY declaration is how a card goes back to undeclared, and undeclared is a real state the
+// board pass sweeps for — so the empty string has to survive the same way an empty status does.
+{
+  calls.length = 0;
+  answer = { ok: true, card: 1792153875664, report: "", was: "spec" };
+  await board().handler({ projectCode: "board-test", at: 1792153875664, report: "" }, {});
+  const sent = calls.find((c) => c.fn === "board");
+  assert.strictEqual(sent.args.report, "", "an empty declaration reached the hub as an empty string, not as absent");
+  ok("clearing a declaration is a real value — leaving a card undeclared again cannot require deleting it");
+}
+
 console.log(`\n  ${n} claims, all green — the board tool's contract\n`);

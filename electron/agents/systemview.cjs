@@ -872,6 +872,20 @@ function toolsFor(identity = {}) {
                 "it later, and his arrive raw from a voice recorder with none. Title his in HIS words, never a " +
                 "summary of them."
             ),
+          report: z
+            .string()
+            .optional()
+            .describe(
+              "WHAT THE WORK ON THIS CARD OWES, declared before anybody does it — with `add`, or with " +
+                "`at` on a card that already exists; an empty string leaves it undeclared again. One of " +
+                "`planning` · `account` · `audit` · `brief` · `spec` (the word is open, those are the ones " +
+                "with a pill on the card). It is declared AHEAD of the work on purpose: the agent that " +
+                "finishes its own work is the party with an interest, and asked at the end whether the work " +
+                "needed proving it will say no. An absent `report` is the honest \"nobody has decided yet\", " +
+                "which is the group a context-maintenance board pass sweeps for — so declaring one on a card " +
+                "you reviewed is part of reviewing it. `context(\"which report do I file and how long should " +
+                "it last\")` for which kind and why."
+            ),
           state: z
             .enum(["resolved", "reviewed", "partial", "blocked", "open"])
             .optional()
