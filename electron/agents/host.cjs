@@ -296,12 +296,20 @@ function register(surfaceOf) {
         docs.saveCorpora(all);
         return { corpora: docs.listCorpora(), removed: rec.name };
       }
+      // THE AUDIENCE SURVIVES A SAVE. This handler rebuilds the record field by field, so any key
+      // it does not name is DELETED by an edit — and `agents` is the one that decides whose
+      // unscoped search reads this corpus. Carried from the form when the form sends it, and
+      // from the existing record when it does not, so editing a glob can never silently
+      // re-publish a corpus to everyone.
+      const was = docs.corpora().find((c) => c.name === rec.name) || {};
+      const audience = rec.agents !== undefined ? rec.agents : was.agents;
       docs.saveCorpora(all.concat([{
         name: rec.name,
         kind: rec.kind === "working" ? "working" : "permanent",
         root: rec.root,
         glob: rec.glob || "**/*.md",
         ...(Array.isArray(rec.exclude) && rec.exclude.length ? { exclude: rec.exclude } : {}),
+        ...(audience !== undefined ? { agents: audience } : {}),
       }]));
       return { corpora: docs.listCorpora() };
     } catch (e) {
