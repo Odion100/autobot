@@ -1433,6 +1433,15 @@ async function markBlock(absPath, line, { state, note } = {}, by = "") {
 // document. `told=` makes it idempotent — a covered block is silence — so the sweep costs one parse
 // per registered document and delivers only what is still owed (c32).
 async function sweepDocuments() {
+  // FIRST, THE ROWS WHOSE DOCUMENTS ARE GONE. The hub's janitor deletes retired documents in its
+  // own process and may not write this registry (RFC-073 c40), so those deletions reach us as no
+  // event at all — and a row nothing can retire is a document the drawer goes on counting forever.
+  // This sweep is the other end of that: the shell owns the writes, so the shell asks. It runs
+  // before retention and before the announce loop because both of those would otherwise spend a
+  // read on a file that is not there.
+  try {
+    documents.reapGone();
+  } catch {}
   // RFC-076 §4.6 — the retention half rides the same sweep: a report whose declared window ran
   // out since its first read gets `retired= retiredAs=expired` written into its leaf FIRST, so
   // the announce below re-parses the file and the row says what just became true. The clock is
@@ -1542,6 +1551,19 @@ function startWatcher(s) {
           abs,
           setTimeout(() => {
             s.announceTimers.delete(abs);
+            // A DOCUMENT THAT IS GONE IS A REAP, NOT AN ANNOUNCE. `reapMissing` was written for
+            // exactly this event and NOTHING EVER CALLED IT — a verb with no door, so a deleted
+            // document reached `announceDocument`, failed to read, and left its row standing with
+            // its lifecycle still running. That is how eight rows came to outlive their files
+            // (measured 2026-11-02) while the drawer went on counting every one: the hub's janitor
+            // unlinks a retired document, this watcher sees the deletion within 400ms, and the one
+            // handler that could have acted on it was never wired up.
+            if (!fs.existsSync(abs)) {
+              try {
+                documents.reapMissing(abs);
+              } catch {}
+              return;
+            }
             announceDocument(abs, { by: s.toolsInFlight > 0 ? s.projectCode : "" }).catch(() => {});
           }, 400),
         );

@@ -139,6 +139,42 @@ function reapMissing(absPath) {
   return { ok: true, registered: false, reaped: rows.map((r) => r.id) };
 }
 
+/**
+ * THE SAME RULE OVER THE WHOLE REGISTRY — every row whose document is gone, in one write.
+ *
+ * `reapMissing` above only ever fires on a path somebody told us about: a write the harness can
+ * see produces one parse, the file turns out unreadable, the row goes. A file deleted by a process
+ * that is NOT us produces no write and therefore no parse, so nothing ever asks. The hub's janitor
+ * is exactly that process — it unlinks retired documents in its own process and may not touch this
+ * file (RFC-073 c40) — and the result was measured 2026-11-02: eight of thirty-two rows pointing at
+ * documents that no longer existed, every one of them still counted by the drawer, with no event
+ * left anywhere that could have retired them.
+ *
+ * So the sweep stands on its own rule, the way the janitor's second office does: a row is a claim
+ * that a document exists, and when it does not, the claim goes — whatever deleted the file and
+ * whether or not anybody saw it happen.
+ *
+ * UNRESOLVABLE IS NOT GONE. `absPathOf` answers "" for a row whose project no longer has a root,
+ * and that is a row this sweep cannot judge rather than a row to delete; a document is not missing
+ * because its project was renamed out from under it.
+ *
+ * ONE WRITE, NOT ONE PER ROW. `remove(id)` re-reads and rewrites the file each call, so reaping
+ * eight rows that way is eight read-modify-writes a concurrent parse can interleave with. The rows
+ * are matched by IDENTITY rather than by id, because one file may hold several leaves and two rows
+ * legitimately share a path — the mock fixture carries its own leaf and the leaf it exercises.
+ */
+function reapGone() {
+  const rows = read();
+  const gone = rows.filter((r) => {
+    const abs = absPathOf(r);
+    return abs ? !fs.existsSync(abs) : false;
+  });
+  if (!gone.length) return { ok: true, reaped: [] };
+  const dead = new Set(gone);
+  write(rows.filter((r) => !dead.has(r)));
+  return { ok: true, reaped: gone.map((r) => ({ id: r.id, kind: r.kind, path: r.path, project: r.project })) };
+}
+
 /** Parse a file, and if it carries a registration leaf, register it. The one door the triggers call. */
 async function register(absPath, source) {
   const text = source != null ? String(source) : readFile(absPath);
@@ -334,4 +370,4 @@ function noteFile(absPath) {
   return register(abs).catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
 
-module.exports = { FIELDS, read, upsert, register, registerParsed, setState, noteFile, list, get, byPath, rowsAtPath, reapMissing, remove, locate, absPathOf, file: FILE };
+module.exports = { FIELDS, read, upsert, register, registerParsed, setState, noteFile, list, get, byPath, rowsAtPath, reapMissing, reapGone, remove, locate, absPathOf, file: FILE };

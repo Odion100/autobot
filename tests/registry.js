@@ -751,5 +751,64 @@ console.log("\nthe spec inventory — grabbing run blocks without parsing markdo
   reg.remove("RFC-820");
 }
 
+console.log("\nreapGone — a document deleted by somebody else still loses its row");
+{
+  // THE EVENT THAT NEVER ARRIVES. `reapMissing` needs somebody to name the path: a write the
+  // harness sees, one parse, an unreadable file, the row goes. The hub's janitor unlinks retired
+  // documents in its OWN process, so that write never happens here and nothing ever asks —
+  // measured 2026-11-02, eight of thirty-two rows outlived their documents and the drawer counted
+  // every one. This is the sweep that stands on the rule instead of on the event.
+  //
+  // The blocks above left their own rows standing, so every claim here is a DELTA. One settling
+  // sweep first, which is itself the claim that follows.
+  reg.reapGone();
+  const idsNow = () => reg.read().map((r) => r.id).sort();
+  const before = idsNow();
+  assert.deepStrictEqual(reg.reapGone().reaped, [], "a second sweep over a settled registry takes nothing");
+  assert.deepStrictEqual(idsNow(), before, "and leaves every standing row exactly where it was");
+  ok("the sweep is idempotent — a registry whose documents all exist is left alone");
+
+  const alive = path.join(sv, "RFCs", "RFC-900-still-here.md");
+  const doomed = path.join(sv, "RFCs", "RFC-901-about-to-go.md");
+  fs.writeFileSync(alive, "::rfc{id=RFC-900}\n");
+  fs.writeFileSync(doomed, "::rfc{id=RFC-901}\n");
+  await reg.register(alive);
+  await reg.register(doomed);
+  assert.ok(reg.get("RFC-900") && reg.get("RFC-901"));
+
+  fs.unlinkSync(doomed); // exactly what the janitor does, and nothing tells us
+  const r = reg.reapGone();
+  assert.deepStrictEqual(r.reaped.map((x) => x.id), ["RFC-901"]);
+  assert.strictEqual(reg.get("RFC-901"), null, "the row is gone, not flagged");
+  assert.ok(reg.get("RFC-900"), "and its neighbour is untouched");
+  ok("a row whose document was deleted behind our back is reaped, and the reap names it");
+
+  // WHAT WAS REAPED HAS TO BE SAYABLE. A sweep that answers `true` leaves a caller with no way to
+  // log what it took, which is how a deletion becomes indistinguishable from a quiet failure.
+  assert.deepStrictEqual(Object.keys(r.reaped[0]).sort(), ["id", "kind", "path", "project"]);
+  ok("the answer carries the row's identity and pointer, not a count");
+
+  // UNRESOLVABLE IS NOT GONE. A row whose project has no root resolves to no path at all, and that
+  // is a row this sweep cannot judge — a document is not missing because its project was renamed.
+  reg.upsert({ id: "RFC-902", kind: "rfc", path: "RFCs/RFC-902.md", project: "a-project-that-moved" });
+  assert.deepStrictEqual(reg.reapGone().reaped, [], "no root means no verdict");
+  assert.ok(reg.get("RFC-902"), "the row stands rather than being deleted on a guess");
+  ok("a row whose project root is unknown is left standing, never reaped on a guess");
+
+  // ONE FILE, SEVERAL LEAVES, SEVERAL ROWS — and they go together. Matching by identity rather
+  // than by id is what makes this hold: the mock fixture carries its own leaf and the leaf it
+  // exercises, so two rows legitimately share one path.
+  const two = path.join(sv, "RFCs", "RFC-903-two-leaves.md");
+  fs.writeFileSync(two, "::report{id=R-903 as=spec retain=permanent}\n\n::rfc{id=RFC-903}\n");
+  await reg.register(two);
+  assert.strictEqual(reg.read().filter((x) => String(x.path).endsWith("RFC-903-two-leaves.md")).length, 2);
+  fs.unlinkSync(two);
+  assert.deepStrictEqual(reg.reapGone().reaped.map((x) => x.id).sort(), ["R-903", "RFC-903"]);
+  ok("a deleted document takes EVERY row it registered, not the first one found");
+
+  reg.remove("RFC-900");
+  reg.remove("RFC-902");
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} claims held — the registry`);
