@@ -416,4 +416,44 @@ const stateOf = async (...verdicts) => {
   ok("a report's subtype rides the row — open vocabulary, absent when absent, intact through retirement");
 }
 
+console.log("\nas=spec owes a RUNNABLE block — the kind consumed by being run, not read");
+{
+  // HIS COMPLAINT, IN THE WORDS HE MADE IT IN: *"you didn't write a spec, you just wrote a bunch of
+  // command lines."* A spec report is the one kind consumed by being RUN, so one carrying only
+  // prose — or only `:::cmd` blocks — has not met the kind's promise, and until now nothing said
+  // so. `SPECS` is `test|run` and that is the line: a cmd is real evidence and may satisfy a
+  // CLAIM, it is simply not a thing the headless collector re-runs.
+  const leaf = (as, body) => `::report{id="R" as=${as} retain=30d}\n\n${body}`;
+  const st = async (text) => deriveState(await parse(text), "report");
+
+  for (const [what, body] of [
+    ["a `:::run` block", ":::run{title=\"x\"}\nTest.Proofs.claimKind\n:::\n"],
+    ["a `::test` chip", "::test{Test.Proofs.claimKind}\n"],
+  ]) {
+    const s2 = await st(leaf("spec", body));
+    assert.strictEqual(s2.invalid, undefined, `${what} satisfies it`);
+  }
+  ok("a spec report carrying a run block or a test chip is valid");
+
+  const cmdOnly = await st(leaf("spec", ":::cmd\necho hi\n:::\n"));
+  assert.strictEqual(cmdOnly.invalid, "no spec");
+  ok("a spec report carrying ONLY a cmd reads `no spec` — a cmd proves, it does not RE-run");
+
+  const proseOnly = await st(leaf("spec", "words about the work\n"));
+  assert.strictEqual(proseOnly.invalid, "no spec");
+  ok("a spec report of pure prose reads `no spec` rather than passing as filed");
+
+  // THE RULE IS THE SUBTYPE'S, NOT EVERY REPORT'S. An account is consumed by being READ, so
+  // demanding a runnable block of one would be inventing an obligation the chapter never gave it.
+  const account = await st(leaf("account", "words about the work\n"));
+  assert.strictEqual(account.invalid, undefined);
+  ok("an account of pure prose is untouched — only `as=spec` owes a runnable block");
+
+  // AND IT COMPOSES WITH THE OTHER TWO rather than replacing them: a leaf missing everything says
+  // everything, in one line, the way a reader can act on.
+  const bare = await st('::report{id="R" as=spec}\n\nwords\n');
+  assert.strictEqual(bare.invalid, "no retention, no spec");
+  ok("the missing declarations are reported together, not one at a time");
+}
+
 console.log(`\n${n} claims held — what a row says about a decision, and what a mark rests on`);

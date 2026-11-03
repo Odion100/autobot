@@ -435,7 +435,22 @@ function deriveState(blocks, kind, source) {
     // to be one notice, one plan, one spec and three nobody could name.
     const retain = String((leaf.attrs || {}).retain || "").trim();
     if (retain) state.retain = retain;
-    const missing = [!subtype && "no subtype", !retain && "no retention"].filter(Boolean);
+    // AND `as=spec` OWES A RUNNABLE BLOCK, derived the same way the two attributes are. A spec
+    // report is the one kind consumed by being RUN rather than read, so one carrying only prose —
+    // or only `:::cmd` blocks — is the kind's whole promise unmet, and his complaint in the words
+    // he made it in: *"you didn't write a spec, you just wrote a bunch of command lines."*
+    //
+    // `SPECS` is `test|run` and that is the line, not a judgment about cmds: a cmd is real evidence
+    // and may satisfy a CLAIM, it is simply not a thing the headless collector re-runs, so it
+    // cannot be what makes a document still answer next month. Said on the row rather than
+    // refused, like every other missing declaration here — a surface that refuses the write loses
+    // the document, and the agent that wrote it learns nothing.
+    const runnable = (blocks || []).some((b) => b && SPECS.includes(b.name));
+    const missing = [
+      !subtype && "no subtype",
+      !retain && "no retention",
+      subtype === "spec" && !runnable && "no spec",
+    ].filter(Boolean);
     if (missing.length) state.invalid = missing.join(", ");
   }
   if (retired) state.retired = true;
