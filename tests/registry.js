@@ -492,7 +492,8 @@ console.log("\na document may carry several leaves — each one is a row (his de
       'the RFC flow, playable\n\n' +
       '::rfc{id=MOCK-RFC-900}\n\n' +
       ':::approval{ask="approve the mock?" verdict=approved}\nthe mock verdict\n:::\n\n' +
-      '::claim[press this mock around]{id=m1}\n'
+      '::claim[press this mock around]{id=m1}\n' +
+      '\n::test{Test.Proofs.claimKind}\n'
   );
   const r = await reg.register(f);
   assert.strictEqual(r.rows, 2, "two leaves, two rows");
@@ -505,12 +506,18 @@ console.log("\na document may carry several leaves — each one is a row (his de
   // invalid), the mock row reads the rfc's verdict off the document
   assert.strictEqual(spec.state.subtype, "spec");
   assert.strictEqual(spec.state.retain, "permanent");
-  assert.strictEqual(spec.state.invalid, undefined, "a declared spec leaf wears no invalid");
+  // DECLARED **AND** CARRYING SOMETHING RUNNABLE. `as=spec` owes a third thing the other subtypes
+  // do not (markdown-state.js pins it): the kind is consumed by being RUN, so a spec leaf over
+  // prose alone reads `no spec` however well it declares itself. The chip above is what clears it.
+  assert.strictEqual(spec.state.invalid, undefined, "a declared spec leaf carrying a spec wears no invalid");
   assert.strictEqual(mock.state.verdict, "approved", "the mock derives like any RFC");
   ok("one file, two rows, each state derived by its own kind");
 
   // remove ONLY the mock leaf → its row goes, the spec's stays — per-leaf teardown
-  fs.writeFileSync(f, '::report{id=FIX-RFC-FLOW as=spec retain=permanent}\n\nthe mock was torn out\n');
+  fs.writeFileSync(
+    f,
+    '::report{id=FIX-RFC-FLOW as=spec retain=permanent}\n\nthe mock was torn out\n\n::test{Test.Proofs.claimKind}\n',
+  );
   await reg.register(f);
   assert.strictEqual(reg.get("MOCK-RFC-900"), null, "the torn-out leaf took its row");
   assert.ok(reg.get("FIX-RFC-FLOW"), "and the document's own identity stands");
