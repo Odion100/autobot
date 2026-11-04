@@ -17,7 +17,7 @@ const HUB = () => `http://localhost:${process.env.SV_PORT || 3000}/systemview/ap
 const TOOL_NAME = (t) => `mcp__${SERVER}__${t}`;
 const TOOL_NAMES = [
   "runTests", "runProofs", "probe", "projects", "logs", "stats",
-  "tv", "reply", "board", "comments",
+  "reply", "board", "comments",
   "nav", "refresh", "act", "lanes",
   "connect", "disconnect",
   "terminal", "terminals",
@@ -797,22 +797,32 @@ function toolsFor(identity = {}) {
           try { return text(renderStats(await hub("Agent", "stats", a))); } catch (e) { return fail(e); }
         }
       ),
-      tool(
-        "tv",
-        "Read what is on the project's TV — including his answers (::question answer=, " +
-          ":::approval verdict=, :::reply threads) written into the document.",
-        {
-          projectCode: z.string(),
-          show: z.string().optional().describe("an older report's title, to read its answers"),
-        },
-        async ({ projectCode, show }) => {
-          try {
-            const state = await hub("Agent", "tv", { projectCode, show });
-            if (state && state.error) return text(state.error);
-            return text(state && state.text ? state.text : "Nothing on the TV.");
-          } catch (e) { return fail(e); }
-        }
-      ),
+      // THE TV IS HELD, NOT PUBLISHED — the surface is being redefined and this tool is off the
+      // list until it is. Nothing an agent can call puts anything ON a TV: `show` is not an MCP
+      // tool, so the only agent-facing verb left was a reader whose own refusal said "put one up
+      // with show" — a live error naming a verb nobody has, costing always-loaded context to say
+      // it. Where he reads now is a DOCUMENT: write the file with its leaf and `nav` to it.
+      //
+      // The HUB door stays (api/index.js `tv:`, on api/reports.js) because `systemview tv` is a
+      // real CLI verb and that half is his. Restore this by putting "tv" back in TOOL_NAMES and
+      // uncommenting — the body is unchanged, not rotted.
+      //
+      // tool(
+      //   "tv",
+      //   "Read what is on the project's TV — including his answers (::question answer=, " +
+      //     ":::approval verdict=, :::reply threads) written into the document.",
+      //   {
+      //     projectCode: z.string(),
+      //     show: z.string().optional().describe("an older report's title, to read its answers"),
+      //   },
+      //   async ({ projectCode, show }) => {
+      //     try {
+      //       const state = await hub("Agent", "tv", { projectCode, show });
+      //       if (state && state.error) return text(state.error);
+      //       return text(state && state.text ? state.text : "Nothing on the TV.");
+      //     } catch (e) { return fail(e); }
+      //   }
+      // ),
       tool(
         "reply",
         "Answer inside a report's thread — his comments live in the document, and the answer " +
