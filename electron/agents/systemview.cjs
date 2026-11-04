@@ -968,23 +968,31 @@ function toolsFor(identity = {}) {
           } catch (e) { return fail(e); }
         }
       ),
+      // A REPORT IS A DOCUMENT AND `file` IS ITS DOOR — there is no report door, because there is
+      // nothing special left about a report: its leaf is what makes it one, and the leaf is read
+      // wherever the file lands. `report` used to be a second parameter here and it was the only
+      // one the hub never RESOLVED: `file` is put through resolveAnyPath and refuses by name,
+      // while `report` went straight to drive.js, which did `splitRange()` on it and labelled the
+      // result "opened report <basename>". Hand it a title instead of a path and the verb answered
+      // navigated → opened report <title> with nothing on screen — a success message for a
+      // navigation that did not happen, which is the one shape this system must never produce.
+      // Pass the path as `file` and it is checked, cross-project aware, and honest when it misses.
       tool(
         "nav",
         "Drive the open window to a place, saying WHICH KIND explicitly — exactly one of " +
-          "namespace | file | report | stats | agents. The caller always knows what it is " +
-          "sending him to; the code never guesses (his rule, after a slash-namespace opened " +
-          "an empty stage).",
+          "namespace | file | stats | agents. A report or any other document is a `file` — pass " +
+          "its path. The caller always knows what it is sending him to; the code never guesses " +
+          "(his rule, after a slash-namespace opened an empty stage).",
         {
           projectCode: z.string(),
           namespace: z.string().optional().describe("DOT notation — Service.Module.method"),
-          file: z.string().optional().describe("repo-relative code file path; #L10-20 ranges work"),
-          report: z.string().optional().describe("a report's .md path; #L ranges work"),
+          file: z.string().optional().describe("repo-relative path — code, or a document like .systemview/report.<pc>.<slug>.md; #L10-20 ranges work"),
           stats: z.string().optional().describe("the Stats page — 'open', or a tab: state|load|reliability|coverage|change|topology|coupling"),
           agents: z.boolean().optional().describe("the Agents page"),
         },
-        async ({ projectCode, namespace, file, report, stats, agents }) => {
+        async ({ projectCode, namespace, file, stats, agents }) => {
           try {
-            const r = await hub("Agent", "nav", { projectCode, namespace, file, report, stats, agents, as: who });
+            const r = await hub("Agent", "nav", { projectCode, namespace, file, stats, agents, as: who });
             // A REFUSAL SAYS WHY. The old door answered "nav failed" for a namespace that does not
             // exist, one that is ambiguous, a bad stats tab and an unknown service alike — four
             // different problems, one useless sentence. The hub already knows which; say it.
