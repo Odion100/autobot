@@ -1,6 +1,11 @@
 # RFC-010 — One portable folder: the harness owns its own configuration
 
-**Status:** design, for Odion's review — 2026-09-19. **Design only — nothing here is built.**
+::rfc{id=RFC-010}
+
+**Partly built** — `~/.autobot` holds real configuration (`agents/`, `worklists/`, `vectors/`,
+`skill-sources.json`, `services.json`). §3 is the part that did not land: skills still live under
+`~/.claude/skills`, because the Skill tool discovers from the CLI's own directories and relocating
+them would stop them firing until the SDK's local plugin door is used.
 **Owner:** autobot. Everything lands in one function, `sdkOptionsOf()` in `electron/agents/sessions.cjs:242`.
 **Depends on:** nothing new. Three doors in `@anthropic-ai/claude-agent-sdk` that we already have and do not use.
 **Related:** RFC-003 (an agent is a configured session — the definitions this RFC finishes moving), RFC-001 (the shell hosts the hub).
