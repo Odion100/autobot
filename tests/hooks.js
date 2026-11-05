@@ -658,6 +658,37 @@ try {
       try { hooks.remove("smoke-rise-nowhen"); } catch {}
       try { hooks.remove(RISE); } catch {}
     }
+
+    // HIS SPELLING HAS TO BEHAVE LIKE THE WORD IT ALIASES. `once-per-compaction` passed the rate
+    // vocabulary, read identically on the allow side, and was then missing from the two branches
+    // that make the rate mean anything: the falling edge in fire() (so it never re-armed and
+    // degraded silently to once-per-session — the exact bug the edge family exists to end) and the
+    // no-`when` refusal (so the one shape that cannot work saved cleanly). An alias honoured in some
+    // branches and not others is worse than no alias: the hook looks right and fires once.
+    {
+      console.log("\nonce-per-compaction — his word, and it has to be the same behaviour");
+      const COMP = "smoke-hooks-compaction";
+      try { hooks.remove(COMP); } catch {}
+      hooks.save({ name: COMP, on: "usage", when: { pct: { gte: 60 } }, do: "skill:context-maintenance",
+                   kind: "context", author: "agent:smoke", rate: "once-per-compaction", note: "throwaway" });
+
+      const fired = new Map();
+      const at = (pct) => hooks.fire({ kind: "usage", pct }, { agentId: "agent:smoke", carries: [COMP], fired, cleared: new Map(), turn: 1 });
+
+      eq("the crossing fires it", at(72).length, 1);
+      eq("held high, it stays quiet", at(85).length, 0);
+      eq("the fall re-arms it", at(20).length, 0);
+      eq("THE SECOND CROSSING FIRES — under the alias it never did", at(66).length, 1);
+
+      let refused = false;
+      try {
+        hooks.save({ name: "smoke-comp-nowhen", on: "compaction.after", do: "skill:context-retrieval",
+                     kind: "context", author: "agent:smoke", rate: "once-per-compaction" });
+      } catch (e) { refused = /needs a `when`/.test(e.message); }
+      ok("once-per-compaction with no `when` is refused too, and names itself", refused);
+      try { hooks.remove("smoke-comp-nowhen"); } catch {}
+      try { hooks.remove(COMP); } catch {}
+    }
   })();
 } finally {
   try { fs.unlinkSync(path.join(defs.DIR, `${ID}.json`)); } catch {}

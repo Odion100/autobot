@@ -540,6 +540,13 @@ function parseDur(s) {
 
 const rateOf = (hook) => String((hook && (hook.rate || hook.guard)) || "").trim();
 
+// THE EDGE FAMILY, IN ONE PLACE. `once-per-compaction` is his word for `once-per-rise` and the two
+// are one behaviour — but the pair was enumerated at four separate sites and his spelling was
+// missing from two of them: the falling edge in fire() (so it never re-armed, degrading silently to
+// `once-per-session`) and the no-`when` refusal at the writing door (so the one shape that cannot
+// work was accepted). An alias checked in some branches and not others is worse than no alias.
+const isEdgeRate = (g) => g === "once-per-rise" || g === "once-per-compaction";
+
 function readFiredState() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) || {}; } catch { return {}; }
 }
@@ -579,7 +586,7 @@ function rateAllows(hook, fired, ctx = {}) {
   // deletes this entry when `when` stops matching — so "is there an entry" IS "has it fired since
   // the last fall". Session-scoped on purpose: a fresh session is a fresh context and therefore
   // armed, which is the behaviour you want when the harness restarts at 80% full.
-  if (g === "once-per-rise" || g === "once-per-compaction") return !seen;
+  if (isEdgeRate(g)) return !seen;
 
   const st = readFiredState();
   const last = st[firedKey(hook, ctx)];
@@ -606,7 +613,7 @@ function recordFired(hook, ctx = {}) {
   // NOTHING DURABLE TO REMEMBER for either session-scoped rate. Persisting a rise would be worse
   // than useless: a restart would find it still "fired" and stay silent on a window that is a
   // fresh context, which is the exact failure this rate exists to end.
-  if (!g || g === "once-per-session" || g === "once-per-rise" || g === "once-per-compaction") return;
+  if (!g || g === "once-per-session" || isEdgeRate(g)) return;
   const st = readFiredState();
   st[firedKey(hook, ctx)] = { ts: Date.now(), hook: hook.name };
   writeFiredState(st);
@@ -693,7 +700,7 @@ function fire(event = {}, ctx = {}) {
       // crossing fires. Safe to key on "being in this loop": `hooks` came from
       // `index().get(kind)`, so every hook here is `on` this event kind, and a usage hook can
       // never be re-armed by some unrelated event that simply lacks a `pct` field.
-      if (rateOf(h) === "once-per-rise") fired.delete(h.name);
+      if (isEdgeRate(rateOf(h))) fired.delete(h.name);
       continue;
     }
     if (!guardAllows(h, fired, ctx)) continue;
@@ -870,16 +877,16 @@ function save(rec = {}) {
   if (rateIn) {
     if (!RATE_FORMS.test(rateIn))
       throw new Error(
-        `rate must be once-per-session, once-per-rise, once-per-day, once-per-week, ` +
-          `once-per-month, or cooldown:<duration> — got "${rateIn}"`
+        `rate must be once-per-session, once-per-rise, once-per-compaction, once-per-day, ` +
+          `once-per-week, once-per-month, or cooldown:<duration> — got "${rateIn}"`
       );
     // A RISE WITH NO CONDITION CAN NEVER FALL, so it degenerates silently into
     // `once-per-session` — which is precisely the bug this rate was added to fix, wearing the new
     // name. Refused here, where somebody is watching, rather than discovered months later from a
     // hook that looks correct and fired once.
-    if (rateIn === "once-per-rise" && !(rec.when && typeof rec.when === "object" && Object.keys(rec.when).length))
+    if (isEdgeRate(rateIn) && !(rec.when && typeof rec.when === "object" && Object.keys(rec.when).length))
       throw new Error(
-        `once-per-rise is once per CROSSING of a condition, so it needs a \`when\` to cross. ` +
+        `${rateIn} is once per CROSSING of a condition, so it needs a \`when\` to cross. ` +
           `With nothing to go false it could never re-arm and would mean once-per-session — the ` +
           `exact failure it exists to end. Give it a \`when\`, or use a different rate.`
       );
