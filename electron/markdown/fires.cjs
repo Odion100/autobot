@@ -29,21 +29,38 @@ const splitList = (raw) =>
 // And a CLAIM's declared reviewers always hear it (RFC-075 round two, his: "the claim knows who the
 // reviewer is"): `reviewers=` is UNIONED onto whatever the ladder resolves — being named a reviewer
 // is an obligation, and an obligation nobody is told about is not one.
-function audienceOf(block, threads, docMembers) {
+//
+// AND THE LADDER ALSO ANSWERS *WHEN* (his ruling, 2026-11-06). An AUTHORED subscription — the
+// block's own `subscribe=`, its thread's, a claim's `reviewers=` — is somebody naming who needs to
+// know, so it is automatic by definition and goes out the moment the block fires. The MEMBERS
+// FALLBACK is policy, not authorship: the members line's `auto=` list names the members told
+// automatically, and a PLAIN member's copy is HELD for the human's press — the one human-gated
+// path. That is what `managed` means, and it is enforced here so every consumer of a fire (the
+// announce door, the sweep, a release) obeys one gate instead of each keeping its own.
+function audienceOf(block, threads, docMembers, autoList) {
+  const auto = autoList || [];
+  const split = (list) => ({
+    immediate: list.filter((m) => auto.includes(m)),
+    held: list.filter((m) => !auto.includes(m)),
+  });
   const inner = threads
     .filter((t) => t.line < block.line && block.end <= t.end)
     .sort((a, b) => b.line - a.line)[0];
-  const threadAudience = inner
-    ? splitList(inner.attrs.subscribe != null ? inner.attrs.subscribe : inner.attrs.members).length
-      ? splitList(inner.attrs.subscribe != null ? inner.attrs.subscribe : inner.attrs.members)
-      : docMembers
-    : null;
-  if (block.name === "reply") return threadAudience || docMembers;
+  const threadOwn = inner
+    ? splitList(inner.attrs.subscribe != null ? inner.attrs.subscribe : inner.attrs.members)
+    : [];
+  // the thread's audience: its own authored list, or the members fallback under the gate
+  const threadAudience = inner ? (threadOwn.length ? { immediate: threadOwn, held: [] } : split(docMembers)) : null;
+  const union = (base, names) => ({
+    immediate: [...base.immediate, ...names.filter((r) => !base.immediate.includes(r))],
+    held: base.held.filter((r) => !names.includes(r)),
+  });
+  if (block.name === "reply") return threadAudience || split(docMembers);
   const reviewers = block.name === "claim" ? splitList(block.attrs.reviewers) : [];
   const own = splitList(block.attrs.subscribe);
-  const base = own.length ? own : threadAudience || docMembers || [];
+  const base = own.length ? { immediate: own, held: [] } : threadAudience || split(docMembers || []);
   if (!reviewers.length) return base;
-  return [...base, ...reviewers.filter((r) => !base.includes(r))];
+  return union(base, reviewers);
 }
 
 /**
@@ -57,15 +74,18 @@ function firesOf(blocks, source) {
   const all = blocks || [];
   const membersLine = all.find((b) => b.name === "members" && b.kind === "leaf");
   const docMembers = membersLine ? splitList(membersLine.attrs.who) : [];
+  const autoList = membersLine ? splitList(membersLine.attrs.auto) : [];
   const threads = all.filter((b) => b.name === "thread" && b.kind === "container");
   const out = [];
   for (const b of all) {
     if (!FIRING[b.name] || !hasFired(b)) continue;
-    const audience = audienceOf(b, threads, docMembers);
-    if (!audience || !audience.length) continue;
+    const lanes = audienceOf(b, threads, docMembers, autoList);
+    const audience = [...lanes.immediate, ...lanes.held];
+    if (!audience.length) continue;
     const told = splitList(b.attrs.told);
-    const pending = audience.filter((a) => !told.includes(a));
-    if (!pending.length) continue;
+    const pending = lanes.immediate.filter((a) => !told.includes(a));
+    const held = lanes.held.filter((a) => !told.includes(a));
+    if (!pending.length && !held.length) continue;
     const inner = threads
       .filter((t) => t.line < b.line && b.end <= t.end)
       .sort((x, y) => y.line - x.line)[0];
@@ -75,7 +95,7 @@ function firesOf(blocks, source) {
       b.name === "reply" && thread
         ? `${b.attrs.by || "somebody"} replied in ${thread} — ${firstLine(b.src)}`
         : FIRING[b.name].summary(b);
-    out.push({ name: b.name, line: b.line, end: b.end, attrs: b.attrs, summary, thread, audience, pending, told });
+    out.push({ name: b.name, line: b.line, end: b.end, attrs: b.attrs, summary, thread, audience, pending, held, told });
   }
   return out;
 }

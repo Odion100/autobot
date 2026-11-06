@@ -1342,15 +1342,77 @@ async function announceDocument(absPath, opts = {}) {
   // Safe because `buildUpdate` reads the file only for `members` and `arc`: `members` is always
   // supplied here (`f.pending`), and the `told=` stamps below touch claim lines, never the arc —
   // so no build depends on a write from an earlier iteration.
+  // THE GATE (his ruling, 2026-11-06): `f.pending` is the immediate lane — authored subscriptions
+  // plus members on the line's `auto=` list. `f.held` is every plain member: their copy waits for
+  // his press (`releaseDocumentFires`), which is what `managed` means. Nothing here is built or
+  // emitted for a held member, so a managed document stays quiet however many decisions land in it.
   const builts = [];
   for (const f of res.fires) {
     builts.push({
       f,
+      built: f.pending.length
+        ? await buildUpdate(
+            {
+              path: rel,
+              project,
+              members: f.pending,
+              by: opts.by || "",
+              summary: f.summary,
+              ...(f.thread ? { thread: f.thread } : {}),
+              docKind: row.kind,
+              docId: row.id,
+              block: f.name,
+              line: f.line,
+            },
+            abs,
+          )
+        : null,
+    });
+  }
+  for (const { f, built } of builts) {
+    const e = built && built.ok ? emitAmbient(built.event) : null;
+    const delivered = e && Array.isArray(e.delivered) ? e.delivered : [];
+    // The writer already knows — its own tool call put the answer there (c31's "exactly one
+    // delivery ever happened" depends on the writer never being owed one), and that is true
+    // whichever lane membership put them in.
+    const knows =
+      opts.by && (f.pending.includes(opts.by) || (f.held || []).includes(opts.by)) ? [opts.by] : [];
+    const newly = [...new Set([...delivered, ...knows])];
+    if (!newly.length) continue; // nobody reached — stamp nothing, the sweep delivers it later
+    fired += 1;
+    const union = [...new Set([...f.told, ...newly])];
+    docWrite.writeAttr(abs, f.line, { told: union.join("|") });
+  }
+  return { ok: true, registered: true, fired };
+}
+
+// THE PRESS — the other half of the gate above. A plain member's fires sit HELD in the document
+// (visible to every parse, counted by the pin) until this door releases them: deliver, then stamp
+// `told=` for exactly who was reached, same receipt as the announce. `member` narrows the release
+// to one person's chip; without it the press clears the document. A held member whose session is
+// not running stays held — the next press retries, and that is honest rather than annoying.
+async function releaseDocumentFires(absPath, opts = {}) {
+  const abs = String(absPath || "");
+  const res = await docFires.scan(abs);
+  if (!res.ok) return res;
+  const row = documents.byPath(abs);
+  if (!row) return { ok: false, error: "not a registered document" };
+  const { project, rel } = documents.locate(abs);
+  const only = opts.member ? String(opts.member) : "";
+  let released = 0;
+  let stillHeld = 0;
+  const builts = [];
+  for (const f of res.fires) {
+    const targets = (f.held || []).filter((m) => !only || m === only);
+    if (!targets.length) continue;
+    builts.push({
+      f,
+      targets,
       built: await buildUpdate(
         {
           path: rel,
           project,
-          members: f.pending,
+          members: targets,
           by: opts.by || "",
           summary: f.summary,
           ...(f.thread ? { thread: f.thread } : {}),
@@ -1363,20 +1425,35 @@ async function announceDocument(absPath, opts = {}) {
       ),
     });
   }
-  for (const { f, built } of builts) {
+  for (const { f, targets, built } of builts) {
     if (!built.ok) continue;
     const e = emitAmbient(built.event);
-    const delivered = Array.isArray(e.delivered) ? e.delivered : [];
-    // The writer already knows — its own tool call put the answer there (c31's "exactly one
-    // delivery ever happened" depends on the writer never being owed one).
-    const knows = opts.by && f.pending.includes(opts.by) ? [opts.by] : [];
-    const newly = [...new Set([...delivered, ...knows])];
-    if (!newly.length) continue; // nobody reached — stamp nothing, the sweep delivers it later
-    fired += 1;
-    const union = [...new Set([...f.told, ...newly])];
+    const delivered = (Array.isArray(e.delivered) ? e.delivered : []).filter((d) => targets.includes(d));
+    stillHeld += targets.filter((t) => !delivered.includes(t)).length;
+    if (!delivered.length) continue;
+    released += delivered.length;
+    const union = [...new Set([...f.told, ...delivered])];
     docWrite.writeAttr(abs, f.line, { told: union.join("|") });
   }
-  return { ok: true, registered: true, fired };
+  return { ok: true, released, held: stillHeld };
+}
+
+// What the pin renders: every live fire with its two lanes, nothing else — one definition
+// (firesOf), fetched rather than re-derived in the window.
+async function documentFires(absPath) {
+  const res = await docFires.scan(String(absPath || ""));
+  if (!res.ok) return res;
+  return {
+    ok: true,
+    fires: res.fires.map((f) => ({
+      name: f.name,
+      line: f.line,
+      thread: f.thread,
+      summary: f.summary,
+      pending: f.pending,
+      held: f.held || [],
+    })),
+  };
 }
 
 // RFC-073 §3.1 — THE AGENT'S DOOR. An agent marks a claim or moves an objective through THIS, not
@@ -2962,7 +3039,7 @@ module.exports = {
   // who needs the store takes it from here, so the rename is one edit forever.
   EVENTS,
   emitAmbient, ambientHistory, subscribeAmbient,
-  announceDocument, sweepDocuments, markBlock,
+  announceDocument, sweepDocuments, markBlock, releaseDocumentFires, documentFires,
   weights,
   loadSessionStore: loadStore,
   saveSessionStore: saveStore,

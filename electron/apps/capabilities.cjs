@@ -79,7 +79,7 @@ const GRANTS = {
   // grant would protect nothing and add a line to every manifest.
   "files:write": {
     files: ["writeFile", "stageFiles", "stageHunk"],
-    documents: ["sendUpdate"],
+    documents: ["sendUpdate", "fires", "releaseFires"],
   },
 };
 

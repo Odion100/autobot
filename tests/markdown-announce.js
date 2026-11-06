@@ -33,7 +33,9 @@ const DOC = [
   "# RFC-200",
   "",
   "::rfc{id=RFC-200}",
-  "::members{who=buapi}",
+  // auto=buapi puts the one member on the immediate lane — this block proves the DELIVERY
+  // mechanics; the gate itself (held vs immediate) is proven in its own section below.
+  "::members{who=buapi auto=buapi}",
   "",
   ':::approval{ask="Approve RFC-200?" verdict=approved}',
   "the ask",
@@ -116,6 +118,62 @@ console.log("\nthe sweep re-announces what the registry knows");
   assert.ok(e, "the sweep found the new fire off the registry alone");
   assert.match(e.summary, /c1 met/);
   ok("a session-start sweep parses registered documents and emits what is still owed (c32)");
+}
+
+console.log("\nthe gate — a plain member's fires wait for the press");
+{
+  // His ruling, 2026-11-06: a plain member is the human-gated path. The decision lands in the
+  // document either way — delivery is what waits.
+  const gated = path.join(root, "RFCs", "RFC-202-managed.md");
+  fs.writeFileSync(gated, [
+    "# RFC-202",
+    "",
+    "::rfc{id=RFC-202}",
+    "::members{who=buapi}",
+    "",
+    ':::approval{ask="Ship RFC-202?" verdict=approved}',
+    "the ask",
+    ":::",
+  ].join("\n"));
+  events.length = 0;
+  const r = await sessions.announceDocument(gated);
+  assert.ok(r.ok && r.registered);
+  assert.ok(!events.find((x) => x.kind === "document.updated"));
+  assert.ok(!/told=/.test(fs.readFileSync(gated, "utf8")));
+  ok("a managed document stays QUIET — the decision is recorded, no member is woken, nothing is stamped");
+
+  const held = await sessions.documentFires(gated);
+  assert.ok(held.ok && held.fires.length === 1);
+  assert.deepStrictEqual(held.fires[0].pending, []);
+  assert.deepStrictEqual(held.fires[0].held, ["buapi"]);
+  ok("the fires door shows the held lane — what the pin renders, one definition, fetched not re-derived");
+
+  events.length = 0;
+  const rel = await sessions.releaseDocumentFires(gated);
+  const e = events.find((x) => x.kind === "document.updated");
+  assert.ok(e && e.members === "|buapi|" && e.block === "approval");
+  assert.ok(rel.ok && rel.released === 0 && rel.held === 1);
+  assert.ok(!/told=/.test(fs.readFileSync(gated, "utf8")));
+  ok("the press releases: the event goes out to the held member — nobody live, so told= stays unstamped and the fire stays owed");
+
+  const narrow = await sessions.releaseDocumentFires(gated, { member: "nobody-here" });
+  assert.ok(narrow.ok && narrow.released === 0 && narrow.held === 0);
+  ok("a narrowed release touches only the named member's lane");
+
+  // the writer is never owed its own decision, whichever lane membership put it in
+  const byWriter = path.join(root, "RFCs", "RFC-203-writer.md");
+  fs.writeFileSync(byWriter, [
+    "::rfc{id=RFC-203}",
+    "::members{who=buapi}",
+    "",
+    ':::approval{ask="Go?" verdict=approved}',
+    "x",
+    ":::",
+  ].join("\n"));
+  const w = await sessions.announceDocument(byWriter, { by: "buapi" });
+  assert.ok(w.ok && w.fired === 1);
+  assert.match(fs.readFileSync(byWriter, "utf8"), /told=buapi/);
+  ok("the writer's own parse stamps a HELD member told — its tool call put the answer there (c31 crosses the gate)");
 }
 
 console.log("\nmarkBlock — the agent's door, with its rules");

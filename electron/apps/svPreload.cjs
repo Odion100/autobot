@@ -80,6 +80,9 @@ const FULL = {
   // event, and the hook layer decides who hears it.
   documents: {
     sendUpdate: (payload) => ipcRenderer.invoke("documents:send-update", payload),
+    // the gate (2026-11-06): what is held for his press, and the press itself
+    fires: (payload) => ipcRenderer.invoke("documents:fires", payload),
+    releaseFires: (payload) => ipcRenderer.invoke("documents:release-fires", payload),
   },
   jobs: {
     list: () => ipcRenderer.invoke("jobs:list"),

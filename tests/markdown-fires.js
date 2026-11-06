@@ -20,12 +20,20 @@ console.log("the ladder — who hears a fire");
   const base = "::members{who=buapi|systemlynx}\n\n";
 
   let f = await fires(base + ':::approval{ask="Go?" verdict=approved}\nx\n:::');
-  assert.deepStrictEqual(f[0].pending, ["buapi", "systemlynx"]);
-  ok("no subscribe= → the document's members, both of them (c11)");
+  assert.deepStrictEqual(f[0].pending, []);
+  assert.deepStrictEqual(f[0].held, ["buapi", "systemlynx"]);
+  assert.deepStrictEqual(f[0].audience, ["buapi", "systemlynx"]);
+  ok("no subscribe= → the members, both of them — HELD for his press, because a plain member is the human-gated path (c11 under the gate)");
+
+  f = await fires('::members{who=buapi|systemlynx auto=buapi}\n\n' + ':::approval{ask="Go?" verdict=approved}\nx\n:::');
+  assert.deepStrictEqual(f[0].pending, ["buapi"]);
+  assert.deepStrictEqual(f[0].held, ["systemlynx"]);
+  ok("auto= splits the fallback: the auto member is told the moment it fires, the plain member waits (the gate)");
 
   f = await fires(base + ':::approval{ask="Go?" subscribe=buapi verdict=approved}\nx\n:::');
   assert.deepStrictEqual(f[0].pending, ["buapi"]);
-  ok("subscribe=buapi → buapi; systemlynx hears nothing (c12)");
+  assert.deepStrictEqual(f[0].held, []);
+  ok("subscribe=buapi → buapi, immediately — an authored subscription is automatic by definition; systemlynx hears nothing (c12)");
 
   f = await fires(base + ':::approval{ask="Go?" subscribe=reviewer-x verdict=approved}\nx\n:::');
   assert.deepStrictEqual(f[0].pending, ["reviewer-x"]);
@@ -51,7 +59,8 @@ console.log("the ladder — who hears a fire");
   // ladder's answer, so naming one is telling one. Here subscribe= would otherwise exclude them.
   f = await fires(base + "::claim[x]{id=c3 state=met by=sv at=1 subscribe=buapi reviewers=systemlynx}");
   assert.deepStrictEqual(f[0].audience.sort(), ["buapi", "systemlynx"]);
-  ok("a claim's reviewers= joins its audience — an obligation nobody is told about is not one (RFC-075)");
+  assert.deepStrictEqual(f[0].pending.sort(), ["buapi", "systemlynx"]);
+  ok("a claim's reviewers= joins its audience IMMEDIATELY — an obligation nobody is told about is not one, so it never waits on a press (RFC-075)");
 }
 
 console.log("\nthreads — the audience on the edge");
@@ -105,8 +114,9 @@ console.log("\nthreads — the audience on the edge");
     "::::",
   ].join("\n");
   const b = await fires(bare);
-  assert.deepStrictEqual(b[0].pending, ["systemlynx", "buapi"]);
-  ok("a thread naming nobody inherits the document's members (RFC-071)");
+  assert.deepStrictEqual(b[0].pending, []);
+  assert.deepStrictEqual(b[0].held, ["systemlynx", "buapi"]);
+  ok("a thread naming nobody inherits the document's members — and inherits the GATE with them (RFC-071, under the gate)");
 }
 
 console.log("\nthe receipt — told= is the only baseline");
@@ -118,12 +128,13 @@ console.log("\nthe receipt — told= is the only baseline");
   ok("told= covering the audience is silence — no second delivery, ever (c17, c31)");
 
   f = await fires(base + ':::approval{ask="Go?" verdict=approved told=buapi}\nx\n:::');
-  assert.deepStrictEqual(f[0].pending, ["systemlynx"]);
-  ok("a partial stamp fires for exactly who is still owed it — the sweep's input (c30, c32)");
+  assert.deepStrictEqual(f[0].pending, []);
+  assert.deepStrictEqual(f[0].held, ["systemlynx"]);
+  ok("a partial stamp holds exactly who is still owed it — told= is the one baseline, the lane does not change that (c30, c32)");
 
   f = await fires(base + ':::approval{ask="Go?" verdict=approved}\nx\n:::');
-  assert.deepStrictEqual(f[0].pending, ["buapi", "systemlynx"]);
-  ok("hand-edit told= off and it delivers again — there is no other baseline (c18)");
+  assert.deepStrictEqual(f[0].held, ["buapi", "systemlynx"]);
+  ok("hand-edit told= off and it is owed again — there is no other baseline (c18)");
 
   f = await fires(base + ':::approval{ask="Go?"}\nx\n:::\n\nA paragraph edit.\n');
   assert.deepStrictEqual(f, []);
@@ -131,7 +142,8 @@ console.log("\nthe receipt — told= is the only baseline");
 
   f = await fires(base + "::gap{id=G-12 resolved=2026-10-25}");
   assert.match(f[0].summary, /gap resolved — G-12/);
-  ok("a gap completing is a fire — `gap resolved — <id>` to whoever is on it (c29)");
+  assert.deepStrictEqual(f[0].held, ["buapi", "systemlynx"]);
+  ok("a gap completing is a fire — `gap resolved — <id>` to whoever is on it, through the same gate (c29)");
 }
 
 console.log("\nscan — one parse, three answers");

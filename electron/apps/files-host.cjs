@@ -189,6 +189,30 @@ function register(getWin) {
     return { ok: true, sent: built.members, path: path_ };
   });
 
+  // THE GATE'S TWO READ/WRITE DOORS (2026-11-06). A document's fires, with their two lanes —
+  // `pending` (authored subscribe= and auto= members, delivered on the spot) and `held` (plain
+  // members, waiting on his press). The pin renders `held`; the press below releases it. One
+  // definition lives in markdown/fires.cjs — the window fetches instead of re-deriving.
+  ipcMain.handle("documents:fires", async (_e, payload = {}) => {
+    const path_ = String(payload.path || "").trim();
+    let abs = "";
+    try {
+      abs = path.isAbsolute(path_) ? path_ : path.join(rootOf(String(payload.project || "")), path_);
+    } catch {}
+    if (!abs) return { ok: false, error: "no path" };
+    return sessions.documentFires(abs);
+  });
+
+  ipcMain.handle("documents:release-fires", async (_e, payload = {}) => {
+    const path_ = String(payload.path || "").trim();
+    let abs = "";
+    try {
+      abs = path.isAbsolute(path_) ? path_ : path.join(rootOf(String(payload.project || "")), path_);
+    } catch {}
+    if (!abs) return { ok: false, error: "no path" };
+    return sessions.releaseDocumentFires(abs, { member: payload.member || "", by: payload.by || "" });
+  });
+
   // AN UNFINISHED RUN NUDGES ITS AGENT — the settings door. The defaults are returned whether or
   // not a file exists, so a surface never has to render "unset"; writing merges, so the cog can
   // send one changed field without having to hold the whole object.
