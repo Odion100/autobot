@@ -232,6 +232,11 @@ const FULL = {
         setModel: (model) => ipcRenderer.invoke("agent:setModel", key, model),
         thinking: () => ipcRenderer.invoke("agent:thinking", key),
         setThinking: (t) => ipcRenderer.invoke("agent:setThinking", key, t),
+        // AUTO-COMPACTION — stop a running countdown (the human's press, or the agent's own),
+        // read the live pending state for a view attaching mid-count, and read/tune settings.
+        stopCompaction: (by) => ipcRenderer.invoke("agent:compaction-stop", key, by),
+        compactionState: () => ipcRenderer.invoke("agent:compaction-state", key),
+        compactionSettings: (patch) => ipcRenderer.invoke("agent:compaction-settings", key, patch),
         history: () => ipcRenderer.invoke("agent:history", key),
         // detaches this view; the session keeps thinking (kill is separate + deliberate)
         dispose: () => ipcRenderer.send("agent:dispose", key),

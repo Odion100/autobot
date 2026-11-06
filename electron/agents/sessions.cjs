@@ -140,6 +140,7 @@ const hooks = require("./hooks.cjs");
 const ledger = require("./ledger.cjs");
 const worklist = require("./worklist.cjs");
 const nudge = require("./nudge.cjs");
+const compaction = require("./compaction.cjs");
 const skillSources = require("./skillSources.cjs");
 const context = require("./context.cjs");
 const discovery = require("./discovery.cjs");
@@ -838,6 +839,9 @@ function fireHooks(s, event) {
   // harness when a write leaves every item done (worklist.allDone on the persisted list) — there is
   // no flag an agent can set, and an agent that wipes its worklist has not cleared anything.
   if (event.kind === "run.finished" && event.source) s.runsDone.set(String(event.source), Date.now());
+  // AUTO-COMPACTION re-evaluates on every fill reading. `usage` is emitted per assistant message and
+  // again at the yield, so the release valve sees the climb, not only the turn's ending.
+  if (event.kind === "usage" && typeof event.pct === "number") { try { maybeCompact(s, event.pct); } catch {} }
   // AMBIENT FIELDS (his design, hooks.AMBIENT is the declaration): every event carries what the
   // world can afford alongside what happened, so a `when` can say {"ctxPct":{"lte":40}} on any
   // kind. Stamped on a copy — the emitted event that feeds/history see stays exactly what
@@ -895,6 +899,112 @@ function fireHooks(s, event) {
     }
     deliverHook(s, h, event);
   }
+}
+
+// ================================================================================================
+// AUTO-COMPACTION — the release valve. Policy (thresholds, the decision) is compaction.cjs; the
+// clock and the `/compact` push are the session's, the same split nudge.cjs keeps.
+// ================================================================================================
+
+// IS THE MAINTENANCE PASS DONE? Agnostic: find the hook THIS agent carries on the `usage` event,
+// read what it points at (`do`), and ask whether that run finished since fill crossed soft. No
+// usage hook carried → nothing is bound → the gate is open, because the pass is a courtesy of the
+// soft path, never a block. Repoint the hook and the gate follows it; this never names a skill.
+function passReadyFor(s) {
+  let src = "";
+  try {
+    const carries = carriesOf(s);
+    const h = hooks.list().find((x) => x.on === "usage" && hooks.inScope(x, { carries }));
+    src = h ? String(h.do || "").trim() : "";
+  } catch { src = ""; }
+  return compaction.passReady({ src, doneAt: s.runsDone.get(src) || 0, softAt: s.compactionCtl.softAt });
+}
+
+function compactionPending(s) {
+  const c = s.compactionCtl.countdown;
+  if (!c) return null;
+  return { secondsLeft: Math.max(0, Math.ceil((c.endsAt - Date.now()) / 1000)), hard: !!c.hard, cancellable: !c.hard };
+}
+
+function clearCountdown(s) {
+  const ctl = s.compactionCtl;
+  if (ctl.timer) { clearInterval(ctl.timer); ctl.timer = null; }
+  ctl.countdown = null;
+}
+
+function fireCompaction(s) {
+  const ctl = s.compactionCtl;
+  clearCountdown(s);
+  ctl.firedAt = Date.now();
+  ctl.snoozeUntil = 0;
+  ctl.softAt = 0;
+  // THE PROVEN PATH — a bare /compact user message, the same push send() makes for a typed one,
+  // minus the injection composition that would prepend text to a slash command. It rides the input
+  // queue, so pushed mid-turn it compacts at the yield rather than interrupting the turn.
+  try {
+    s.input.push({ type: "user", message: { role: "user", content: [{ type: "text", text: "/compact" }] }, parent_tool_use_id: null, session_id: "" });
+  } catch {}
+  emit(s, { kind: "compaction.fired", trigger: "auto" });
+}
+
+function startCountdown(s, hard) {
+  const ctl = s.compactionCtl;
+  clearCountdown(s);
+  const secs = compaction.readSettings().countdownSec;
+  ctl.countdown = { hard: !!hard, endsAt: Date.now() + secs * 1000 };
+  emit(s, { kind: "compaction.pending", ...compactionPending(s) });
+  ctl.timer = setInterval(() => {
+    const p = compactionPending(s);
+    if (!p) { clearCountdown(s); return; }
+    if (p.secondsLeft <= 0) { fireCompaction(s); return; }
+    emit(s, { kind: "compaction.pending", ...p });
+  }, 1000);
+  if (ctl.timer && ctl.timer.unref) ctl.timer.unref();
+}
+
+// Called on every `usage` reading (fireHooks). Tracks the soft-crossing base for the gate, asks
+// compaction.evaluate() what to do, and acts — the only writer of the countdown.
+function maybeCompact(s, pct) {
+  const ctl = s.compactionCtl;
+  const settings = compaction.readSettings();
+  if (pct != null && pct >= settings.softPct) { if (!ctl.softAt) ctl.softAt = Date.now(); }
+  else { ctl.softAt = 0; ctl.snoozeUntil = 0; }
+  const verdict = compaction.evaluate({
+    pct, now: Date.now(), settings,
+    countdown: ctl.countdown, snoozeUntil: ctl.snoozeUntil,
+    passReady: passReadyFor(s),
+  });
+  if (verdict.kind === "start-soft") startCountdown(s, false);
+  else if (verdict.kind === "start-hard") startCountdown(s, true);
+  else if (verdict.kind === "clear" && ctl.countdown) { clearCountdown(s); emit(s, { kind: "compaction.cancelled", reason: verdict.reason }); }
+}
+
+// STOP — pressable by the human and callable by the agent through the bridge. Refused on a hard
+// countdown: the valve is the valve. A stop defers by the snooze window toward the hard line; while
+// snoozed the soft path holds, but evaluate()'s hard check ignores snooze, so reaching the ceiling
+// still fires. `by` is who pressed, so the window can say "the agent held its own compaction".
+function stopCountdown(s, by = "you") {
+  const ctl = s.compactionCtl;
+  if (!ctl.countdown) return { ok: false, error: "nothing is counting down" };
+  if (ctl.countdown.hard) return { ok: false, error: "the hard ceiling cannot be stopped — this is the release valve" };
+  clearCountdown(s);
+  const snoozeSec = compaction.readSettings().snoozeSec;
+  ctl.snoozeUntil = snoozeSec > 0 ? Date.now() + snoozeSec * 1000 : 0;
+  emit(s, { kind: "compaction.cancelled", by, snoozedSec: snoozeSec });
+  return { ok: true, snoozedSec: snoozeSec };
+}
+
+function stopCompaction(key, by = "you") {
+  const s = get(key);
+  if (!s) return { ok: false, error: "no such session" };
+  return stopCountdown(s, by);
+}
+
+// What the bridge hands a freshly-opened window so it can draw a countdown already in flight.
+function compactionState(key) {
+  const s = get(key);
+  if (!s) return { ok: false, error: "no such session" };
+  return { ok: true, pending: compactionPending(s), settings: compaction.readSettings() };
 }
 
 function emit(s, event) {
@@ -2086,6 +2196,11 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // put it in HIS queue, riding his next message.
     pendingDeliveries: new Map(),
     runsDone: new Map(),
+    // AUTO-COMPACTION controller state — the policy is compaction.cjs; the clock and the push are
+    // the session's. `softAt` is when fill first crossed soft, the base the pass-gate measures from;
+    // `countdown` is the live {hard, endsAt} or null; `timer` its 1s interval; `snoozeUntil` a
+    // stop's deferral; `firedAt` when /compact was last pushed.
+    compactionCtl: { softAt: 0, snoozeUntil: 0, countdown: null, timer: null, firedAt: 0 },
     turnSeq: 0,
     turnActive: false,
     // WHO STARTED THE TURN THAT IS RUNNING (RFC-066 §3). `turnFromHook` is the COMMITTED answer for
@@ -3070,4 +3185,8 @@ module.exports = {
   // "the hook never fired" when it is wrong, and the only thing that separates those two readings
   // is a test that can drive the boundary without a live model on the other end.
   TURN_SETTLE_MS, idleWakeMs, __setIdleTick, fireHooks, armTurnEnd, armIdle, flushTurnEndHooks, maybeNudge, quietOf, nudgePicks,
+  // AUTO-COMPACTION — the release valve. `maybeCompact`/`passReadyFor` exported as test seams so the
+  // valve can be driven without a live model; `stopCompaction`/`compactionState` are the bridge's.
+  maybeCompact, passReadyFor, stopCompaction, stopCountdown, compactionState,
+  compactionSettings: compaction.readSettings, writeCompactionSettings: compaction.writeSettings,
 };

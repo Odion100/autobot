@@ -79,6 +79,12 @@ function register(surfaceOf) {
   ipcMain.handle("agent:setModel", (_e, key, model) => sessions.setModel(key, model));
   ipcMain.handle("agent:thinking", (_e, key) => sessions.thinkingOf(key));
   ipcMain.handle("agent:setThinking", (_e, key, t) => sessions.setThinking(key, t));
+  // AUTO-COMPACTION — the release valve. Stop a running countdown (refused on the hard ceiling);
+  // read the live pending state + settings for a view attaching mid-countdown; tune the settings.
+  ipcMain.handle("agent:compaction-stop", (_e, key, by) => sessions.stopCompaction(key, by || "you"));
+  ipcMain.handle("agent:compaction-state", (_e, key) => sessions.compactionState(key));
+  ipcMain.handle("agent:compaction-settings", (_e, key, patch) =>
+    patch ? sessions.writeCompactionSettings(patch) : { ok: true, settings: sessions.compactionSettings() });
   ipcMain.handle("agent:history", (_e, key) => sessions.history(key));
   // dispose detaches THIS view — the session keeps thinking (same contract as terminals)
   ipcMain.on("agent:dispose", (e, key) => unwire(key, e.sender));
