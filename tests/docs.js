@@ -40,18 +40,25 @@ require.cache[vpath] = {
     async drop(c) { store.delete(c); },
     async search(c, q, { k = 5, where } = {}) {
       // Substring relevance is enough: this test is about FILTERING and METADATA, not about
-      // embedding quality — which belongs to the model, not to this file.
+      // embedding quality — which belongs to the model, not to this file. The score counts
+      // occurrences so a MERGED ranking across corpora has something real to sort by.
       const rows = (store.get(c) || []).filter((r) => !where || (r.meta || {})[Object.keys(where)[0]] === Object.values(where)[0]);
+      const needle = String(q).toLowerCase();
       return rows
-        .filter((r) => String(r.text).toLowerCase().includes(String(q).toLowerCase()))
-        .slice(0, k)
-        .map((r) => ({ ...r, score: 0.9 }));
+        .filter((r) => String(r.text).toLowerCase().includes(needle))
+        .map((r) => ({ ...r, score: 0.5 + Math.min(0.4, 0.1 * String(r.text).toLowerCase().split(needle).length - 0.1) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, k);
     },
   },
 };
 
 const cfg = path.join(dir, "corpora.json");
 process.env.AUTOBOT_CORPORA = cfg;
+// The registry-fed sections point the DOCUMENTS REGISTRY and the PROJECTS file at fixtures in the
+// same temp dir — the real ~/.autobot is never read and never written.
+process.env.AUTOBOT_DOCUMENTS = path.join(dir, "documents.json");
+process.env.AUTOBOT_PROJECTS = path.join(dir, "projects.json");
 const docs = require("../electron/agents/docs.cjs");
 
 let failed = 0;
@@ -240,6 +247,93 @@ try {
   // disappears from anybody by silence — the backfill is a decision somebody makes, not a default
   // that quietly hides work.
   ok("a corpus indexed before audiences existed is still everyone's", docs.carries({ name: "legacy", kind: "permanent" }, "anybody"));
+
+  // ---- MULTI-CORPUS QUERIES --------------------------------------------------------------------
+  // `corpus` takes a string OR an array. A string is "go look at X" and keeps every behaviour it
+  // had, override included; an array is a sweep — results merge into ONE ranked list, and a named
+  // corpus the caller does not carry lands in `withheld` by name, never silently dropped.
+  console.log("\ncorpus as a STRING works exactly as before");
+  fs.mkdirSync(path.join(root, "mergeA"), { recursive: true });
+  fs.mkdirSync(path.join(root, "mergeB"), { recursive: true });
+  fs.writeFileSync(path.join(root, "mergeA", "a.md"), "# A\n\nthe shared merge phrase appears once in this body, padded to clear the floor.\n");
+  fs.writeFileSync(path.join(root, "mergeB", "b.md"), "# B\n\nthe shared merge phrase appears twice — shared merge phrase again — padded to clear the floor.\n");
+  await docs.index("mergeA", { root: path.join(root, "mergeA"), glob: "a.md" });
+  await docs.index("mergeB", { root: path.join(root, "mergeB"), glob: "b.md" });
+  const oneName = await docs.search({ q: "shared merge phrase", corpus: "mergeA" });
+  eq("a string searches only that corpus", oneName.searched, ["mergeA"]);
+  ok("and answers from it alone", oneName.results.length > 0 && oneName.results.every((r) => r.corpus === "mergeA"));
+
+  console.log("\ncorpus as an ARRAY searches them all and merges by score");
+  const both = await docs.search({ q: "shared merge phrase", corpus: ["mergeA", "mergeB"] });
+  eq("both corpora were searched", both.searched.sort(), ["mergeA", "mergeB"]);
+  ok("hits from both are in one list", ["mergeA", "mergeB"].every((n) => both.results.some((r) => r.corpus === n)));
+  eq("ranked ACROSS corpora — the stronger hit leads whichever corpus held it", both.results[0].corpus, "mergeB");
+  ok("the list is score-descending", both.results.every((r, i, a) => !i || (a[i - 1].score || 0) >= (r.score || 0)));
+
+  console.log("\nan uncarried corpus named in an array still lands in `withheld` — BY NAME");
+  const sweep = await docs.search({ q: "readme body", corpus: ["smoke", "theirs"], as: "smoke-agent" });
+  ok("the carried one answered", sweep.results.some((r) => r.corpus === "smoke"));
+  ok("the uncarried one's text is not in the results", !sweep.results.some((r) => r.corpus === "theirs"));
+  const heldInList = (sweep.withheld || []).find((w) => w.corpus === "theirs");
+  ok("…but it is NAMED in withheld, with a count", !!heldInList && heldInList.hits > 0);
+  const typo = await docs.search({ q: "readme body", corpus: ["smoke", "no-such"] });
+  eq("a name that resolves to nothing is said, not swallowed", typo.unknown, ["no-such"]);
+
+  // ---- REGISTRY-FED CORPORA AND SUBSCOPES ------------------------------------------------------
+  // A corpus may be fed by the DOCUMENTS REGISTRY instead of a glob: its files are one project's
+  // registered documents, resolved repo-relative-path + project root exactly as the registry itself
+  // resolves them, and each row's KIND (rfc, arc, gap, report) is the file's SUBSCOPE.
+  console.log("\na registry-fed corpus's files come from the registry, never a glob");
+  const proj = path.join(dir, "proj");
+  for (const d of ["RFCs", "arcs", "gaps", "reports"]) fs.mkdirSync(path.join(proj, d), { recursive: true });
+  fs.writeFileSync(path.join(proj, "RFCs", "RFC-900-walk.md"), "# RFC-900\n\nthe registered walk design, an rfc body long enough to clear the floor easily.\n");
+  fs.writeFileSync(path.join(proj, "arcs", "ARC-9.md"), "# ARC-9\n\nthe registered walk objectives, an arc body long enough to clear the floor easily.\n");
+  fs.writeFileSync(path.join(proj, "gaps", "G-9.md"), "# G-9\n\nthe registered walk problem, a gap body long enough to clear the floor easily.\n");
+  fs.writeFileSync(path.join(proj, "reports", "report.x.md"), "# report\n\nthe registered walk account, a report body long enough to clear the floor easily.\n");
+  // An UNREGISTERED file in the same folders — the one a glob would have swept in.
+  fs.writeFileSync(path.join(proj, "RFCs", "scratch-notes.md"), "# notes\n\nthe registered walk scribbles that carry no leaf and therefore no row at all.\n");
+  fs.writeFileSync(process.env.AUTOBOT_PROJECTS, JSON.stringify({ walkproj: proj, otherproj: root }));
+  fs.writeFileSync(process.env.AUTOBOT_DOCUMENTS, JSON.stringify([
+    { id: "RFC-900", kind: "rfc", path: "RFCs/RFC-900-walk.md", project: "walkproj", at: 1 },
+    { id: "ARC-9", kind: "arc", path: "arcs/ARC-9.md", project: "walkproj", at: 1 },
+    { id: "G-9", kind: "gap", path: "gaps/G-9.md", project: "walkproj", at: 1 },
+    { id: "report.x", kind: "report", path: "reports/report.x.md", project: "walkproj", at: 1 },
+    { id: "RFC-1", kind: "rfc", path: "README.md", project: "otherproj", at: 1 },
+  ]));
+  await docs.index("regdocs", { registry: "walkproj", kind: "permanent", agents: "everyone" });
+  const regFiles = docs.filesOf(docs.corpusNamed("regdocs"));
+  eq("filesOf answers the rows' absolute paths — this project's rows, nothing else", regFiles.sort(), [
+    path.join(proj, "RFCs", "RFC-900-walk.md"),
+    path.join(proj, "arcs", "ARC-9.md"),
+    path.join(proj, "gaps", "G-9.md"),
+    path.join(proj, "reports", "report.x.md"),
+  ].sort());
+  ok("the unregistered file in the same folder is NOT in the corpus", !regFiles.some((f) => f.endsWith("scratch-notes.md")));
+
+  console.log("\nits chunks carry the row's kind as their subscope");
+  const regRows = store.get("docs-regdocs") || [];
+  ok("every chunk has a sub", regRows.length === 4 && regRows.every((r) => (r.meta || {}).sub));
+  eq("and the subs are the kinds", regRows.map((r) => r.meta.sub).sort(), ["arc", "gap", "report", "rfc"]);
+
+  console.log("\n`name:sub` filters to one subscope — his own example speaks plural, the row speaks singular, both land");
+  const justRfcs = await docs.search({ q: "the registered walk", corpus: "regdocs:rfcs" });
+  eq("rfcs alone", justRfcs.results.map((r) => r.sub), ["rfc"]);
+  const singular = await docs.search({ q: "the registered walk", corpus: "regdocs:rfc" });
+  eq("the singular asks the same question", singular.results.map((r) => r.sub), ["rfc"]);
+
+  console.log("\n`name:a|b|c` filters to exactly those — reports deliberately left out");
+  const trio = await docs.search({ q: "the registered walk", corpus: "regdocs:rfcs|arcs|gaps", limit: 10 });
+  eq("exactly the three named kinds", trio.results.map((r) => r.sub).sort(), ["arc", "gap", "rfc"]);
+  ok("no report crossed the pipe", !trio.results.some((r) => r.sub === "report"));
+
+  console.log("\nthe parent name alone includes every subscope");
+  const whole = await docs.search({ q: "the registered walk", corpus: "regdocs", limit: 10 });
+  eq("all four kinds answer", whole.results.map((r) => r.sub).sort(), ["arc", "gap", "report", "rfc"]);
+
+  console.log("\na registry corpus fails where the typo is, like a bad root does");
+  threw = "";
+  try { await docs.index("badreg", { registry: "no-such-project" }); } catch (e) { threw = e.message; }
+  ok("an unknown project is refused, not an empty success", /unknown project/.test(threw));
 
   console.log("\ndrop removes what was embedded, never what was written");
   const d = await docs.drop("scratch");

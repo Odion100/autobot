@@ -989,7 +989,14 @@ function toolsFor(identity = {}) {
             .enum(["notes", "docs"])
             .optional()
             .describe("narrow to one half — omit for both. Use \"notes\" when curating the store, so documentation cannot be mistaken for a duplicate note"),
-          corpus: z.string().optional().describe("narrow the documentation half to one corpus"),
+          corpus: z
+            .union([z.string(), z.array(z.string())])
+            .optional()
+            .describe(
+              "narrow the documentation half to one corpus or several (array — results merge into one " +
+                "ranked list). Each entry is `name`, `name:sub` (one subscope), or `name:a|b|c` " +
+                "(pipe-list of subscopes); the name alone includes every subscope"
+            ),
           source: z.string().optional().describe("narrow the documentation half to one document"),
           limit: z.number().optional().describe("max results per half (default 5)"),
         },
@@ -1348,8 +1355,17 @@ function toolsFor(identity = {}) {
           "and read the document first.",
         {
           name: z.string().describe("an existing corpus from docsList to refresh, or a new name to create one"),
-          root: z.string().optional().describe("absolute path to the folder holding the files — required to CREATE a corpus"),
+          root: z.string().optional().describe("absolute path to the folder holding the files — required to CREATE a corpus (unless `registry` feeds it)"),
           glob: z.string().optional().describe("which files under root, e.g. `**/*.md` (the default) or `vendor-api.md`"),
+          registry: z
+            .string()
+            .optional()
+            .describe(
+              "a PROJECT CODE: the corpus is fed by the documents registry instead of a glob — its " +
+                "files are that project's registered documents (rfc, arc, gap, report), and each " +
+                "document's kind becomes its subscope, searchable as `name:rfcs` or `name:rfcs|gaps`. " +
+                "The file set comes from the registry, never a glob"
+            ),
           exclude: z.array(z.string()).optional().describe("globs to leave out — a corpus is defined as much by what it omits"),
           agents: z
             .union([z.string(), z.array(z.string())])
@@ -1366,7 +1382,7 @@ function toolsFor(identity = {}) {
             ),
           kind: z.enum(["working", "permanent"]).optional().describe("PURPOSE, not permission. `working` = the vector store used as a mechanism for yourself: your own research, never surfacing in anyone else's search unless they name it, yours to drop with docsDrop when the job is done. Permanent = context the system keeps for whoever comes next. Producing durable context is your job, not something to bring to the human. `working` is the DEFAULT, so saying nothing still gets you a private scratch corpus; pass `permanent` when you mean other agents to find it, and passing it on an existing working corpus PROMOTES that corpus — same files, nothing re-embedded."),
         },
-        async ({ name, root, glob, exclude, kind, agents }) => {
+        async ({ name, root, glob, exclude, kind, agents, registry }) => {
           try {
             // TWO DIFFERENT GUARDS LIVED HERE UNDER ONE RATIONALE, AND ONLY ONE OF THEM IS REAL.
             //
@@ -1384,12 +1400,12 @@ function toolsFor(identity = {}) {
             //
             // THE GUARD BELOW STILL PROTECTS SHAPE, NOT TIER, and promotion walks past it because
             // the corpus being promoted is still `working` at the moment of the call.
-            if (root || glob || exclude || kind) {
+            if (root || glob || exclude || kind || registry) {
               const c = docs.corpusNamed(name);
               if (c && (c.kind || "permanent") === "permanent")
                 return { content: [{ type: "text", text: `"${name}" is a permanent corpus and others retrieve from it — repointing its root or glob rewrites it out from under them. Refresh it by name alone, or pick a new name for a corpus of your own.` }], isError: true };
             }
-            const r = await docs.index(name, { root, glob, exclude, kind, agents, as: identity.slot || null });
+            const r = await docs.index(name, { root, glob, exclude, kind, agents, registry, as: identity.slot || null });
             // THE AUDIENCE IS ONLY SAID FOR A PERMANENT CORPUS, because a working one is invisible
             // unless somebody names it whatever its audience field says — printing a carrier list
             // beside it would describe a reach it does not have.

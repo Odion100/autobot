@@ -221,10 +221,65 @@ function globToRe(pat) {
   return new RegExp("^" + re + "$");
 }
 
+// ---------------------------------------------------------------------------------------------
+// REGISTRY-FED CORPORA. A corpus record may say `registry: "<projectCode>"` instead of a glob —
+// its file set is that project's rows in ~/.autobot/documents.json, the documents registry. "The
+// file set comes from the registry, never a glob" is the janitor's own law: a glob over RFCs/
+// would re-derive by folder what the registry already knows by leaf, and the two answers drift.
+// Each row's `kind` (rfc, arc, gap, report) becomes the file's SUBSCOPE, so `name:rfcs` or
+// `name:rfcs|gaps` narrows a search to exactly those document kinds.
+//
+// The require is lazy and the resolution is the registry's own `absPathOf` — rows store
+// repo-relative paths and the project's root lives in the projects file; re-deriving that join
+// here would be a second definition of the same rule.
+// ---------------------------------------------------------------------------------------------
+const registryMod = () => require("../markdown/registry.cjs");
+
+// A subscope and the way a caller writes it are allowed to disagree by a plural: rows carry `rfc`,
+// his own example asks for `rfcs|arcs|gaps`. One normaliser on BOTH sides (index and query) is
+// what keeps that a convenience instead of a silent miss.
+const normSub = (s) => String(s || "").trim().toLowerCase().replace(/s$/, "");
+
+// Every file a corpus holds, with WHERE IT LIVES and WHAT SUBSCOPE it carries — the one shape
+// `plan`, `index` and `filesOf` all walk, whatever fed it.
+//   glob corpus     — { source: rel-to-root, abs: root/rel, sub: null }
+//   registry corpus — { source: row.path (repo-relative), abs: via absPathOf, sub: row.kind }
+// A row whose project has no root resolves to "" and is skipped here: unresolvable is not gone,
+// but a file we cannot read is not indexable either way.
+function entriesOf(corpus) {
+  if (corpus && corpus.registry) {
+    const reg = registryMod();
+    return reg
+      .read()
+      .filter((r) => String(r.project || "") === String(corpus.registry))
+      .map((r) => ({ source: r.path, abs: reg.absPathOf(r), sub: r.kind || null }))
+      .filter((e) => e.source && e.abs)
+      .sort((a, b) => a.source.localeCompare(b.source));
+  }
+  return globFilesOf(corpus).map((rel) => ({ source: rel, abs: path.join(corpus.root, rel), sub: null }));
+}
+
+// Where a chunk's source lives on disk NOW — glob corpora join the root, registry corpora resolve
+// through the projects file, exactly as they did at index time.
+function absOf(corpus, source) {
+  if (corpus && corpus.registry) {
+    if (path.isAbsolute(source)) return source;
+    return registryMod().absPathOf({ project: corpus.registry, path: source });
+  }
+  return path.join(corpus.root, source);
+}
+
+// The public face: a registry corpus answers with the rows' ABSOLUTE paths (there is no root to be
+// relative to), a glob corpus with root-relative ones as it always has.
+function filesOf(corpus) {
+  if (corpus && corpus.registry) return entriesOf(corpus).map((e) => e.abs);
+  return globFilesOf(corpus);
+}
+
 // EXCLUDES ARE NOT A LUXURY. The first real dry run pulled SystemLynx's RFCs, scratch notes and
 // bug write-ups into a "reference" corpus — 261 of 372 chunks were exactly the material he ruled
 // out. A corpus is defined as much by what it leaves out as by its root.
-function filesOf(corpus) {
+function globFilesOf(corpus) {
   const root = corpus.root;
   const rx = globToRe(corpus.glob || "**/*.md");
   const skip = (corpus.exclude || []).map(globToRe);
@@ -259,22 +314,23 @@ function plan(name, { maxChars = MAX_CHARS } = {}) {
   const corpus = corpusNamed(name);
   if (!corpus) throw new Error(`no corpus "${name}" — add it to ${CONFIG}`);
   const files = [];
-  for (const rel of filesOf(corpus)) {
+  for (const e of entriesOf(corpus)) {
     let text = "";
     try {
-      text = fs.readFileSync(path.join(corpus.root, rel), "utf8");
+      text = fs.readFileSync(e.abs, "utf8");
     } catch {
       continue;
     }
     const chunks = chunkMarkdown(text, { maxChars }).map((c) => ({ ...c, chars: c.text.length }));
-    files.push({ source: rel, bytes: Buffer.byteLength(text), hash: hashOf(text), chunks });
+    files.push({ source: e.source, ...(e.sub ? { sub: e.sub } : {}), bytes: Buffer.byteLength(text), hash: hashOf(text), chunks });
   }
   const all = files.flatMap((f) => f.chunks);
   return {
     corpus: corpus.name,
     kind: corpus.kind || "permanent",
-    root: corpus.root,
-    glob: corpus.glob || "**/*.md",
+    ...(corpus.registry
+      ? { registry: corpus.registry, root: `registry:${corpus.registry}`, glob: "(registry rows)" }
+      : { root: corpus.root, glob: corpus.glob || "**/*.md" }),
     files,
     totals: {
       files: files.length,
@@ -339,10 +395,10 @@ function indexedState(collection) {
 // changes an existing corpus's kind and keeps everything else. That is PROMOTION — finished
 // research becoming documentation other agents can find — and it costs no embeddings, because the
 // collection is named after the corpus, not after its kind.
-async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, agents, as } = {}) {
+async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, agents, registry, as } = {}) {
   let corpus = corpusNamed(name);
 
-  if (!corpus || root || glob || exclude || kind || agents !== undefined) {
+  if (!corpus || root || glob || exclude || kind || registry || agents !== undefined) {
     const nextKind = kind || (corpus && corpus.kind) || "working";
     // THE AUDIENCE, AND THE ONE CASE THAT IS NOT INHERITANCE: a corpus coming into being as
     // permanent, or being promoted into permanent, with nothing said about who it is for. That is
@@ -358,18 +414,29 @@ async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, ag
           : born && nextKind === "permanent" && as
             ? [String(as)]
             : undefined;
+    const fed = registry || (corpus && corpus.registry);
     const next = {
       name,
       kind: nextKind,
-      root: root ? path.resolve(root) : corpus && corpus.root,
-      glob: glob || (corpus && corpus.glob) || "**/*.md",
-      ...(exclude ? { exclude } : corpus && corpus.exclude ? { exclude: corpus.exclude } : {}),
+      ...(fed
+        ? { registry: String(fed) }
+        : {
+            root: root ? path.resolve(root) : corpus && corpus.root,
+            glob: glob || (corpus && corpus.glob) || "**/*.md",
+            ...(exclude ? { exclude } : corpus && corpus.exclude ? { exclude: corpus.exclude } : {}),
+          }),
       ...(audience !== undefined ? { agents: audience } : {}),
     };
-    if (!next.root) throw new Error(`no corpus "${name}" — pass a root to create one, or add it to ${CONFIG}`);
+    if (!next.registry && !next.root)
+      throw new Error(`no corpus "${name}" — pass a root to create one (or a registry project), or add it to ${CONFIG}`);
     // A root that does not exist indexes zero files and reports success, which reads as "my research
     // is embedded" and answers nothing forever after. Fail where the typo is.
-    if (!fs.existsSync(next.root)) throw new Error(`root does not exist: ${next.root}`);
+    if (next.root && !fs.existsSync(next.root)) throw new Error(`root does not exist: ${next.root}`);
+    // Same failure, registry flavour: a project code the projects file does not know resolves every
+    // row to "", walks zero files, and reports success. `absPathOf` is the resolver, so it is also
+    // the probe — a project it cannot root is a project this corpus cannot read.
+    if (next.registry && !registryMod().absPathOf({ project: next.registry, path: "probe.md" }))
+      throw new Error(`unknown project "${next.registry}" — the projects file has no root for it`);
     saveCorpora(corpus ? corpora().map((c) => (c.name === name ? next : c)) : [...corpora(), next]);
     corpus = next;
   }
@@ -381,11 +448,12 @@ async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, ag
   let indexed = 0;
   let skipped = 0;
   let changed = 0;
-  for (const source of filesOf(corpus)) {
+  for (const e of entriesOf(corpus)) {
+    const source = e.source;
     present.add(source);
     let text = "";
     try {
-      text = fs.readFileSync(path.join(corpus.root, source), "utf8");
+      text = fs.readFileSync(e.abs, "utf8");
     } catch {
       continue;
     }
@@ -410,6 +478,10 @@ async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, ag
         corpus: corpus.name,
         corpusKind: corpus.kind || "permanent",
         source,
+        // The file's SUBSCOPE, when the corpus assigns one — a registry row's document kind. Safe
+        // under the hash-skip above: the kind is declared by a leaf IN the file, so a kind that
+        // changes changes the hash too and the chunk is rewritten with its new sub.
+        ...(e.sub ? { sub: e.sub } : {}),
         headingPath: c.headingPath,
         line: c.line,
         part: c.part || null,
@@ -453,7 +525,7 @@ async function index(name, { maxChars = MAX_CHARS, root, glob, exclude, kind, ag
 // Staleness that is visible is survivable; staleness that is silent is the whole reason RAG rots.
 function staleness(corpus, source, hash) {
   try {
-    const live = hashOf(fs.readFileSync(path.join(corpus.root, source), "utf8"));
+    const live = hashOf(fs.readFileSync(absOf(corpus, source), "utf8"));
     return live !== hash;
   } catch {
     return true; // the file is gone — the chunk is describing something that no longer exists
@@ -474,23 +546,54 @@ function staleness(corpus, source, hash) {
 // the text. Dropping them before the search would make the answer cheaper and the blindness
 // permanent: an agent cannot name a corpus it has never heard of, and `corpus:` is the override
 // that makes scoping safe.
+// HOW A CORPUS IS NAMED: `name` (everything), `name:sub` (one subscope), or `name:a|b|c` — pipes,
+// the system's list syntax everywhere. The first colon splits; everything after it is subscopes.
+function parseCorpusRef(ref) {
+  const s = String(ref == null ? "" : ref).trim();
+  const i = s.indexOf(":");
+  if (i < 0) return { name: s, subs: null };
+  const subs = s
+    .slice(i + 1)
+    .split("|")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return { name: s.slice(0, i), subs: subs.length ? subs : null };
+}
+
 async function search({ q, corpus, source, limit = 5, min = 0, as = null } = {}) {
   if (!q || !String(q).trim()) return { error: "a question is required" };
   const all = corpora();
-  const wanted = corpus
-    ? all.filter((c) => c.name === corpus)
+  // One ref or several — a string is one, an array is a sweep. Each entry may carry subscopes.
+  const refs = (corpus == null ? [] : Array.isArray(corpus) ? corpus : [corpus])
+    .map(parseCorpusRef)
+    .filter((r) => r.name);
+  const named = refs.length > 0;
+  const byName = new Map(refs.map((r) => [r.name, r]));
+  const wanted = named
+    ? all.filter((c) => byName.has(c.name))
     : all.filter((c) => (c.kind || "permanent") === "permanent");
-  if (corpus && !wanted.length) return { error: `no corpus "${corpus}"`, corpora: all.map((c) => c.name) };
+  if (named && !wanted.length)
+    return { error: `no corpus "${refs.map((r) => r.name).join('", "')}"`, corpora: all.map((c) => c.name) };
+  // A name that resolves to nothing, beside names that do, is SAID — a typo that reads as an empty
+  // corpus answers wrong forever.
+  const unknown = refs.map((r) => r.name).filter((n) => !all.some((c) => c.name === n));
 
-  // NAMING A CORPUS READS IT, WHATEVER THE AUDIENCE SAYS.
-  const mine = (c) => !!corpus || carries(c, as);
+  // NAMING ONE CORPUS READS IT, WHATEVER THE AUDIENCE SAYS — "go look at X" must stay answerable.
+  // A LIST is a sweep, and a sweep keeps the honesty rule: each name the caller does not carry
+  // answers in `withheld`, per name, never silently dropped.
+  const override = named && !Array.isArray(corpus);
+  const mine = (c) => override || carries(c, as);
+  const k = Math.max(1, Number(limit) || 5);
   const out = [];
   const held = new Map();
   for (const c of wanted) {
+    const subs = named ? (byName.get(c.name) || {}).subs : null;
+    const wantedSubs = subs ? subs.map(normSub) : null;
     let hits = [];
     try {
       hits = await vectors.search(collectionOf(c), String(q), {
-        k: Math.max(1, Number(limit) || 5),
+        // A subscope filter discards hits AFTER ranking, so it fetches deeper to keep `limit` honest.
+        k: wantedSubs ? k * 4 : k,
         min,
         ...(source ? { where: { source } } : {}),
       });
@@ -499,6 +602,8 @@ async function search({ q, corpus, source, limit = 5, min = 0, as = null } = {})
     }
     for (const h of hits || []) {
       const m = (h && h.meta) || {};
+      // The parent name alone includes every subscope; naming subscopes filters to exactly those.
+      if (wantedSubs && !wantedSubs.includes(normSub(m.sub))) continue;
       if (!mine(c)) {
         const row = held.get(c.name) || { corpus: c.name, hits: 0, best: 0 };
         row.hits += 1;
@@ -511,6 +616,7 @@ async function search({ q, corpus, source, limit = 5, min = 0, as = null } = {})
         score: h.score,
         corpus: c.name,
         source: m.source,
+        ...(m.sub ? { sub: m.sub } : {}),
         headingPath: m.headingPath || [],
         line: m.line,
         part: m.part || null,
@@ -519,14 +625,16 @@ async function search({ q, corpus, source, limit = 5, min = 0, as = null } = {})
       });
     }
   }
+  // ONE RANKED LIST, however many corpora fed it — merged by score, exactly as a single corpus ranks.
   out.sort((a, b) => (b.score || 0) - (a.score || 0));
   const withheld = [...held.values()].sort((a, b) => b.best - a.best);
   return {
     q: String(q),
     searched: wanted.filter(mine).map((c) => c.name),
-    results: out.slice(0, Math.max(1, Number(limit) || 5)),
+    results: out.slice(0, k),
     // Said, never silently dropped — this is the line that makes `corpus:` reachable.
     ...(withheld.length ? { withheld } : {}),
+    ...(unknown.length ? { unknown } : {}),
   };
 }
 
@@ -567,8 +675,7 @@ function listCorpora() {
       name: c.name,
       kind: c.kind || "permanent",
       agents: audienceOf(c),
-      root: c.root,
-      glob: c.glob || "**/*.md",
+      ...(c.registry ? { registry: c.registry } : { root: c.root, glob: c.glob || "**/*.md" }),
       matched,
       files: sources.size,
       chunks: rows.length,
@@ -588,6 +695,9 @@ module.exports = {
   carries,
   collectionOf,
   filesOf,
+  entriesOf,
+  parseCorpusRef,
+  normSub,
   globToRe,
   plan,
   index,
