@@ -249,9 +249,9 @@ try {
   ok("a corpus indexed before audiences existed is still everyone's", docs.carries({ name: "legacy", kind: "permanent" }, "anybody"));
 
   // ---- MULTI-CORPUS QUERIES --------------------------------------------------------------------
-  // `corpus` takes a string OR an array. A string is "go look at X" and keeps every behaviour it
-  // had, override included; an array is a sweep — results merge into ONE ranked list, and a named
-  // corpus the caller does not carry lands in `withheld` by name, never silently dropped.
+  // `corpus` takes a string OR an array. NAMING A CORPUS READS IT, one name or a list — a corpus
+  // carried by nobody exists to be pointed at, including beside others (the doc-registry design).
+  // Results merge into ONE ranked list; `withheld` stays the UNSCOPED search's honesty.
   console.log("\ncorpus as a STRING works exactly as before");
   fs.mkdirSync(path.join(root, "mergeA"), { recursive: true });
   fs.mkdirSync(path.join(root, "mergeB"), { recursive: true });
@@ -270,12 +270,11 @@ try {
   eq("ranked ACROSS corpora — the stronger hit leads whichever corpus held it", both.results[0].corpus, "mergeB");
   ok("the list is score-descending", both.results.every((r, i, a) => !i || (a[i - 1].score || 0) >= (r.score || 0)));
 
-  console.log("\nan uncarried corpus named in an array still lands in `withheld` — BY NAME");
+  console.log("\nan uncarried corpus NAMED in an array is read — naming is the point of a nobody-carries corpus");
   const sweep = await docs.search({ q: "readme body", corpus: ["smoke", "theirs"], as: "smoke-agent" });
   ok("the carried one answered", sweep.results.some((r) => r.corpus === "smoke"));
-  ok("the uncarried one's text is not in the results", !sweep.results.some((r) => r.corpus === "theirs"));
-  const heldInList = (sweep.withheld || []).find((w) => w.corpus === "theirs");
-  ok("…but it is NAMED in withheld, with a count", !!heldInList && heldInList.hits > 0);
+  ok("the uncarried one answered TOO — named is read, in a list exactly as alone", sweep.results.some((r) => r.corpus === "theirs"));
+  ok("and nothing was withheld from a search that named every corpus it read", !sweep.withheld);
   const typo = await docs.search({ q: "readme body", corpus: ["smoke", "no-such"] });
   eq("a name that resolves to nothing is said, not swallowed", typo.unknown, ["no-such"]);
 

@@ -578,10 +578,13 @@ async function search({ q, corpus, source, limit = 5, min = 0, as = null } = {})
   // corpus answers wrong forever.
   const unknown = refs.map((r) => r.name).filter((n) => !all.some((c) => c.name === n));
 
-  // NAMING ONE CORPUS READS IT, WHATEVER THE AUDIENCE SAYS — "go look at X" must stay answerable.
-  // A LIST is a sweep, and a sweep keeps the honesty rule: each name the caller does not carry
-  // answers in `withheld`, per name, never silently dropped.
-  const override = named && !Array.isArray(corpus);
+  // NAMING A CORPUS READS IT, WHATEVER THE AUDIENCE SAYS — one name or a list of them. "Go look
+  // at X" must stay answerable, and a corpus carried by nobody exists precisely to be pointed at,
+  // which includes being pointed at BESIDE others (the doc-registry design, 2026-11-06: scoped to
+  // no one, named at the moment of need, cross-scope by adding names). The first cut held
+  // uncarried names in a list back as `withheld`, and the pilot corpus was unreachable by the very
+  // multi-search built for it. `withheld` remains the UNSCOPED search's honesty — named is read.
+  const override = named;
   const mine = (c) => override || carries(c, as);
   const k = Math.max(1, Number(limit) || 5);
   const out = [];
