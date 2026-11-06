@@ -33,6 +33,9 @@ const GRANTS = {
   // shell that HAD the door. A capability missing from this table is absent, not denied — which is
   // exactly why forgetting it is silent.
   nudge: { nudge: "*" },
+  // The release valve's settings — same lesson as the line above: a capability missing from this
+  // table is ABSENT, not denied, so forgetting it renders "no door" against a shell that has one.
+  compaction: { compaction: "*" },
   projects: { projects: "*" },
   auth: { auth: "*" },
   agents: { agent: "*" },

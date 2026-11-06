@@ -65,6 +65,12 @@ const FULL = {
     read: () => ipcRenderer.invoke("nudge:settings"),
     write: (patch) => ipcRenderer.invoke("nudge:settings-write", patch),
   },
+  // AUTO-COMPACTION — the release valve's knobs, same one-home rule as the nudge's: the harness
+  // reads these on every usage tick, so a copy the window owned would be a setting that does nothing.
+  compaction: {
+    read: () => ipcRenderer.invoke("compaction:settings"),
+    write: (patch) => ipcRenderer.invoke("compaction:settings-write", patch),
+  },
   // RFC-004 §3.3 — what this surface may mount. A host that renders travelling components asks
   // here; the answer is already filtered to the surface and carries resolved own-origin src URLs,
   // so a host never assembles one from parts.

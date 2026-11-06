@@ -10,6 +10,7 @@ const files = require("./files.cjs");
 const sessions = require("../agents/sessions.cjs");
 const definitions = require("../agents/definitions.cjs");
 const nudge = require("../agents/nudge.cjs");
+const compaction = require("../agents/compaction.cjs");
 
 const PROJECTS_FILE = path.join(os.homedir(), ".autobot", "projects.json");
 const readProjects = () => {
@@ -227,6 +228,16 @@ function register(getWin) {
     picks: typeof sessions.nudgePicks === "function" ? sessions.nudgePicks() : {},
   }));
   ipcMain.handle("nudge:settings-write", (_e, patch = {}) => nudge.writeSettings(patch));
+
+  // AUTO-COMPACTION — the release valve's settings door, same contract as the nudge's: defaults
+  // returned whether or not a file exists, writes merge one field at a time, and the harness owns
+  // the values because the harness is what reads them on every usage tick.
+  ipcMain.handle("compaction:settings", () => ({
+    ok: true,
+    settings: compaction.readSettings(),
+    defaults: compaction.DEFAULTS,
+  }));
+  ipcMain.handle("compaction:settings-write", (_e, patch = {}) => compaction.writeSettings(patch));
 
   ipcMain.handle("files:rauth-status", () => {
     const claude = (() => {
