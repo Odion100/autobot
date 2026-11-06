@@ -1489,17 +1489,21 @@ async function markBlock(absPath, line, { state, note } = {}, by = "") {
         error:
           "refused: a claim marked without note= is no mark — say what was done and seen (met) or what happens instead (unmet)",
       };
+    // A NEW MARK CLEARS THE RECEIPT. told= is per-decision, not per-block — whoever heard the old
+    // state has not heard this one, and a stale stamp reads as "fully delivered" forever (measured
+    // live 2026-11-06 on the window's presses; the agent's door obeys the same rule).
     const w = docWrite.writeAttr(abs, n, {
       state: value === "not-met" ? "unmet" : value,
       by: by || "agent",
       at: Date.now(),
       note: String(note).trim(),
+      told: null,
     });
     if (!w.ok) return w;
   } else {
     if (!["open", "doing", "done", "blocked"].includes(value))
       return { ok: false, error: "an objective moves to open, doing, done or blocked" };
-    const pairs = { state: value };
+    const pairs = { state: value, told: null };
     if (String(note || "").trim()) pairs.note = String(note).trim();
     const w = docWrite.writeAttr(abs, n, pairs);
     if (!w.ok) return w;

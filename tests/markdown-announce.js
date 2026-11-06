@@ -211,6 +211,16 @@ console.log("\nmarkBlock — the agent's door, with its rules");
   assert.match(fs.readFileSync(doc, "utf8").split("\n")[7], /state=done/);
   ok("an objective moves through the same door — the move IS the announcement");
 
+  // A NEW MARK CLEARS THE RECEIPT — told= is per-decision, not per-block. Without this, whoever
+  // heard the first mark could never hear a changed one: the stale stamp read as fully delivered
+  // forever (measured live 2026-11-06 — after one release, no press on a block reached anybody).
+  const remark = await sessions.markBlock(doc, 6, { state: "unmet", note: "it regressed" }, "systemview");
+  assert.ok(remark.ok);
+  const reline = fs.readFileSync(doc, "utf8").split("\n")[5];
+  assert.match(reline, /state=unmet/);
+  assert.ok(!/told=buapi/.test(reline), "the old audience is owed the NEW decision");
+  ok("re-marking clears told= — whoever heard the old state is owed the new one (the receipt is per-decision)");
+
   const prose = await sessions.markBlock(doc, 2, { state: "met", note: "x" }, "buapi");
   assert.ok(!prose.ok && /nothing to mark/.test(prose.error));
   ok("a line holding neither block refuses — the verb cannot write into prose");
