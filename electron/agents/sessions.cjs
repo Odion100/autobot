@@ -1378,6 +1378,31 @@ function subscribeAmbient(fn) {
   return () => ambientSubs.delete(fn);
 }
 
+// THE REGISTRY-REINDEX DEBOUNCE — one trailing pass per project, not one per parse. The timers are
+// module-level because the bursts cross sessions: three resuming sessions each sweep the same 27
+// rows, and per-session timers would still run three passes. unref'd so a pending reindex never
+// holds the shell open.
+const registryReindexTimers = new Map();
+let REGISTRY_REINDEX_MS = 2000;
+// test seam, same species as __setIdleTick: the debounce is the behaviour under test, and a suite
+// that has to really wait two seconds per claim is a suite that stops being run.
+function __setRegistryReindexMs(ms) { REGISTRY_REINDEX_MS = ms; }
+function scheduleRegistryReindex(project) {
+  const t = registryReindexTimers.get(project);
+  if (t) clearTimeout(t);
+  const timer = setTimeout(() => {
+    registryReindexTimers.delete(project);
+    try {
+      const docsEngine = require("./docs.cjs");
+      for (const c of docsEngine.corpora()) {
+        if (c.registry && c.registry === project) docsEngine.index(c.name).catch(() => {});
+      }
+    } catch {}
+  }, REGISTRY_REINDEX_MS);
+  if (timer.unref) timer.unref();
+  registryReindexTimers.set(project, timer);
+}
+
 // RFC-073 §3 — THE ANNOUNCE DOOR. A markdown file changed (the watcher, a tool's schema, his press
 // through files:write) and this is everything that follows: ONE parse answers registration and
 // fires; the registry is upserted; each fire is routed through the member router exactly as a
@@ -1415,14 +1440,16 @@ async function announceDocument(absPath, opts = {}) {
   // observes a registered document change, so any registry-fed corpus covering this project
   // re-indexes HERE — hash-skip makes it the changed file's cost and nothing else. Fire-and-forget:
   // a save must never wait on, or fail for, an embedding.
+  //
+  // DEBOUNCED PER CORPUS, because the trigger is per PARSE and parses arrive in bursts: the startup
+  // sweep re-announces every registered row for every resuming session, which as written first was
+  // ~27 racing full-hash passes on the main process at the exact moment he clicks the tab — the
+  // "new stupid process slowing shit down" he reported the same hour it armed. A burst now
+  // coalesces to one pass per corpus, two seconds after the last parse in it.
   if (res.registration) {
     try {
-      const docsEngine = require("./docs.cjs");
       const { project } = documents.locate(abs);
-      for (const c of docsEngine.corpora()) {
-        if (c.registry && project && c.registry === project)
-          docsEngine.index(c.name).catch(() => {});
-      }
+      if (project) scheduleRegistryReindex(project);
     } catch {}
   }
   // A LEAF THAT COULD NOT REGISTER GOES BACK TO WHOEVER WROTE IT. His design: *"if you file it
@@ -3187,6 +3214,6 @@ module.exports = {
   TURN_SETTLE_MS, idleWakeMs, __setIdleTick, fireHooks, armTurnEnd, armIdle, flushTurnEndHooks, maybeNudge, quietOf, nudgePicks,
   // AUTO-COMPACTION — the release valve. `maybeCompact`/`passReadyFor` exported as test seams so the
   // valve can be driven without a live model; `stopCompaction`/`compactionState` are the bridge's.
-  maybeCompact, passReadyFor, stopCompaction, stopCountdown, compactionState,
+  maybeCompact, passReadyFor, stopCompaction, stopCountdown, compactionState, __setRegistryReindexMs,
   compactionSettings: compaction.readSettings, writeCompactionSettings: compaction.writeSettings,
 };

@@ -197,14 +197,23 @@ console.log("\nthe doc-registry keeps itself current off the same parse");
   const asked = [];
   const realIndex = docsEngine.index;
   docsEngine.index = (name, opts) => { asked.push(name); return Promise.resolve({ ok: true }); };
+  // THE TRIGGER IS DEBOUNCED — one trailing pass per project, not one per parse. The startup sweep
+  // re-announces every registered row for every resuming session, and the per-parse version was ~27
+  // racing hash passes on the main process at the moment he clicks the tab (his report, the hour it
+  // armed). So the pin is now TWO claims: a burst of parses asks ONCE, and it still asks only the
+  // covering corpus. The seam shortens the trailing window the way __setIdleTick shortens the tick.
+  sessions.__setRegistryReindexMs(20);
   const probe = path.join(root, "RFCs", "RFC-204-current.md");
   fs.writeFileSync(probe, "# RFC-204\n\n::rfc{id=RFC-204}\n\nthe freshly registered design body.\n");
   await sessions.announceDocument(probe);
-  await new Promise((r) => setTimeout(r, 50)); // fire-and-forget
+  await sessions.announceDocument(probe); // the burst — a sweep hits the same rows again
+  await sessions.announceDocument(probe);
+  assert.equal(asked.length, 0, "nothing indexes inside the burst — the pass is trailing");
+  await new Promise((r) => setTimeout(r, 120)); // past the shortened window
   docsEngine.index = realIndex;
-  assert.ok(asked.includes("sv-reg"), "the save re-indexed the registry-fed corpus covering its project");
-  assert.ok(!asked.includes("other-reg"), "and left another project's corpus alone");
-  ok("a registered save re-indexes every registry-fed corpus covering its project, and only those (his design)");
+  assert.deepEqual(asked, ["sv-reg"], "one pass, for the covering corpus alone — the burst coalesced");
+  assert.ok(!asked.includes("other-reg"), "and another project's corpus was left alone");
+  ok("a burst of registered saves re-indexes the covering corpus ONCE, trailing — and only that corpus (his design, minus the startup storm)");
   fs.writeFileSync(process.env.AUTOBOT_CORPORA, "[]"); // later announce calls must not spawn a real index with no vector double
 }
 

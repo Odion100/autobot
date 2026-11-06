@@ -49,6 +49,11 @@ const BUILTINS = [
       "projects", "auth", "agents", "dictation", "voice", "terminal", "components", "systemlynx",
       // The worklist cog's knobs (RFC-075 §3) — the IDE is where the nudge is configured.
       "nudge",
+      // The release valve's knobs ride the same cog. THIS line is the one both the nudge's lane and
+      // the valve's author forgot: GRANTS maps the capability to namespaces, but an app only gets
+      // what its OWN list here asks for — the table alone grants nothing, and the cog renders "no
+      // door" against a shell that has one.
+      "compaction",
     ],
   },
 ];
