@@ -15,6 +15,8 @@ const require = createRequire(import.meta.url);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-announce-"));
 process.env.AUTOBOT_DOCUMENTS = path.join(tmp, "documents.json");
 process.env.AUTOBOT_PROJECTS = path.join(tmp, "projects.json");
+process.env.AUTOBOT_CORPORA = path.join(tmp, "corpora.json"); // read at docs.cjs load — must be set before any require
+fs.writeFileSync(path.join(tmp, "corpora.json"), "[]"); // empty by default: only the trigger block adds a registry corpus, and it STUBS index so nothing real embeds
 const root = path.join(tmp, "systemview");
 fs.mkdirSync(path.join(root, "RFCs"), { recursive: true });
 fs.writeFileSync(process.env.AUTOBOT_PROJECTS, JSON.stringify({ systemview: root }));
@@ -174,6 +176,36 @@ console.log("\nthe gate — a plain member's fires wait for the press");
   assert.ok(w.ok && w.fired === 1);
   assert.match(fs.readFileSync(byWriter, "utf8"), /told=buapi/);
   ok("the writer's own parse stamps a HELD member told — its tool call put the answer there (c31 crosses the gate)");
+}
+
+console.log("\nthe doc-registry keeps itself current off the same parse");
+{
+  // The registry was chosen as the corpus feed precisely so nobody re-indexes by hand: the one
+  // moment a registered document changes is this parse, so a registry-fed corpus covering the
+  // project is re-indexed HERE, fire-and-forget. Real embedding needs the model (docs.js swaps a
+  // vector double in to assert chunks; this suite does not), so what this pins is the TRIGGER —
+  // that the save calls index() for the covering corpus and skips corpora of other projects. The
+  // embedding itself is docs.js's 81 claims.
+  const docsEngine = require("../electron/agents/docs.cjs");
+  fs.writeFileSync(
+    process.env.AUTOBOT_CORPORA,
+    JSON.stringify([
+      { name: "sv-reg", kind: "working", registry: "systemview" },
+      { name: "other-reg", kind: "working", registry: "someone-else" },
+    ]),
+  );
+  const asked = [];
+  const realIndex = docsEngine.index;
+  docsEngine.index = (name, opts) => { asked.push(name); return Promise.resolve({ ok: true }); };
+  const probe = path.join(root, "RFCs", "RFC-204-current.md");
+  fs.writeFileSync(probe, "# RFC-204\n\n::rfc{id=RFC-204}\n\nthe freshly registered design body.\n");
+  await sessions.announceDocument(probe);
+  await new Promise((r) => setTimeout(r, 50)); // fire-and-forget
+  docsEngine.index = realIndex;
+  assert.ok(asked.includes("sv-reg"), "the save re-indexed the registry-fed corpus covering its project");
+  assert.ok(!asked.includes("other-reg"), "and left another project's corpus alone");
+  ok("a registered save re-indexes every registry-fed corpus covering its project, and only those (his design)");
+  fs.writeFileSync(process.env.AUTOBOT_CORPORA, "[]"); // later announce calls must not spawn a real index with no vector double
 }
 
 console.log("\nmarkBlock — the agent's door, with its rules");

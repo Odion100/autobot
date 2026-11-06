@@ -1300,6 +1300,21 @@ async function announceDocument(absPath, opts = {}) {
   const reg = res.registration
     ? documents.registerParsed(abs, res.registrations || res.registration, res.blocks, res.text)
     : null;
+  // THE DOC-REGISTRY KEEPS ITSELF CURRENT (his design, 2026-11-06: the registry was chosen as the
+  // feed precisely so the index never goes stale by hand). This parse is the one moment the system
+  // observes a registered document change, so any registry-fed corpus covering this project
+  // re-indexes HERE — hash-skip makes it the changed file's cost and nothing else. Fire-and-forget:
+  // a save must never wait on, or fail for, an embedding.
+  if (res.registration) {
+    try {
+      const docsEngine = require("./docs.cjs");
+      const { project } = documents.locate(abs);
+      for (const c of docsEngine.corpora()) {
+        if (c.registry && project && c.registry === project)
+          docsEngine.index(c.name).catch(() => {});
+      }
+    } catch {}
+  }
   // A LEAF THAT COULD NOT REGISTER GOES BACK TO WHOEVER WROTE IT. His design: *"if you file it
   // incorrectly, the system should be able to pick that up and send a message to the agent who
   // wrote it — which we should be able to know because they called the bash to write it. And that
