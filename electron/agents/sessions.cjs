@@ -1452,6 +1452,9 @@ async function documentFires(absPath) {
       summary: f.summary,
       pending: f.pending,
       held: f.held || [],
+      // what the line already says — the pin's "caught up" stamp merges over this rather than
+      // clobbering a delivery that landed between fetch and press
+      told: f.told || [],
     })),
   };
 }
