@@ -674,12 +674,39 @@ async function purgeAgent(id) {
   return { id: safe };
 }
 
+// A DELETE THAT MISSED REPORTED SUCCESS, which is the one thing a destructive verb must never do.
+// Measured 2026-11-01: fifteen calls passed the SHORT id — the four characters surfaces print in
+// brackets — every one answered "Forgot <id>", and the store held 26 notes before and 26 after. The
+// full slug worked first time, so the id was never the agent's mistake: the bracket is what it was
+// shown.
+//
+// So the id is RESOLVED against the notes on disk first. An unambiguous suffix is exactly what a
+// bracket prints, so it resolves; several matches are refused WITH the candidates, because picking
+// one would be a guess at which note to destroy; and a miss is an error naming the nearest ids
+// rather than a cheerful no-op.
+function resolveNoteId(dir, id) {
+  const want = String(id || "").trim();
+  if (!want) return { error: "no id given" };
+  let ids = [];
+  try {
+    ids = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, ""));
+  } catch { ids = []; }
+  if (ids.includes(want)) return { id: want };
+  const hits = ids.filter((x) => x.endsWith(`-${want}`) || x.endsWith(want));
+  if (hits.length === 1) return { id: hits[0], asked: want };
+  if (hits.length > 1) return { error: `"${want}" matches ${hits.length} notes — pass the full id: ${hits.join(" · ")}` };
+  const near = ids.filter((x) => x.includes(want)).slice(0, 3);
+  return { error: `no note "${want}" here${near.length ? ` — did you mean ${near.join(" · ")}?` : ""}` };
+}
+
 async function deleteNote(scope, id) {
   const p = place(scope);
   if (!p) throw new Error(`bad scope "${scope}"`);
-  await vectors.remove(p.collection, [id]);
-  try { fs.unlinkSync(path.join(p.dir, String(id).replace(/[^a-zA-Z0-9._-]/g, "") + ".md")); } catch {}
-  return { id, scope: p.scope };
+  const found = resolveNoteId(p.dir, id);
+  if (found.error) throw new Error(`${found.error} — nothing was deleted`);
+  await vectors.remove(p.collection, [found.id]);
+  try { fs.unlinkSync(path.join(p.dir, String(found.id).replace(/[^a-zA-Z0-9._-]/g, "") + ".md")); } catch {}
+  return { id: found.id, scope: p.scope, asked: found.asked || null };
 }
 
 // remember() — one motion: near-dup check, markdown write, embed. Returns the
@@ -1262,9 +1289,11 @@ function toolsFor(identity = {}) {
       tool(
         "forget",
         "Delete a note from the context store by id — use when a note is wrong or stale and should " +
-          "not just be superseded but removed. It's your store to keep clean.",
+          "not just be superseded but removed. It's your store to keep clean. The short id a surface " +
+          "prints in brackets is enough; an id matching nothing is REFUSED by name, never reported as " +
+          "deleted, and the note's subscription goes with it.",
         {
-          id: z.string().describe("the note id, as shown by context()"),
+          id: z.string().describe("the note id — the full slug, or the short one in brackets"),
           scope: z.string().optional().describe("the note's scope; defaults to your agent scope"),
         },
         async ({ id, scope }) => {
@@ -1283,8 +1312,20 @@ function toolsFor(identity = {}) {
               };
             const p = place(scope || scopes.default);
             if (!p || !scopes.allowed.includes(p.scope)) throw new Error(`scope not available to this session`);
-            await deleteNote(p.scope, id);
-            return { content: [{ type: "text", text: `Forgot ${id} from ${p.scope}.` }] };
+            const gone = await deleteNote(p.scope, id);
+            // A DELETED NOTE LEFT ITS SUBSCRIPTION STANDING, pointing at content that no longer
+            // exists — two were dangling the night this was measured. The shelf goes in the same
+            // motion, and the answer SAYS so: a subscription dropped silently is a delivery the
+            // agent still believes it has.
+            let shelf = "";
+            try {
+              unsubscribe(scopes, { what: `note:${gone.id}@${p.scope}` });
+              shelf = " Its subscription went with it.";
+            } catch {}
+            return {
+              content: [{ type: "text", text:
+                `Forgot ${gone.id} from ${p.scope}.${gone.asked ? ` ("${gone.asked}" resolved to it.)` : ""}${shelf}` }],
+            };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }

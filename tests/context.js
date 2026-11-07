@@ -385,6 +385,51 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     const u = ctx.unsubscribe(subScopes, { what: `note:${noteB.id}@${AG}` });
     ok(typeof u.left === "number", "unsubscribe ends a preference by name");
 
+    // ---- A DELETE THAT MISSES MUST SAY SO ---------------------------------------------------
+    // Measured 2026-11-01: fifteen `forget` calls passed the SHORT id surfaces print in brackets,
+    // all fifteen answered "Forgot <id>", and the store held 26 notes before and 26 after. The
+    // claims below are counted, not reported — a prune that cannot show the count moving has
+    // demonstrated nothing, which is the whole lesson of the original failure.
+    {
+      const tools = ctx.toolsFor({ slot: "smoketest", projectCode: "smoketest-sys" });
+      const forget = tools.find((t) => t.name === "forget");
+      const said = (r) => (r && r.content && r.content[0] && r.content[0].text) || "";
+
+      const doomed = await ctx.remember(subScopes, { text: "a note written to be deleted by its short id", scope: AG });
+      ctx.subscribe(subScopes, { what: `note:${doomed.id}@${AG}`, when: "post-compaction" });
+      const short = doomed.id.slice(-4);
+      const before = ctx.listNotes(AG).length;
+
+      const hit = await forget.handler({ id: short, scope: AG }, {});
+      ok(!hit.isError && new RegExp(doomed.id).test(said(hit)),
+        "the short id in brackets resolves, and the answer says which note it resolved to");
+      ok(ctx.listNotes(AG).length === before - 1, "...and the count moved, which is the only proof a delete happened");
+      ok(!defs.subscriptionsOf("smoketest").some((r) => r.what.includes(doomed.id)),
+        "...and the deleted note's subscription went with it, rather than standing and pointing at nothing");
+
+      const missBefore = ctx.listNotes(AG).length;
+      const miss = await forget.handler({ id: "zzzz", scope: AG }, {});
+      ok(miss.isError === true && /nothing was deleted/.test(said(miss)),
+        "an id matching nothing is REFUSED by name — never success for a no-op");
+      ok(ctx.listNotes(AG).length === missBefore, "...and nothing moved");
+
+      // AMBIGUITY IS REFUSED WITH THE CANDIDATES, because picking one would be a guess at which
+      // note to destroy. Written as files by hand: two ids cannot be made to collide through
+      // `remember`, whose suffix is random.
+      const dir = ctx.place(AG).dir;
+      fs.writeFileSync(path.join(dir, "fixture-one-dupe.md"), "# one\n");
+      fs.writeFileSync(path.join(dir, "fixture-two-dupe.md"), "# two\n");
+      const ambiguous = await forget.handler({ id: "dupe", scope: AG }, {});
+      ok(ambiguous.isError === true && /matches 2 notes/.test(said(ambiguous)),
+        "an ambiguous id is refused with the candidates named");
+      ok(/fixture-one-dupe/.test(said(ambiguous)) && /fixture-two-dupe/.test(said(ambiguous)),
+        "...both of them, so the caller can pick rather than guess");
+      ok(fs.existsSync(path.join(dir, "fixture-one-dupe.md")) && fs.existsSync(path.join(dir, "fixture-two-dupe.md")),
+        "...and neither was deleted");
+      fs.rmSync(path.join(dir, "fixture-one-dupe.md"), { force: true });
+      fs.rmSync(path.join(dir, "fixture-two-dupe.md"), { force: true });
+    }
+
     // ---- THE DECISION IS A PARAMETER ON `remember` (2026-10-04, his call) --------------------
     // Through the REAL TOOL HANDLER, not the module function underneath: everything claimed here
     // lives at the tool layer — that the parameter is required, that it subscribes without an id,
