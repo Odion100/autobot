@@ -28,6 +28,16 @@ const TMP = path.join(os.tmpdir(), `compaction-test-${process.pid}.json`);
 process.env.AUTOBOT_COMPACTION_FILE = TMP;
 fs.writeFileSync(TMP, JSON.stringify({ on: true, softPct: 60, hardPct: 85, countdownSec: 1, snoozeSec: 70 }));
 
+// AND A TEMP LOG DIR, for the same reason and one more: `ledger.cjs` resolves ROOT once at require
+// time, so this has to be set before the require below — and without it every line this suite
+// writes lands in the file an investigation reads, which is the failure logLife's own comment
+// records from 2026-10-19.
+const LOGS = fs.mkdtempSync(path.join(os.tmpdir(), "compaction-logs-"));
+process.env.AUTOBOT_LEDGER_DIR = LOGS;
+const lifeLog = () => {
+  try { return fs.readFileSync(path.join(LOGS, "agents.log"), "utf8"); } catch { return ""; }
+};
+
 const compaction = require("../electron/agents/compaction.cjs");
 const sessions = require("../electron/agents/sessions.cjs");
 
@@ -119,5 +129,28 @@ assert.ok(stoppable.compactionCtl.snoozeUntil > Date.now(), "snooze window set")
 assert.ok(stoppable.emitted.some((e) => e.kind === "compaction.cancelled" && e.by === "buAPI"), "cancelled, attributed to who pressed");
 ok("a soft countdown stops: cleared, snoozed, and the cancel is attributed");
 
+// 5 · THE VALVE LEAVES A RECORD — the chip is in a window nobody is watching at 3am, so every
+// transition says so on disk. Twice "did it ever arm?" had no answer but his eyes.
+const life = lifeLog();
+assert.match(life, /compaction armed: hard, cannot be stopped at 90% · 1s/);
+ok("arming writes which path, the reading that caused it, and the window");
+assert.match(life, /compaction armed: soft at 65% · 1s/);
+assert.match(life, /compaction fired — \/compact pushed to the input queue/);
+ok("the fire is on disk, so a compaction nobody saw is still answerable");
+assert.match(life, /compaction stopped by buAPI — snoozed 70s toward the hard line/);
+ok("a stop says who stopped it and how long it bought");
+
+// THE HOLD — over soft with nothing counting down, because the pass has not closed since the
+// crossing. The state that reads as a broken valve, now the state that says why.
+const held = fakeSession({ runsDone: new Map() });
+held.compactionCtl.snoozeUntil = Date.now() + 60000;
+sessions.maybeCompact(held, 65);
+sessions.maybeCompact(held, 65);
+const holds = lifeLog().split("\n").filter((l) => l.includes("compaction held at 65%: snoozed"));
+assert.equal(held.compactionCtl.countdown, null, "a hold arms nothing");
+assert.equal(holds.length, 1, "the hold is logged once per reason, not once per reading");
+ok("a hold says why, once — the reading repeats every usage event and the log must not");
+
 try { fs.unlinkSync(TMP); } catch {}
+try { fs.rmSync(LOGS, { recursive: true, force: true }); } catch {}
 console.log(`\n${n} claims, all green — auto-compaction, the release valve`);

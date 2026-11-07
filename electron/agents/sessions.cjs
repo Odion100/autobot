@@ -945,14 +945,21 @@ function fireCompaction(s) {
     s.input.push({ type: "user", message: { role: "user", content: [{ type: "text", text: "/compact" }] }, parent_tool_use_id: null, session_id: "" });
   } catch {}
   emit(s, { kind: "compaction.fired", trigger: "auto" });
+  logLife(s, "compaction fired — /compact pushed to the input queue");
 }
 
-function startCountdown(s, hard) {
+// THE VALVE WRITES ITS OWN RECORD, because the chip is the only other witness and it lives in a
+// window nobody is watching at 3am. Every emit here is a transition the renderer draws and the disk
+// forgot: twice the question "did it ever arm?" had no answer but his eyes. Transitions only — a
+// per-second line would drown the log the breadcrumbs are for.
+function startCountdown(s, hard, pct) {
   const ctl = s.compactionCtl;
   clearCountdown(s);
   const secs = compaction.readSettings().countdownSec;
+  ctl.heldFor = "";
   ctl.countdown = { hard: !!hard, endsAt: Date.now() + secs * 1000 };
   emit(s, { kind: "compaction.pending", ...compactionPending(s) });
+  logLife(s, `compaction armed: ${hard ? "hard, cannot be stopped" : "soft"} at ${pct == null ? "?" : pct}% · ${secs}s`);
   ctl.timer = setInterval(() => {
     const p = compactionPending(s);
     if (!p) { clearCountdown(s); return; }
@@ -968,15 +975,27 @@ function maybeCompact(s, pct) {
   const ctl = s.compactionCtl;
   const settings = compaction.readSettings();
   if (pct != null && pct >= settings.softPct) { if (!ctl.softAt) ctl.softAt = Date.now(); }
-  else { ctl.softAt = 0; ctl.snoozeUntil = 0; }
+  else { ctl.softAt = 0; ctl.snoozeUntil = 0; ctl.heldFor = ""; }
   const verdict = compaction.evaluate({
     pct, now: Date.now(), settings,
     countdown: ctl.countdown, snoozeUntil: ctl.snoozeUntil,
     passReady: passReadyFor(s),
   });
-  if (verdict.kind === "start-soft") startCountdown(s, false);
-  else if (verdict.kind === "start-hard") startCountdown(s, true);
-  else if (verdict.kind === "clear" && ctl.countdown) { clearCountdown(s); emit(s, { kind: "compaction.cancelled", reason: verdict.reason }); }
+  if (verdict.kind === "start-soft") startCountdown(s, false, pct);
+  else if (verdict.kind === "start-hard") startCountdown(s, true, pct);
+  else if (verdict.kind === "clear" && ctl.countdown) {
+    clearCountdown(s);
+    emit(s, { kind: "compaction.cancelled", reason: verdict.reason });
+    logLife(s, `compaction cleared: ${verdict.reason}`);
+  }
+  // THE HOLD IS THE STATE THAT LOOKS LIKE A BUG AND IS NOT — over soft, nothing counting down,
+  // because the maintenance pass has not closed since the crossing or a stop is still snoozed.
+  // Logged ONCE per reason while it holds (the reading repeats every usage event), and cleared when
+  // fill drops back under soft, so a re-crossing says so again.
+  else if (verdict.kind === "hold" && ctl.heldFor !== verdict.reason) {
+    ctl.heldFor = verdict.reason;
+    logLife(s, `compaction held at ${pct}%: ${verdict.reason}`);
+  }
 }
 
 // STOP — pressable by the human and callable by the agent through the bridge. Refused on a hard
@@ -991,6 +1010,7 @@ function stopCountdown(s, by = "you") {
   const snoozeSec = compaction.readSettings().snoozeSec;
   ctl.snoozeUntil = snoozeSec > 0 ? Date.now() + snoozeSec * 1000 : 0;
   emit(s, { kind: "compaction.cancelled", by, snoozedSec: snoozeSec });
+  logLife(s, `compaction stopped by ${by} — snoozed ${snoozeSec}s toward the hard line`);
   return { ok: true, snoozedSec: snoozeSec };
 }
 
