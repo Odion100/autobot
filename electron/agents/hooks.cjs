@@ -64,19 +64,13 @@ const EVENTS = [
   // the prompt, before the turn has spent anything) and the receipt at the yield. A hook does not
   // have to choose between them any more (RFC-012 holds session-level pointers for the boundary
   // and takes the freshest match), but the description must not claim a precision it never had.
-  // THE THRESHOLD EVENTS OFFER THEIR OWN NUMBERS, and that is the catalog's job rather than the
-  // window's: an event knows what its field means, so it is the only honest place to say that
-  // `pct` is a percentage and 60 is a sensible one. Without it the form asked a human to know the
-  // field name, pick `≥`, and type a bare number into a box with no unit on it — which is the
-  // same capability and no way to use it (his catch, 2026-11-07: *"I can't select the kind of
-  // times I want"*). `units` is the label the surface puts beside each offer.
-  { name: "usage", what: "token usage was reported — per assistant message (`snapshot: true`, mid-turn) and once at the yield with the turn's cost; a hook on it is delivered at the turn's end either way", fields: ["pct", "contextTokens", "contextWindow", "inputTokens", "outputTokens", "snapshot"], values: { pct: [40, 50, 60, 65, 70, 75, 80, 85, 90], snapshot: [true, false] }, units: { pct: "%" } },
+  { name: "usage", what: "token usage was reported — per assistant message (`snapshot: true`, mid-turn) and once at the yield with the turn's cost; a hook on it is delivered at the turn's end either way", fields: ["pct", "contextTokens", "contextWindow", "inputTokens", "outputTokens", "snapshot"] },
   // IDLE IS NOT END-OF-TURN, AND THE DIFFERENCE IS THE HUMAN (his catch). A turn ending means he
   // has just been answered and may be mid-sentence; `idle` means nobody has come back. That is the
   // only moment a LONG procedure — doc maintenance, an audit — competes with nothing at all. The
   // signal costs nothing new: RFC-012 already made the harness watch for the SDK's yield, so idle
   // is that same boundary plus a longer quiet, cancelled by any activity.
-  { name: "idle", what: "the session has been quiet since it last handed the turn back — nobody came back. The moment for work that should never compete with the human; `quietMin` is how long it has been", fields: ["quietMin"], values: { quietMin: [5, 10, 15, 20, 30, 45, 60, 90, 120, 180] }, units: { quietMin: "min" } },
+  { name: "idle", what: "the session has been quiet since it last handed the turn back — nobody came back. The moment for work that should never compete with the human; `quietMin` is how long it has been", fields: ["quietMin"] },
   { name: "compaction.after", what: "a compaction finished — the summary is in place and the reasoning behind it is gone", fields: ["trigger", "preTokens", "postTokens"], values: { trigger: ["auto", "manual"] } },
   { name: "todo.updated", what: "the worklist changed — `source` says which skill or job these steps are the execution of, `run` which execution", fields: ["source", "run"] },
   { name: "run.started", what: "a procedure's execution opened its own worklist — a skill fired with steps, or a job began", fields: ["source", "id"] },
