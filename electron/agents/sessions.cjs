@@ -2490,7 +2490,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         // Held separately, because `currentRun` is a single slot and a lane's run is about to take
         // it. This is the reference that used to be lost.
         s.jobRun = onRunOpened(s, s.currentRun);
-        if (!back) emit(s, { kind: "run.started", id: s.currentRun.id, source });
+        // ANNOUNCED AFTER THE FILE EXISTS, NOT HERE. The strip reads the run FILES from disk when it
+        // is told a run started, and `writeRun` is thirty lines below this — so the read landed
+        // before the record and found nothing, and the row waited for a reload. His words,
+        // 2026-11-04: *"I don't see any list down here… I refresh the page and there it is."*
+        // The flag is held and spent below, so "a run opened" still means exactly what it meant.
+        if (!back) s.announceRunStarted = { id: s.currentRun.id, source };
         // A JOB NAMED IN THE CONVERSATION LEAVES THE SAME EVIDENCE AS ONE A HOOK FIRED (2026-10-08).
         //
         // `jobs.given()` is the only door that opens a job's RUN RECORD, and it is reached only
@@ -2531,6 +2536,14 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         s.pendingLaneRepo = null;
       }
       s.worklistSource = source;
+      // The birth announcement, now that there is a record to read. Order matters between these
+      // two: `run.started` is what makes a watcher re-read the files, and `todo.updated` carries
+      // the items for the live row — a watcher seeing the items first would paint a row the disk
+      // does not account for yet.
+      if (s.announceRunStarted) {
+        emit(s, { kind: "run.started", ...s.announceRunStarted });
+        s.announceRunStarted = null;
+      }
       emit(s, { kind: "todo.updated", items, source, run: s.currentRun.id });
       if (worklist.allDone(items)) {
         emit(s, { kind: "run.finished", id: s.currentRun.id, source });
