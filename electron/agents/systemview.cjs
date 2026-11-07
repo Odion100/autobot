@@ -1271,6 +1271,10 @@ function toolsFor(identity = {}) {
             const say = (label, rows, line) => (rows.length ? [`\n${label} (${rows.length})`, ...rows.map(line)] : []);
             return text([
               head,
+              // THE CROSS GOES FIRST, because it is the one finding that names a WRONG LABEL rather
+              // than a missing record — and because it used to arrive as two unrelated lines in two
+              // sections, which is how three of them in a row went unnoticed (2026-11-07).
+              ...say("CROSSED — the trailer names one document and another carries the sha", r.crossed, (x) => `  ${x.sha.slice(0, 8)} "${x.subject}" says ${x.says}, but ${x.carriedBy} accounts for it (${x.path}) — the trailer is the wrong label`),
               ...say("ONE WAY — the commit names it, the document does not carry the sha", r.oneWay, (x) => `  ${x.sha.slice(0, 8)} serves ${x.id} — add ::commit{sha=${x.sha.slice(0, 8)}} to ${x.path}`),
               ...say("DANGLING — serves an id nothing registered", r.dangling, (x) => `  ${x.sha.slice(0, 8)} serves ${x.id} — ${x.subject}`),
               ...say("UNCLAIMED — the document names a sha that does not point back", r.unclaimed, (x) => `  ${x.path} names ${x.sha} — that commit does not serve ${x.id}`),
