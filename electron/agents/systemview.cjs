@@ -1293,6 +1293,10 @@ function toolsFor(identity = {}) {
               ...say("ONE WAY — the commit names it, the document does not carry the sha", r.oneWay, (x) => `  ${x.sha.slice(0, 8)} serves ${x.id} — add ::commit{sha=${x.sha.slice(0, 8)}} to ${x.path}`),
               ...say("DANGLING — serves an id nothing registered", r.dangling, (x) => `  ${x.sha.slice(0, 8)} serves ${x.id} — ${x.subject}`),
               ...say("UNCLAIMED — the document names a sha that does not point back", r.unclaimed, (x) => `  ${x.path} names ${x.sha} — that commit does not serve ${x.id}`),
+              // A NEAR-MISS, REPORTED AS ONE. A `Serves:` line outside the trailer block is
+              // invisible to the strict parse that must stay strict — so this door used to call the
+              // commit unlinked AND the document unclaimed, two false halves of one misplaced line.
+              ...say("MISPLACED — a Serves: line that is not in the trailer block, so nothing reads it", r.misplaced, (x) => `  ${x.sha.slice(0, 8)} "${x.subject}" means to serve ${x.ids.join(" · ")} — move the line to the END of the message, on its own last line`),
             ].join("\n"));
           } catch (e) { return fail(e); }
         }
