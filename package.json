@@ -56,7 +56,8 @@
     "smoke:perf": "node tests/perf.js",
     "smoke:run-slots": "node tests/run-slots.js",
     "smoke:skillstale": "node tests/skill-staleness.js",
-    "smoke:text-blocks": "node tests/text-blocks.js"
+    "smoke:text-blocks": "node tests/text-blocks.js",
+    "smoke:skew": "node tests/hub-skew.js"
   },
   "repository": {
     "type": "git",

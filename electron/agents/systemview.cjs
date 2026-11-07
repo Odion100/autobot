@@ -1267,8 +1267,15 @@ function toolsFor(identity = {}) {
             const r = await hub("Agent", "commitLinks", { ...a });
             if (!r || r.ok === false) return text(`no answer: ${(r && r.error) || "the hub said nothing"}`);
             const head = `${r.checked} commits read · ${r.linked} carry a Serves trailer · ${r.documents} registered documents`;
-            if (r.agreed) return text(`${head}\n\nthe two directions agree — nothing to fix${r.unlinked.length ? ` (${r.unlinked.length} commits serve nothing, which is only a hole if they landed a slice)` : ""}`);
-            const say = (label, rows, line) => (rows.length ? [`\n${label} (${rows.length})`, ...rows.map(line)] : []);
+            const held = (rows) => (Array.isArray(rows) ? rows : []);
+            if (r.agreed) return text(`${head}\n\nthe two directions agree — nothing to fix${held(r.unlinked).length ? ` (${held(r.unlinked).length} commits serve nothing, which is only a hole if they landed a slice)` : ""}`);
+            // A FINDING THE HUB DOES NOT SEND YET IS NOT A CRASH. The shell and the hub restart on
+            // their own schedules, so a shell holding a newer renderer against an older hub is the
+            // NORMAL state of this system, not an edge: measured 2026-11-07, the crossed section
+            // landed in the shell while the hub still held Monday's build and the whole door
+            // answered "Cannot read properties of undefined (reading 'length')". An absent section
+            // reads as nothing to report, which is what an older hub is actually saying.
+            const say = (label, rows, line) => (held(rows).length ? [`\n${label} (${held(rows).length})`, ...held(rows).map(line)] : []);
             return text([
               head,
               // THE CROSS GOES FIRST, because it is the one finding that names a WRONG LABEL rather
