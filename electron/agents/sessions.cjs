@@ -1109,6 +1109,20 @@ const composeDelivery = (m) => {
 };
 // One push, one wake. `nextTurnFromHook` rides along so the turn this starts is labelled as the
 // mechanism's, never as the human typing (RFC-066 §3).
+// One message's ADJACENT text blocks, joined — the content array otherwise unchanged, so tool_use
+// and thinking keep their order. A markdown line can only straddle adjacent text blocks, which is
+// exactly the seam this closes; both the live emission and the transcript replay read through it,
+// so an old transcript renders whole on its next read too.
+function coalesceText(content) {
+  const out = [];
+  for (const b of content) {
+    const last = out[out.length - 1];
+    if (b && b.type === "text" && last && last.type === "text") out[out.length - 1] = { ...last, text: (last.text || "") + (b.text || "") };
+    else out.push(b);
+  }
+  return out;
+}
+
 function pushDelivery(s, tag, m) {
   s.input.push({
     type: "user",
@@ -2064,7 +2078,13 @@ async function pump(s) {
         // log to its lane instead of interleaving it, unlabeled, with the owner's own work — which
         // is what it did until RFC-059's panel needed the distinction.
         const lane = m.parent_tool_use_id || undefined;
-        for (const b of m.message.content || []) {
+        // ADJACENT TEXT BLOCKS ARE ONE UTTERANCE — a long reply streams as several content blocks
+        // whose boundary lands at a TOKEN, mid-word. Settled one event per block, the feed drew one
+        // markdown island per block and a line straddling the boundary rendered as two raw halves
+        // (four ::cue beats died that way mid-tour, 2026-11-06). The stream had the text whole; the
+        // per-block settles were what carved it. So adjacent text blocks settle as ONE event, and
+        // order against tool_use blocks is preserved by flushing at every non-text block.
+        for (const b of coalesceText(m.message.content || [])) {
           if (b.type === "text") emit(s, { kind: "assistant.text", delta: "", done: true, text: b.text, ...(lane ? { parent: lane } : {}) });
           else if (b.type === "thinking") emit(s, { kind: "assistant.thinking", delta: "", done: true, text: b.thinking, ...(lane ? { parent: lane } : {}) });
           else if (b.type === "tool_use") {
@@ -3094,7 +3114,7 @@ function transcriptMessages(cwd, sessionId, { limit = 50 } = {}) {
         contextWindow: contextWindowOf(rec.message?.model),
         ts,
       };
-      for (const b of rec.message?.content || []) {
+      for (const b of coalesceText(rec.message?.content || [])) {
         if (b.type === "text" && b.text) out.push({ kind: "assistant.text", done: true, delta: "", text: b.text, ts });
         else if (b.type === "thinking" && b.thinking) out.push({ kind: "assistant.thinking", done: true, delta: "", text: b.thinking, ts });
         else if (b.type === "tool_use") {
