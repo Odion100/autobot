@@ -602,6 +602,95 @@ try {
       if (keep == null) { try { fs.unlinkSync(FIRED); } catch {} } else fs.writeFileSync(FIRED, keep);
     }
 
+    // ── A COUNT AND A CATEGORY — "twice per day" ─────────────────────────────────────────────
+    // His decomposition, 2026-11-07: *"a number per a… and a selector for a time category — and
+    // what if I said twice per day?"* It could not be said: the count was welded into the word
+    // `once`, so every named rate meant one fire per window and a BUDGET had no spelling. The
+    // nearest thing, `cooldown:12h`, is a different promise — spacing forbids 9am and 10am, which
+    // twice-per-day allows. And the categories are NOT all clock (his correction, same evening):
+    // `session` and `crossing` are in the same list with different mechanisms behind them.
+    {
+      console.log("\na rate is a COUNT and a CATEGORY — and the categories are not all clock");
+      const FIRED = path.join(process.env.HOME || "", ".autobot", "hooks-fired.json");
+      const keep = (() => { try { return fs.readFileSync(FIRED, "utf8"); } catch { return null; } })();
+      try { fs.unlinkSync(FIRED); } catch {}
+
+      // ONE PARSE, FOUR FAMILIES — what each needs kept is what makes them different families.
+      eq("once-per-day IS 1-per-day", JSON.stringify(hooks.parseRate("once-per-day")), JSON.stringify(hooks.parseRate("1-per-day")));
+      eq("twice per day", hooks.parseRate("2-per-day").n, 2);
+      eq("...on the calendar", hooks.parseRate("2-per-day").family, "cal");
+      eq("four times an hour", hooks.parseRate("4-per-hour").family + ":" + hooks.parseRate("4-per-hour").n, "cal:4");
+      eq("a session is not a clock", hooks.parseRate("3-per-session").family, "session");
+      eq("and a crossing is not either", hooks.parseRate("2-per-compaction").family, "edge");
+      ok("zero is not a budget, it is a hook that can never fire", !hooks.RATE_FORMS.test("0-per-day"));
+      ok("and a category nobody implements is refused", !hooks.parseRate("2-per-fortnight"));
+
+      // THE CALENDAR BUDGET, spent one fire at a time inside its own bucket.
+      const TWICE = "smoke-rate-twice";
+      try { hooks.remove(TWICE); } catch {}
+      hooks.save({ name: TWICE, on: "idle", when: {}, do: "skill:doc-maintenance", kind: "context",
+                   author: "agent:smoke", rate: "2-per-day", note: "throwaway" });
+      const ev = { kind: "idle", quietMin: 20 };
+      // a FRESH Map every time is what a restarted session looks like — a calendar budget must not
+      // care, which is the half that was broken when fire history lived in session state.
+      const go = () => hooks.fire(ev, { agentId: "agent:smoke", carries: [TWICE], fired: new Map(), cleared: new Map(), turn: 1 });
+      const a = go();
+      eq("the first fire goes out", a.length, 1);
+      hooks.recordFired(a[0], { agentId: "agent:smoke" });
+      const b = go();
+      eq("AND SO DOES THE SECOND — this is the whole ask", b.length, 1);
+      hooks.recordFired(b[0], { agentId: "agent:smoke" });
+      eq("the third is held: the day's allowance is spent", go().length, 0);
+      eq("held across a restart, because the budget is on disk", go().length, 0);
+
+      const st = JSON.parse(fs.readFileSync(FIRED, "utf8"));
+      eq("and the ledger says how many, not just when", st[`agent:smoke|${TWICE}`].n, 2);
+      st[`agent:smoke|${TWICE}`].ts = Date.now() - 26 * 3600000;
+      fs.writeFileSync(FIRED, JSON.stringify(st));
+      eq("a new day is a fresh allowance, not a decrement", go().length, 1);
+
+      // A RECORD WRITTEN BEFORE COUNTS EXISTED carries no `n`. Reading it as ONE fire is what
+      // stops an upgrade handing every daily hook a second fire it had already spent.
+      const st2 = JSON.parse(fs.readFileSync(FIRED, "utf8"));
+      delete st2[`agent:smoke|${TWICE}`].n;
+      st2[`agent:smoke|${TWICE}`].ts = Date.now();
+      fs.writeFileSync(FIRED, JSON.stringify(st2));
+      eq("an old record is read as one fire, so 2-per-day has one left", go().length, 1);
+
+      // THE SESSION BUDGET, which is the session's own map and nothing on disk.
+      const THRICE = "smoke-rate-thrice";
+      try { hooks.remove(THRICE); } catch {}
+      hooks.save({ name: THRICE, on: "idle", when: {}, do: "skill:study", kind: "context",
+                   author: "agent:smoke", rate: "3-per-session", note: "throwaway" });
+      const fired = new Map();
+      const one = () => hooks.fire(ev, { agentId: "agent:smoke", carries: [THRICE], fired, cleared: new Map(), turn: 1 }).length;
+      eq("three per session: first", one(), 1);
+      eq("second", one(), 1);
+      eq("third", one(), 1);
+      eq("and then it is done for this session", one(), 0);
+      eq("a new session is a new allowance", hooks.fire(ev, { agentId: "agent:smoke", carries: [THRICE], fired: new Map(), cleared: new Map(), turn: 1 }).length, 1);
+      const st3 = JSON.parse(fs.readFileSync(FIRED, "utf8"));
+      ok("and nothing durable was written for it", !st3[`agent:smoke|${THRICE}`]);
+
+      // THE CROSSING BUDGET — the fall is still what re-arms it, twice over.
+      const CROSS = "smoke-rate-cross";
+      try { hooks.remove(CROSS); } catch {}
+      hooks.save({ name: CROSS, on: "usage", when: { pct: { gte: 60 } }, do: "skill:context-maintenance",
+                   kind: "context", author: "agent:smoke", rate: "2-per-compaction", note: "throwaway" });
+      const f2 = new Map();
+      const at = (pct) => hooks.fire({ kind: "usage", pct }, { agentId: "agent:smoke", carries: [CROSS], fired: f2, cleared: new Map(), turn: 1 }).length;
+      eq("the crossing fires once", at(72), 1);
+      eq("and a second time, because the budget is two", at(75), 1);
+      eq("then quiet while it stays up there", at(90), 0);
+      eq("the fall re-arms the whole budget", at(20), 0);
+      eq("so the next crossing has two again", at(66), 1);
+      eq("...and the second of them", at(70), 1);
+      eq("and no third", at(80), 0);
+
+      for (const n of [TWICE, THRICE, CROSS]) { try { hooks.remove(n); } catch {} }
+      if (keep == null) { try { fs.unlinkSync(FIRED); } catch {} } else fs.writeFileSync(FIRED, keep);
+    }
+
     // ── ONCE-PER-RISE — ONCE PER CROSSING, AND THE FALL IS WHAT RE-ARMS IT ───────────────────
     // His report, 2026-10-12: *"two times in a row context maintenance did not fire."* He was
     // right. `context-maintenance` is `on: usage, when: pct >= 60` with `once-per-session`: it

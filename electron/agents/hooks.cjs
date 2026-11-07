@@ -492,6 +492,9 @@ function index() {
 // interfering, which is the test that they were ever separate axes. `guard` is the old name and
 // still reads; `rate` is what it is.
 //
+// EVERY ONE OF THESE TAKES A COUNT. `2-per-day` is the same family as `once-per-day` with the
+// budget turned up; `once-per-X` is the n=1 spelling and stays the one nearly every hook wants.
+//
 // THREE FAMILIES, because people mean all three and only two existed:
 //   cooldown:<duration>  sliding — "no sooner than N since the last fire". How you say twice-weekly.
 //   once-per-day|week|month  CALENDAR — once within each period, however the periods fall. Fire at
@@ -523,7 +526,34 @@ function index() {
 // a 3.5-day cadence in a session restarted daily fired daily. `once-per-session` was the only one
 // that ever worked, because it is the only one whose scope IS the thing it was stored in.
 const STATE_FILE = path.join(os.homedir(), ".autobot", "hooks-fired.json");
-const RATE_FORMS = /^(once-per-session|once-per-rise|once-per-compaction|once-per-day|once-per-week|once-per-month|cooldown:.+)$/;
+
+// A RATE IS A NUMBER AND A TIME CATEGORY — his decomposition, 2026-11-07: *"you can hear the
+// components: a number per a… and a selector for a time category — session, crossing, whatever.
+// What if I said twice per day?"* It could not be said. The count was welded into the word `once`,
+// so every named rate meant exactly one fire per window and a BUDGET had no spelling at all. The
+// nearest thing was a sliding `cooldown:12h`, which is a different promise: spacing forbids 9am and
+// 10am, where "twice per day" allows them. `once-per-X` is still written and read everywhere — it
+// is `1-per-X`, which is why nothing on disk had to change.
+const PER_FAMILY = { session: "session", rise: "edge", compaction: "edge", hour: "cal", day: "cal", week: "cal", month: "cal" };
+const RATE_FORMS = /^((once|[1-9]\d*)-per-(session|rise|compaction|hour|day|week|month)|cooldown:.+)$/;
+
+/**
+ * THE ONE PLACE A RATE IS READ. Four families, and what each needs kept is different: a session
+ * budget is counted in the session's own map, an edge budget in that same map (the fall clears it),
+ * a calendar budget needs a count INSIDE a bucket on disk, and a cooldown needs only the last fire.
+ * Returns null for anything unreadable — and the callers treat null as BLOCKED, never as open.
+ */
+function parseRate(g) {
+  const s = String(g == null ? "" : g).trim();
+  if (!s) return null;
+  if (s.startsWith("cooldown:")) return { family: "cooldown", n: 1, cat: "", ms: parseDur(s.slice("cooldown:".length)) };
+  const m = /^(once|[1-9]\d*)-per-([a-z]+)$/.exec(s);
+  const family = m && PER_FAMILY[m[2]];
+  if (!family) return null;
+  const n = m[1] === "once" ? 1 : Number(m[1]);
+  if (!Number.isInteger(n) || n < 1) return null;
+  return { family, n, cat: m[2], ms: 0 };
+}
 
 // Durations people write: 30m, 24h, 3d12h, 2w — and bare digits, which `cooldown:` has always
 // meant as SECONDS, so old hooks keep their meaning.
@@ -545,7 +575,10 @@ const rateOf = (hook) => String((hook && (hook.rate || hook.guard)) || "").trim(
 // missing from two of them: the falling edge in fire() (so it never re-armed, degrading silently to
 // `once-per-session`) and the no-`when` refusal at the writing door (so the one shape that cannot
 // work was accepted). An alias checked in some branches and not others is worse than no alias.
-const isEdgeRate = (g) => g === "once-per-rise" || g === "once-per-compaction";
+const isEdgeRate = (g) => {
+  const r = parseRate(g);
+  return !!r && r.family === "edge";
+};
 
 function readFiredState() {
   try { return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) || {}; } catch { return {}; }
@@ -560,17 +593,20 @@ function writeFiredState(st) {
 // not one, or the first agent to fire would silence the other two for a week.
 const firedKey = (hook, ctx) => `${ctx.agentId || ctx.projectCode || "anon"}|${hook.name}`;
 
-// Which calendar bucket a moment falls in — local time, because "once per day" means his day.
-function periodKey(form, ts) {
+// Which calendar bucket a moment falls in — local time, because "twice per day" means his day.
+// Takes the CATEGORY (`hour` | `day` | `week` | `month`), so the bucket does not have to be derived
+// from the whole rate string and a new count cannot change which bucket an old rate lands in.
+function periodKey(cat, ts) {
   const d = new Date(ts);
   const y = d.getFullYear();
-  if (form === "once-per-month") return `${y}-${d.getMonth() + 1}`;
-  if (form === "once-per-week") {
+  if (cat === "month") return `${y}-${d.getMonth() + 1}`;
+  if (cat === "week") {
     // ISO-ish week number is overkill; days-since-epoch over 7 is stable and monotonic
     const days = Math.floor((ts - d.getTimezoneOffset() * 60000) / 86400000);
     return `w${Math.floor(days / 7)}`;
   }
-  return `${y}-${d.getMonth() + 1}-${d.getDate()}`; // once-per-day
+  const day = `${y}-${d.getMonth() + 1}-${d.getDate()}`;
+  return cat === "hour" ? `${day}-${d.getHours()}` : day;
 }
 
 function rateAllows(hook, fired, ctx = {}) {
@@ -580,42 +616,56 @@ function rateAllows(hook, fired, ctx = {}) {
   }
   const g = rateOf(hook);
   if (!g) return true;
-  // SESSION-SCOPED, so the session's own map is exactly the right store.
-  if (g === "once-per-session") return !seen;
-  // ARMED UNTIL IT FIRES; RE-ARMED BY THE FALL. The falling edge is observed in fire(), which
-  // deletes this entry when `when` stops matching — so "is there an entry" IS "has it fired since
-  // the last fall". Session-scoped on purpose: a fresh session is a fresh context and therefore
-  // armed, which is the behaviour you want when the harness restarts at 80% full.
-  if (isEdgeRate(g)) return !seen;
-
-  const st = readFiredState();
-  const last = st[firedKey(hook, ctx)];
-  if (g.startsWith("once-per-")) {
-    if (!last || !last.ts) return true;
-    return periodKey(g, last.ts) !== periodKey(g, Date.now());
-  }
-  const ms = parseDur(g.slice("cooldown:".length));
   // A MALFORMED RATE BLOCKS, IT DOES NOT OPEN. The old default was "an unknown guard is a typo,
   // not a lock" — sane for a `when`, backwards for a rate: `cooldown:2w` parsed as nothing and
   // meant no limit at all, so the hook you slowed down fired every time instead. Loudest possible
   // failure is refusal at the writing door (see the save gate); this is the belt for anything
   // already on disk.
-  if (!Number.isFinite(ms) || ms <= 0) return false;
+  const r = parseRate(g);
+  if (!r) return false;
+
+  // THE BUDGET IS A COUNT, AND THE SESSION'S MAP ALREADY KEEPS ONE — `fire()` increments `count`
+  // on every delivery, so a session or edge budget needs no new storage: fires so far < allowance.
+  // n=1 is the old `!seen`, exactly.
+  if (r.family === "session" || r.family === "edge") return ((seen || {}).count || 0) < r.n;
+  // ARMED UNTIL IT FIRES; RE-ARMED BY THE FALL. The falling edge is observed in fire(), which
+  // deletes the entry when `when` stops matching — so the count above is "fires since the last
+  // fall", and a crossing budget falls out of the same arithmetic. Session-scoped on purpose: a
+  // fresh session is a fresh context and therefore armed, which is what you want when the harness
+  // restarts at 80% full.
+
+  const st = readFiredState();
+  const last = st[firedKey(hook, ctx)];
+  if (r.family === "cal") {
+    if (!last || !last.ts) return true;
+    // A NEW BUCKET IS A FRESH ALLOWANCE; inside the bucket, what is left of it. A record written
+    // before counts existed carries no `n` and is read as one fire — so an upgrade cannot hand a
+    // hook a second fire it had already spent.
+    if (periodKey(r.cat, last.ts) !== periodKey(r.cat, Date.now())) return true;
+    return (last.n || 1) < r.n;
+  }
+  if (!Number.isFinite(r.ms) || r.ms <= 0) return false;
   if (!last || !last.ts) return true;
-  return Date.now() - last.ts >= ms;
+  return Date.now() - last.ts >= r.ms;
 }
 
 // Stamped when a pointer is actually HANDED OVER, not when it matched — same reason the receipt is
 // written at delivery. Called by the session; a match that is held and then dropped has not spent
 // the agent's daily allowance.
 function recordFired(hook, ctx = {}) {
-  const g = rateOf(hook);
-  // NOTHING DURABLE TO REMEMBER for either session-scoped rate. Persisting a rise would be worse
-  // than useless: a restart would find it still "fired" and stay silent on a window that is a
-  // fresh context, which is the exact failure this rate exists to end.
-  if (!g || g === "once-per-session" || isEdgeRate(g)) return;
+  const r = parseRate(rateOf(hook));
+  // NOTHING DURABLE TO REMEMBER for either session-scoped family — the session's map holds their
+  // count. Persisting an edge rate would be worse than useless: a restart would find it still
+  // "fired" and stay silent on a window that is a fresh context, the exact failure it exists to end.
+  if (!r || r.family === "session" || r.family === "edge") return;
   const st = readFiredState();
-  st[firedKey(hook, ctx)] = { ts: Date.now(), hook: hook.name };
+  const key = firedKey(hook, ctx);
+  const prev = st[key];
+  const now = Date.now();
+  // INSIDE THE SAME BUCKET THE COUNT CLIMBS; a new bucket starts at one. `ts` stays the LATEST
+  // fire, because that is what both the bucket comparison and a cooldown's gap are measured from.
+  const same = r.family === "cal" && prev && prev.ts && periodKey(r.cat, prev.ts) === periodKey(r.cat, now);
+  st[key] = { ts: now, hook: hook.name, n: same ? (prev.n || 1) + 1 : 1 };
   writeFiredState(st);
 }
 
@@ -877,8 +927,9 @@ function save(rec = {}) {
   if (rateIn) {
     if (!RATE_FORMS.test(rateIn))
       throw new Error(
-        `rate must be once-per-session, once-per-rise, once-per-compaction, once-per-day, ` +
-          `once-per-week, once-per-month, or cooldown:<duration> — got "${rateIn}"`
+        `a rate is a COUNT and a TIME CATEGORY — <n>-per-session | rise | compaction | hour | day | ` +
+          `week | month ("2-per-day" is twice a day, "once-per-X" is the n=1 spelling) — or ` +
+          `cooldown:<duration> for a sliding gap instead of a budget. Got "${rateIn}"`
       );
     // A RISE WITH NO CONDITION CAN NEVER FALL, so it degenerates silently into
     // `once-per-session` — which is precisely the bug this rate was added to fix, wearing the new
@@ -1062,4 +1113,5 @@ module.exports = {
   recordFired,
   parseDur,
   RATE_FORMS,
+  parseRate,
 };
