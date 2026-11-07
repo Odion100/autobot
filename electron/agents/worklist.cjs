@@ -862,12 +862,15 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
             .optional()
             .describe(
               'where these steps came from, when they are not your own plan: "skill:<name>" when ' +
-                'you are following a skill\'s procedure, "job:<id>" when running a job — or any ' +
-                "name you choose, when you just want a separate list for a lane of work. A source " +
-                "opens a RUN — a separate list owned by that execution; your session plan is " +
-                "untouched, and marking every item done is what completes the run. It is how the " +
-                "system knows a procedure was FOLLOWED and not just chosen — leave it off for " +
-                "your own working plan"
+                'you are following a skill\'s procedure, "job:<id>" when running a job, ' +
+                '"lane:<branch>" for work isolated on a branch. A source opens a RUN — a separate ' +
+                "list owned by that execution; your session plan is untouched, and marking every " +
+                "item done is what completes the run. It is how the system knows a procedure was " +
+                "FOLLOWED and not just chosen — leave it off for your own working plan. THOSE " +
+                "THREE PREFIXES ARE THE ONLY ONES ANYTHING READS: the strip draws rows and the " +
+                "nudge chases runs by them, so a source spelled any other way is written to disk " +
+                "and then held by nothing — legitimate for a scratch list, and a silent hole for " +
+                "work (one such run sat four-of-thirteen and un-nudged for eleven days)"
             ),
         },
         async ({ items, source }) => {

@@ -730,6 +730,37 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
     : bad("stripRuns leaked another project's runs");
 }
 
+// ─── WHAT THE WRITE SAYS BACK ABOUT ITS OWN SOURCE ────────────────────────────────────────────
+// The row above is ABSENT for an unknown source, which is correct and was also silent: nothing
+// told the agent that the list it just wrote is held by nothing. `assignment:run-the-proofs` sat
+// four-of-thirteen and un-nudged from 29 Oct because of exactly that, so the reminder is pinned
+// here beside the claim about the missing row — the two halves of one honest answer.
+{
+  const sessions = require("../electron/agents/sessions.cjs");
+  const SKILLS = [{ name: "assignment" }];
+  const JOBS = [{ id: "proactive-development", name: "Proactive development" }];
+  const note = (src) => sessions.sourceNote(src, { skills: SKILLS, jobs: JOBS });
+
+  /three prefixes/.test(note("assignment:run-the-proofs"))
+    ? ok("an unknown PREFIX is named as unreadable, rather than passing in silence")
+    : bad("an unknown prefix still writes a run with nothing said about it");
+  /never nudged/.test(note("assignment:run-the-proofs"))
+    ? ok("...and it says what that costs: no row, never nudged")
+    : bad("the reminder does not say what an unreadable source costs");
+  !/not one of the three/.test(note("skill:assignment")) && note("skill:assignment") === ""
+    ? ok("a known skill source says nothing — silence is the right answer when the record is readable")
+    : bad("a legitimate skill source was warned about");
+  /no skill named/.test(note("skill:made-up-thing"))
+    ? ok("an unknown skill NAME is a mild reminder, never a refusal — a scratch namespace is legitimate")
+    : bad("an unknown skill name is not reminded about");
+  note("job:proactive-development") === "" && /no job/.test(note("job:nope"))
+    ? ok("the same asymmetry for jobs: known is silent, unknown is a note")
+    : bad("the job branch does not match the skill branch");
+  /registered as a lane/.test(note("lane:lane/x"))
+    ? ok("a lane says so POSITIVELY — registering is the whole act, so the call that does it confirms it")
+    : bad("a lane source does not confirm its registration");
+}
+
 fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} claims held — the agent worklist\n`);
 process.exit(0);

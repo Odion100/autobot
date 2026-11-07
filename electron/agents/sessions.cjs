@@ -902,6 +902,44 @@ function fireHooks(s, event) {
 }
 
 // ================================================================================================
+// WHAT A SOURCED WRITE SAYS BACK ABOUT ITS OWN SOURCE — the only place the three prefixes are ever
+// EXPLAINED to an agent, so it is a named function with the registries handed in rather than the
+// inline closure no test could reach.
+//
+// A LANE SAYS SO POSITIVELY: registering is the whole act now — cut a branch, write a list against
+// it — so the one call that does it has to confirm it did, or the agent cannot tell a registered
+// lane from a plain sourced run. The branch is verified at the write (which throws otherwise), so
+// this is a statement and not a check.
+//
+// AN UNKNOWN skill/job NAME IS A MILD REMINDER (his design): either a typo pointing a record at
+// nothing, or a namespace made up on purpose, and only the agent knows which.
+//
+// AN UNKNOWN PREFIX WAS THE SILENT CASE, and it is the one that cost nine items. `assignment:
+// run-the-proofs` passed this door with no word at all on 29 Oct and sat there: no row in the strip
+// and never nudged — both key on the three prefixes — so four of its thirteen items closed and nine
+// went quiet with nothing anywhere saying so. Still not an error, because a scratch list IS
+// legitimate; what it owes is a sentence saying what the write just bought.
+function sourceNote(src, { skills = [], jobs = [] } = {}) {
+  const s = String(src || "");
+  if (!s) return "";
+  if (/^lane:/.test(s))
+    return `registered as a lane on ${s.slice(5)} — it has a row in his strip now, and it stands there until he clears it.`;
+  const m = /^(skill|job):(.+)$/.exec(s);
+  if (!m)
+    return (
+      `note: "${s}" is not one of the three prefixes this system reads (skill: job: lane:), so this ` +
+      `run draws no row in his strip and is never nudged. Fine for a scratch list; if it is work ` +
+      `anybody should be held to, write it again under skill:<name>, job:<id> or lane:<branch>.`
+    );
+  if (m[1] === "skill") {
+    const known = skills.some((sk) => sk && sk.name === m[2]);
+    return known ? "" : `note: no skill named "${m[2]}" exists — fine if this is a namespace of your own.`;
+  }
+  const known = jobs.some((j) => j && (j.id === m[2] || j.name === m[2]));
+  return known ? "" : `note: no job "${m[2]}" exists — fine if this is a namespace of your own.`;
+}
+
+// ================================================================================================
 // AUTO-COMPACTION — the release valve. Policy (thresholds, the decision) is compaction.cjs; the
 // clock and the `/compact` push are the session's, the same split nudge.cjs keeps.
 // ================================================================================================
@@ -2533,25 +2571,11 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   }, () => s.whiteboard, () => {
     if (!s.currentRun) return null;
     return { id: s.currentRun.id, source: s.currentRun.source, items: worklist.read(worklist.runOwner(s.currentRun.id)) };
-  }, (src) => {
-    // the mild reminder: an unknown skill/job source is EITHER a typo pointing a run record at
-    // nothing, or a namespace made up on purpose — only the agent knows which, so say it and move on
-    // A LANE SAYS SO POSITIVELY. Registering is the whole act now — cut a branch, write a list
-    // against it — so the one call that does it has to confirm it did, or the agent cannot tell a
-    // registered lane from a plain sourced run. The branch is already verified above (the write
-    // throws otherwise), so this is a statement and not a check.
-    if (/^lane:/.test(src))
-      return `registered as a lane on ${src.slice(5)} — it has a row in his strip now, and it stands there until he clears it.`;
-    const m = /^(skill|job):(.+)$/.exec(src);
-    if (!m) return "";
-    if (m[1] === "skill") {
-      const known = definitions.skills(agent ? agent.id : null).some((sk) => sk.name === m[2]);
-      return known ? "" : `note: no skill named "${m[2]}" exists — fine if this is a namespace of your own.`;
-    }
-    const jobs = require("./jobs.cjs");
-    const known = jobs.list().some((j) => j.id === m[2] || j.name === m[2]);
-    return known ? "" : `note: no job "${m[2]}" exists — fine if this is a namespace of your own.`;
-  }, (id, source, what) => {
+  }, (src) =>
+    sourceNote(src, {
+      skills: definitions.skills(agent ? agent.id : null),
+      jobs: require("./jobs.cjs").list(),
+    }), (id, source, what) => {
     // A STATUS OR ATTACHMENT IS NEWS THE STRIP READS OFF DISK — without an announce his rows wear
     // yesterday's face until some unrelated run event ticks a refresh (his catch, 2026-10-26: the
     // run he watched me declare abandoned "doesn't show any abandoned"). Same seam as
@@ -3254,6 +3278,6 @@ module.exports = {
   TURN_SETTLE_MS, idleWakeMs, __setIdleTick, fireHooks, armTurnEnd, armIdle, flushTurnEndHooks, maybeNudge, quietOf, nudgePicks,
   // AUTO-COMPACTION — the release valve. `maybeCompact`/`passReadyFor` exported as test seams so the
   // valve can be driven without a live model; `stopCompaction`/`compactionState` are the bridge's.
-  maybeCompact, passReadyFor, stopCompaction, stopCountdown, compactionState, __setRegistryReindexMs,
+  maybeCompact, passReadyFor, stopCompaction, stopCountdown, compactionState, sourceNote, __setRegistryReindexMs,
   compactionSettings: compaction.readSettings, writeCompactionSettings: compaction.writeSettings,
 };
