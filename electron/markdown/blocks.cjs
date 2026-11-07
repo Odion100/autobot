@@ -185,14 +185,17 @@ const PROOF_KINDS = {
   shown: ["image", "file", "diff", "logs", "branch"],
 };
 
-// THE RUNNABLE SPECS — the two blocks a machine can execute, and the ONE definition of that set.
+// THE CONTRACT SPECS — the two blocks that assert the published surface, and the ONE definition
+// of that set.
 //
 // NOT `PROOF_KINDS.spec`, which carries `cmd` as well, and the difference is his ruling: "the CMDs
 // are not really specs. It's only run blocks and test blocks. If there is something that a CMD do,
-// you should wrap it in one of those." A `cmd` is experiential facilitation — a command HE presses
-// to feel the thing work — so it answers "is there evidence in this claim's fold" and must never
-// answer "what does the change loop re-run." Collecting cmds into a headless run would execute
-// shell he never pressed and report it as a passing proof.
+// you should wrap it in one of those." The line is LEVEL OF CONTRACT: a test asserts the published
+// surface — the highest level of contract, what SystemLynx exists for — while a command line can
+// run anything at any level (a unit test, a grep, a script) and makes no statement about which
+// contract it exercised. So a cmd answers "is there evidence in this claim's fold" (met) and never
+// "what does the change loop re-run" (settled). Collecting cmds into a headless run would also
+// execute shell he never pressed and report it as a passing proof.
 const SPECS = ["test", "run"];
 
 /**
