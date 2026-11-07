@@ -483,7 +483,24 @@ function laneRuns(projectCode) {
 // directions: a procedure that died three days ago is exactly the thing worth seeing.
 function stripRuns(projectCode) {
   const pre = `session:${projectCode}:`;
+  // THE SESSION'S OWN PLAN IS A ROW TOO — his ruling, 2026-11-07: *"default list always… I don't
+  // know why the default list is ever disappearing."*
+  //
+  // WHY IT DISAPPEARED, AND IT WAS ONLY EVER THE DISK HALF. The window learns the plan two ways: a
+  // live `todo` event, which is why writing one makes the row appear that second, and this read,
+  // which is what the row is rebuilt FROM on a reload or a remount. This filter wanted
+  // `owner: "run:…"` and one of the three sourced prefixes — exactly what the plan is not — so the
+  // row lived only as long as the session kept re-writing it, and a page that came back had no
+  // plan on it at all.
+  //
+  // IT IS NOT A RUN AND IS NOT BECOMING ONE. No source, no nudge, no record of a procedure
+  // followed; the surface tells them apart by the absent source and wears "default" for it. What
+  // this read owes the strip is every row it must draw, and the plan is one of them.
   return all().filter((r) => {
+    // THE PLAN IS MATCHED ON ITS OWNER, NOT ON `session`. A session's own file carries no `session`
+    // field — it IS the session — so the run-shaped test below can never see it. Measured: the
+    // first attempt reused that test and still returned 18 rows, all of them runs.
+    if (r.owner.startsWith(pre)) return true;
     if (!r.owner.startsWith("run:") || !r.session.startsWith(pre)) return false;
     const src = String(r.source || "");
     return src.startsWith("lane:") || src.startsWith("job:") || src.startsWith("skill:");

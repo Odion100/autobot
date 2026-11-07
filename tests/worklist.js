@@ -728,6 +728,33 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   worklist.stripRuns("otherproj").length === 0
     ? ok("and it is project-scoped, like laneRuns — another project's runs are not this chat's rows")
     : bad("stripRuns leaked another project's runs");
+
+  // ── THE SESSION'S OWN PLAN IS A ROW ──────────────────────────────────────────────────────────
+  // His ruling, 2026-11-07: *"default list always… I don't know why the default list is ever
+  // disappearing."* It disappeared from the DISK half only: the window learns the plan from a live
+  // `todo` event too, which is why writing one makes the row appear that second, and this read is
+  // what rebuilds it after a reload. The filter wanted `owner: "run:…"` and a sourced prefix —
+  // exactly what a plan is not — so the row lived only while the session kept re-writing it.
+  //
+  // AND IT IS MATCHED ON THE OWNER. A session file carries no `session` field (it IS the session),
+  // so the run-shaped test can never see it: the first fix reused that test and still returned
+  // every run and no plan.
+  worklist.write(sess, [{ id: "p1", text: "the session's own plan", state: "active" }]);
+  const withPlan = worklist.stripRuns("stripproj");
+  const plans = withPlan.filter((r) => r.owner.startsWith("session:"));
+  plans.length === 1
+    ? ok("the session's own plan draws a row — it is what the drawer is for, and it has no source to qualify on")
+    : bad(`the default list is missing from the strip (${plans.length} plan rows)`);
+  plans.length === 1 && !plans[0].source
+    ? ok("...and it still carries NO source, because it is not a run: no nudge, no record of a procedure followed")
+    : bad("the plan row arrived with a source on it");
+  worklist.write(sess, []);
+  worklist.stripRuns("stripproj").some((r) => r.owner.startsWith("session:"))
+    ? ok("an EMPTY plan still draws — a surface that vanishes when there is nothing on it is one you cannot put the first thing on")
+    : bad("the plan row disappeared once it was emptied");
+  worklist.stripRuns("otherproj").some((r) => r.owner.startsWith("session:"))
+    ? bad("another project's plan leaked into this chat's rows")
+    : ok("and the plan is project-scoped like everything else here");
 }
 
 // ─── WHAT THE WRITE SAYS BACK ABOUT ITS OWN SOURCE ────────────────────────────────────────────
