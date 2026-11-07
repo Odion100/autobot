@@ -286,4 +286,47 @@ const lanes = (identity = {}) =>
   ok("a receipt records HOW the work came in — merge or changes, unknown when nobody said, and it survives an unrelated write");
 }
 
+// ── A RECORD WHOSE BRANCH IS GONE ─────────────────────────────────────────────────────────────
+// Delete a lane with plain git and its run record nudges forever: `remove` is the only verb that
+// clears a record, and it built its targets from GIT — so the record was unreachable at exactly the
+// moment it became wrong. Measured cost: four lanes removed by hand, seven orphaned records, one of
+// them incomplete and nudging about a lane that does not exist, deleted in the end by hand.
+{
+  const removed = [];
+  // `lane/ghost` has a run record and no branch; the hub's stub lists only alpha and stray.
+  const withGhost = () =>
+    lanes({
+      laneRuns: async () => ["lane/alpha", "lane/ghost"],
+      onLaneRemoved: (branch) => { removed.push(branch); return { record: true, told: 1 }; },
+    });
+
+  const listed = said(await withGhost().handler({ projectCode: "lanes-test" }, {}));
+  assert.ok(/1 run record whose branch is gone: lane\/ghost/.test(listed), listed);
+  assert.ok(/will nudge until it is cleared/.test(listed), "and it says why that matters");
+  ok("a registered lane git no longer has is NAMED — the band tab counted records, this verb counted branches, and they disagreed in silence");
+
+  // THE CLEAR ITSELF, and it must say that nothing but a record died: "cleared" over a line that
+  // deleted no work would read as work thrown away.
+  const out = said(await withGhost().handler({ projectCode: "lanes-test", remove: "lane/ghost" }, {}));
+  assert.deepStrictEqual(removed, ["lane/ghost"], out);
+  assert.ok(/RECORD ONLY, its branch was already deleted by hand/.test(out), out);
+  assert.ok(/worktree: already gone · branch: already gone/.test(out), out);
+  ok("...and `remove` takes it by name, clearing the record and saying plainly that the branch was already gone");
+
+  // AND `all` SWEEPS THEM, or a hand-cleanup still leaves rows nobody can reach.
+  removed.length = 0;
+  const all = said(await withGhost().handler({ projectCode: "lanes-test", remove: "all" }, {}));
+  assert.ok(removed.includes("lane/ghost"), all);
+  assert.ok(/lane\/alpha/.test(all), "the real lane is cleared in the same motion");
+  ok("`remove: all` sweeps the orphaned records alongside the standing lanes");
+
+  // A RECORD WHOSE BRANCH EXISTS IS NOT AN ORPHAN, however its verdict reads — `lane/alpha` is
+  // registered AND on disk, so it goes through the verdict gate like any other lane.
+  removed.length = 0;
+  const none = said(await lanes({ laneRuns: async () => ["lane/alpha"], onLaneRemoved: (b) => { removed.push(b); return { record: true, told: 0 }; } })
+    .handler({ projectCode: "lanes-test" }, {}));
+  assert.ok(!/run record whose branch is gone/.test(none), none);
+  ok("...and a registered branch that still exists is never mistaken for one");
+}
+
 console.log(`\n${n} claims held — the lane verb`);

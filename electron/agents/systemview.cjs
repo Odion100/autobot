@@ -223,7 +223,17 @@ function renderLanes(projectCode, r) {
       `\n   A branch is not a lane until a run is written against it — \`worklist set\` with ` +
       `source "lane:<branch>". Until then it has no row and nobody is watching it.`
     : "";
-  if (!rows.length) return `${projectCode}: no lanes standing.${strayLine}`;
+  // A RECORD WITH NO BRANCH IS NAMED TOO, and for the same reason: the band's lane tab counts run
+  // RECORDS while this verb counts branches, so after a hand-cleanup they disagree completely — the
+  // tab read "7 lanes" against a verb answering "none standing", and he was reading those rows
+  // correctly. Named here with the call that clears it, so the disagreement is one press old.
+  const ghosts = Array.isArray(r.orphans) ? r.orphans : [];
+  const ghostLine = ghosts.length
+    ? `\n${ghosts.length} run record${ghosts.length === 1 ? "" : "s"} whose branch is gone: ${ghosts.join(", ")}` +
+      `\n   Deleted with plain git, so the worktree and branch are already away and only the record ` +
+      `is left — it will nudge until it is cleared. \`remove\` takes it by name.`
+    : "";
+  if (!rows.length) return `${projectCode}: no lanes standing.${strayLine}${ghostLine}`;
   // WHAT SOMEBODY SAID COMES FIRST, and the derived word follows it in brackets as the cross-check.
   // Reversed from how this shipped, because the derivation is a guess about residue and the person
   // who acted knows what they did (2026-10-06, his ruling). A disagreement is PRINTED, not ranked:
@@ -262,6 +272,7 @@ function renderLanes(projectCode, r) {
   if (r.notIn) out.push(`\n⚠ ${r.notIn} lane${r.notIn === 1 ? "" : "s"} PROVEN not in this tree — that work exists nowhere else. Bring it in before anyone clears it.`);
   else out.push(`\nnotIn: 0 — no lane's work is provably outside this tree.`);
   if (strayLine) out.push(strayLine);
+  if (ghostLine) out.push(ghostLine);
   return out.join("\n");
 }
 
@@ -273,7 +284,12 @@ function renderCleared(projectCode, cleared, refused) {
   if (cleared.length) {
     out.push(`cleared ${cleared.length} lane${cleared.length === 1 ? "" : "s"} in ${projectCode}:`);
     for (const c of cleared)
-      out.push(`   ${String(c.branch).padEnd(30)} worktree: ${c.worktree} · branch: ${c.branchDeleted} · record: ${c.record} · told ${c.told} session${c.told === 1 ? "" : "s"}`);
+      out.push(
+        `   ${String(c.branch).padEnd(30)} worktree: ${c.worktree} · branch: ${c.branchDeleted} · record: ${c.record} · told ${c.told} session${c.told === 1 ? "" : "s"}` +
+          // SAID OUT LOUD, because "cleared" over a line that deleted nothing but a record would
+          // read as work thrown away.
+          (c.orphan ? " — RECORD ONLY, its branch was already deleted by hand" : "")
+      );
   } else out.push(`cleared nothing in ${projectCode}.`);
   if (refused.length) {
     out.push(`\nREFUSED ${refused.length} — their work cannot be shown to be in this tree:`);
@@ -587,6 +603,15 @@ function toolsFor(identity = {}) {
               // skipped and the rows are reported as git saw them, which is the older behaviour and
               // never a false absence.
               if (registered) {
+                // THE MIRROR OF AN UNREGISTERED BRANCH: a REGISTERED NAME GIT NO LONGER HAS. Delete a
+                // lane with plain git and its run record nudges forever — `remove` is the only verb
+                // that clears a record, and it builds its targets from git, so the record becomes
+                // unreachable at exactly the moment it becomes wrong (four lanes removed by hand,
+                // seven orphaned records, one incomplete and nudging about a lane that does not
+                // exist; it had to be deleted by hand). Both sources are already here, so the
+                // orphan is a set difference rather than a new door.
+                const onDisk = new Set(st.lanes.map((l) => l.branch));
+                st.orphans = [...registered].filter((b) => !onDisk.has(b));
                 st.unregistered = st.lanes.filter((l) => !registered.has(l.branch)).map((l) => l.branch);
                 st.lanes = st.lanes.filter((l) => registered.has(l.branch));
                 st.notIn = st.lanes.filter((l) => l.verdict === "out").length;
@@ -690,11 +715,19 @@ function toolsFor(identity = {}) {
             if (!remove) return text(renderLanes(projectCode, st));
             const want = String(remove).trim();
             const targets = want === "all" ? rows : rows.filter((l) => l.branch === want);
-            if (!targets.length)
+            // A RECORD WHOSE BRANCH IS GONE IS A TARGET TOO. Deleting a lane with plain git leaves
+            // the record nudging forever, and this verb is the only one that can clear one — it just
+            // could not SEE it, because its targets come from git. Both halves matter: `all` has to
+            // sweep them or a hand-cleanup still leaves rows nobody can reach, and a name has to
+            // work or the only way out is deleting the file by hand (which is what happened).
+            const ghosts = Array.isArray(st.orphans) ? st.orphans : [];
+            const ghostTargets = want === "all" ? ghosts : ghosts.filter((b) => b === want);
+            if (!targets.length && !ghostTargets.length)
               return text(
                 want === "all"
                   ? `no lanes standing in ${projectCode} — nothing to clear`
-                  : `no lane called ${want} in ${projectCode}. Standing: ${rows.map((l) => l.branch).join(", ") || "none"}`
+                  : `no lane called ${want} in ${projectCode}. Standing: ${rows.map((l) => l.branch).join(", ") || "none"}` +
+                      (ghosts.length ? `. Records with no branch: ${ghosts.join(", ")}` : "")
               );
             // THE GUARD IS THE VERDICT, NOT GIT'S ANCESTRY. A brought-in lane is unmerged by ancestry
             // — the owner applied its diff rather than merging — so `branch -d` would refuse every
@@ -724,6 +757,21 @@ function toolsFor(identity = {}) {
                 branchDeleted: brRes && brRes.ok !== false ? "deleted" : `FAILED: ${(brRes && brRes.error) || "?"}`,
                 record: rec ? (rec.record ? "removed" : "already gone") : "not reachable from here",
                 told: rec ? rec.told : 0,
+              });
+            }
+            // THE ORPHANS, AFTER THE REAL LANES: nothing to remove but the record, and no verdict to
+            // check — a verdict is about whether the WORK is in the tree, and there is no branch
+            // left to compare. What stands in for it is that the branch is gone: whoever deleted it
+            // already made that call, and this is the record catching up with them.
+            for (const b of ghostTargets) {
+              const rec = onLaneRemoved ? onLaneRemoved(b) : null;
+              cleared.push({
+                branch: b,
+                worktree: "already gone",
+                branchDeleted: "already gone",
+                record: rec ? (rec.record ? "removed" : "already gone") : "not reachable from here",
+                told: rec ? rec.told : 0,
+                orphan: true,
               });
             }
             return text(renderCleared(projectCode, cleared, refused));
