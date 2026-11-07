@@ -69,6 +69,15 @@ async function hub(moduleName, fn, arg) {
 const text = (s) => ({ content: [{ type: "text", text: String(s).slice(0, 40000) }] });
 const fail = (e) => ({ content: [{ type: "text", text: e.message || String(e) }], isError: true });
 
+// A LIST THE HUB DID NOT SEND IS AN EMPTY LIST, NEVER A CRASH. The hub and the shell are restarted
+// by separate hands — `api/` rides a hub restart, `electron/` rides a shell restart — so a shell
+// holding a newer renderer than the hub it reads is the normal state of this system. Measured
+// 2026-11-07: the `crossed` finding landed in the hub and its renderer in the shell, the shell came
+// up first, and `commitLinks` answered "Cannot read properties of undefined (reading 'length')" —
+// the whole verb, not the one section it could not draw. Every renderer reading a list off a hub
+// answer goes through this, so a field added tomorrow degrades a section instead of ending a door.
+const held = (rows) => (Array.isArray(rows) ? rows : []);
+
 // THE TERMINAL'S ANSWER ARRIVES WRAPPED, the way a cross-session message does — his ask, and the
 // reason is the same one: this text came from somewhere else and the boundary has to be visible, or
 // a shell's output reads as something the agent itself said. The tag carries the facts that decide
@@ -155,14 +164,14 @@ function renderRun(r) {
   if (r && r.error) return `${r.projectCode || "?"}: ${r.error}`;
   // DRY RUN IS THE LISTING (his call): what WOULD run, as bullets the feed tables know.
   if (r && r.dryRun) {
-    const head = `${r.projectCode}: would run ${r.tests.length} test${r.tests.length === 1 ? "" : "s"}`;
+    const head = `${r.projectCode}: would run ${held(r.tests).length} test${held(r.tests).length === 1 ? "" : "s"}`;
     // the capability returns `namespace` as a string now — the three-field shape was the CLI's
     return [
       head,
       "",
       // The name ONCE. `nsOfRow` already returns the title for a document's spec, so spelling
       // `— "${t.title}"` after it printed everything twice.
-      ...r.tests.map((t) => `• ${nsOfRow(t)}${t.at ? `  [${t.at}]` : ` — "${t.title}"`}`),
+      ...held(r.tests).map((t) => `• ${nsOfRow(t)}${t.at ? `  [${t.at}]` : ` — "${t.title}"`}`),
       ...problemLines(r),
     ].join("\n");
   }
@@ -1157,7 +1166,7 @@ function toolsFor(identity = {}) {
             const r = await announceUpdate({ project: pc, path: at, summary, thread, by: who || pc });
             if (!r || !r.ok) return text(`not sent: ${(r && r.error) || "no answer"}`);
             return text(
-              `told ${r.sent.join(", ")} about ${r.path}${r.arc ? ` (${r.arc})` : ""}` +
+              `told ${held(r.sent).join(", ")} about ${r.path}${r.arc ? ` (${r.arc})` : ""}` +
                 `${thread ? ` — in thread ${thread}` : ""}`
             );
           } catch (e) { return fail(e); }
@@ -1191,9 +1200,9 @@ function toolsFor(identity = {}) {
           try {
             const r = await hub("Agent", "documents", { ...a });
             if (!r || r.error) return text(`no answer: ${(r && r.error) || "the hub said nothing"}`);
-            if (!r.documents.length)
+            if (!held(r.documents).length)
               return text(a.member ? `${a.member} is not on any document in ${r.project}` : `no document in ${r.project} has members`);
-            const lines = r.documents.map(
+            const lines = held(r.documents).map(
               (d) => `${d.behind.length ? "•" : " "} ${d.path} — ${d.who.join(", ")}${d.behind.length ? ` (behind: ${d.behind.join(", ")})` : ""}`
             );
             return text(
@@ -1267,7 +1276,6 @@ function toolsFor(identity = {}) {
             const r = await hub("Agent", "commitLinks", { ...a });
             if (!r || r.ok === false) return text(`no answer: ${(r && r.error) || "the hub said nothing"}`);
             const head = `${r.checked} commits read · ${r.linked} carry a Serves trailer · ${r.documents} registered documents`;
-            const held = (rows) => (Array.isArray(rows) ? rows : []);
             if (r.agreed) return text(`${head}\n\nthe two directions agree — nothing to fix${held(r.unlinked).length ? ` (${held(r.unlinked).length} commits serve nothing, which is only a hole if they landed a slice)` : ""}`);
             // A FINDING THE HUB DOES NOT SEND YET IS NOT A CRASH. The shell and the hub restart on
             // their own schedules, so a shell holding a newer renderer against an older hub is the

@@ -90,4 +90,49 @@ const OLD_HUB = {
   ok("a hub that does send `crossed` still reports it, first, with its count");
 }
 
+// ── 4 · THE SAME CLASS, SWEPT — three more renderers that read a list off the hub ─────────────
+// Found by sweeping every `r.<field>.length|map|join` in the file: 23 sites, 20 of them already
+// inside an `Array.isArray(...)` guard, and these three bare. None of them can crash against
+// TODAY's hub — every success path sends its list — which is exactly what the commitLinks site
+// looked like until somebody added a field. A latent crash is the one that goes off on a restart
+// nobody connected to it.
+const CASES = [
+  {
+    what: "runProofs --dryRun with no `tests` list",
+    tool: "runProofs",
+    args: { projectCode: "skew-test", dryRun: true },
+    answer: { ok: true, projectCode: "skew-test", dryRun: true, passed: 0, failed: 0 },
+    says: /would run 0 tests/,
+  },
+  {
+    what: "sendUpdate with no `sent` list",
+    tool: "sendUpdate",
+    args: { projectCode: "skew-test", path: "RFCs/RFC-1.md", summary: "it moved" },
+    // This one does NOT read the hub — the shell injects the announce door — so the stub goes in
+    // the identity. Same class of absence, a different supplier.
+    identity: { announceUpdate: async () => ({ ok: true, path: "RFCs/RFC-1.md" }) },
+    answer: null,
+    says: /about RFCs\/RFC-1\.md/,
+  },
+  {
+    what: "documents with no `documents` list",
+    tool: "documents",
+    args: { projectCode: "skew-test" },
+    answer: { ok: true, project: "skew-test", withMembers: 0, withUpdates: 0 },
+    says: /no document in skew-test has members/,
+  },
+];
+
+for (const c of CASES) {
+  ANSWER = c.answer;
+  const t = sv
+    .toolsFor({ projectCode: "skew-test", slot: "skew-tester", laneRuns: async () => [], ...(c.identity || {}) })
+    .find((x) => x.name === c.tool);
+  assert.ok(t, `${c.tool} is still a tool`);
+  const out = said(await t.handler(c.args, {}));
+  assert.ok(!/undefined/.test(out), `${c.what} → ${out}`);
+  assert.ok(c.says.test(out), `${c.what} → ${out}`);
+  ok(`${c.what} renders instead of ending the verb`);
+}
+
 console.log(`\n  ${n} claims — the renderer survives a hub older than the shell it answers in`);
