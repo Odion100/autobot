@@ -80,18 +80,41 @@ ok("the cooldown holds, and releases");
   ok("the cycle wraps instead of stopping, and only the final notice names the abandonment door");
 }
 
-// THE ONLY EXCUSE IS THE DECLARED ONE: status says abandoned AND the account is attached. Either
-// half alone is not an ending — the word without the record is testimony, the record without the
-// word is a handover nobody ended.
+// THE ONLY EXCUSE IS THE DECLARED ONE (RFC-078 §2.4, systemview): the status STARTS with
+// "abandoned" AND the run carries at least one attachment. Either half alone is not an ending —
+// the word without the record is testimony, the record without the word is a handover nobody
+// ended. The attachment is ANY kind, not only a report — the press fixed that wording (c14), and
+// the first wiring's `kind === "report"` left a run abandoned with its branch attached nudging
+// forever. And the word is a DECLARATION, not a mention: a status that merely contains "abandoned"
+// mid-sentence never excuses anything.
 {
   const att = [{ kind: "report", ref: "why-it-died", by: "sv", ts: 1 }];
   const st = { text: "abandoned — blocked on his review", ts: 1 };
   assert.equal(pick({ status: st, attachments: att }), null, "abandoned + account = excused, nudging stops");
-  assert.ok(pick({ status: st, attachments: null }), "the word without the record is NOT an excuse");
-  assert.ok(pick({ status: st, attachments: [{ kind: "branch", ref: "lane/x", ts: 1 }] }), "a branch is not an account");
-  assert.ok(pick({ status: { text: "waiting on review", ts: 1 }, attachments: att }), "a report without the word is NOT an excuse");
   assert.equal(nudge.excusedOf({ status: st, attachments: att }), true);
-  ok("the excuse takes both halves: the run declared abandoned, carrying its report");
+  ok("the excuse takes both halves: the run declared abandoned, carrying its account");
+
+  // c13 — abandoned with NOTHING attached: the chase continues exactly as if nothing had been said.
+  assert.ok(pick({ status: st, attachments: null }), "the word without the record is NOT an excuse");
+  assert.equal(
+    pick({ status: st, attachments: null }).text,
+    pick().text,
+    "…and the nudge is the SAME nudge an undeclared stall gets — the bare word changes nothing"
+  );
+  ok("abandoned alone keeps the chase alive, exactly as if nothing had been said");
+
+  // c14 — abandoned with AT LEAST ONE attachment, any kind: the nudging stops, the same end
+  // every-item-done reaches.
+  assert.equal(pick({ status: st, attachments: [{ kind: "branch", ref: "lane/x", ts: 1 }] }), null, "a branch attachment is an account too");
+  assert.equal(pick({ status: st, attachments: [{ kind: "document", ref: "RFCs/RFC-078", ts: 1 }] }), null, "so is a document");
+  ok("abandoned with at least one attachment — any kind — ends the nudging, same as every item done");
+
+  assert.ok(pick({ status: { text: "waiting on review", ts: 1 }, attachments: att }), "an account without the word is NOT an excuse");
+  assert.ok(
+    pick({ status: { text: "not abandoned, just slow", ts: 1 }, attachments: att }),
+    "the status must START with the word — a mid-sentence mention is no declaration"
+  );
+  ok("the record without the word, and the word said in passing, both keep the chase alive");
 }
 
 assert.equal(nudge.pickNudge({ runs: [run()], session: "session:sv:1", quietMin: 99, settings: { ...CFG, giveUpAfter: 0 } }), null);

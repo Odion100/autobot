@@ -979,9 +979,10 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
       tool(
         TOOL_STATUS,
         "Say what is happening with the run that is open — one dated, attributed line that " +
-          "becomes the row's headline. An empty text clears it. Declaring \"abandoned\" WITH a " +
-          "report attached is the only thing besides completion that stops the idle nudging — " +
-          "the word and the account together, never either alone.",
+          "becomes the row's headline. An empty text clears it. A status STARTING \"abandoned\" " +
+          "WITH the account attached (at least one attachment, normally the report) is the only " +
+          "thing besides completion that stops the idle nudging — the word and the account " +
+          "together, never either alone.",
         {
           text: z
             .string()

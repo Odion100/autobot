@@ -155,17 +155,24 @@ function cycleOf(run, cfg) {
 }
 
 // THE ONLY TWO ENDINGS (his design, 2026-10-26, verbatim frame: report required, status confirmed).
-// A run stops being nudged when it CLOSES, or when it is DECLARED abandoned — the status says the
-// word AND a report attachment carries the account. Both halves, deliberately: the word without the
-// record is testimony, the record without the word is a handover nobody ended. Movement spends the
-// declaration (writeRun clears an abandoned status), so one old excuse cannot cover a new stall.
-// "Abandoned" is the word on purpose — agents will grind out the last two items rather than write
-// it next to their own run.
+// A run stops being nudged when it CLOSES, or when it is DECLARED abandoned — the status STARTS
+// with the word AND the run carries at least one attachment holding the account. Both halves,
+// deliberately: the word without the record is testimony, the record without the word is a
+// handover nobody ended. Movement spends the declaration (writeRun clears an abandoned status), so
+// one old excuse cannot cover a new stall. "Abandoned" is the word on purpose — agents will grind
+// out the last two items rather than write it next to their own run.
+//
+// TWO EDGES FIXED BY RFC-078 §2.4 (systemview), where the press settled both wordings:
+//   - "at least one attachment", not "a report attachment" — the first wiring demanded kind
+//     `report`, which left a run abandoned with its branch or document attached nudging forever;
+//     the approved claim (c14) says the attachment, any kind, is the account.
+//   - the status STARTS with "abandoned" — a declaration, not a mention. The old `/abandon/i`
+//     anywhere let "not abandoned, just slow" read as the word being said.
 function excusedOf(run) {
   const st = run && run.status && typeof run.status === "object" ? String(run.status.text || "") : "";
-  if (!/abandon/i.test(st)) return false;
+  if (!/^\s*abandoned/i.test(st)) return false;
   const atts = Array.isArray(run && run.attachments) ? run.attachments : [];
-  return atts.some((a) => a && a.kind === "report");
+  return atts.some(Boolean);
 }
 
 function nudgeText(run, cfg, { session } = {}) {
@@ -207,8 +214,8 @@ function nudgeText(run, cfg, { session } = {}) {
     `the list to done, or end it honestly: write the account as a report document (a file with a ` +
     `\`::report\` leaf) saying why it cannot go further, attach it to this run ` +
     `(\`worklist attach\`, kind \`report\`), and declare ` +
-    `it (\`worklist status\`, text starting "abandoned"). The report and the word together are ` +
-    `what stop the nudging — nothing else does.`
+    `it (\`worklist status\`, text starting "abandoned"). The account attached and the word ` +
+    `declared, together, are what stop the nudging — nothing else does.`
   );
 }
 
