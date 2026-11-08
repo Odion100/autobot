@@ -121,6 +121,22 @@ const CASES = [
     answer: { ok: true, project: "skew-test", withMembers: 0, withUpdates: 0 },
     says: /no document in skew-test has members/,
   },
+  {
+    // AN OLDER HUB STILL SPEAKS THE EDIT CHANNEL — rows carrying `behind` and a `withUpdates`
+    // count. The channel died 2026-11-06 (general text sends no updates), so the tool prints
+    // membership and IGNORES the dead fields rather than rendering them or tripping on them.
+    what: "documents from an older hub still carrying behind/withUpdates",
+    tool: "documents",
+    args: { projectCode: "skew-test" },
+    answer: {
+      ok: true,
+      project: "skew-test",
+      withMembers: 1,
+      withUpdates: 1,
+      documents: [{ path: "RFCs/RFC-1.md", who: ["skew-test"], behind: ["skew-test"], threads: [] }],
+    },
+    says: /^1 document with members\nRFCs\/RFC-1\.md — skew-test$/,
+  },
 ];
 
 for (const c of CASES) {

@@ -1216,12 +1216,13 @@ function toolsFor(identity = {}) {
       // hop through a file reader, and an agent that has to ask twice to look will stop looking.
       // The text line beside it is for the chat feed, which only ever sees text.
       // RFC-071 — WHAT AM I ON? A document carries its members in its own `::members` line, so this
-      // asks the hub to walk the project and answer two questions with one read: which documents
-      // name me, and which of those have changed since whoever is on them was last told. An agent
-      // woken by a `document.updated` hook uses it to see the rest of what it is sitting on.
+      // asks the hub to walk the project and answer one question with one read: which documents
+      // name me. An agent woken by a `document.updated` hook uses it to see the rest of what it is
+      // sitting on. (It used to also answer "who is behind" — gone with the edit channel, 2026-11-06:
+      // who is owed a fire is the fires engine's to say, not a prose hash's.)
       tool(
         "documents",
-        "The documents in a project that carry MEMBERS — who is on each one, and who has not been told about the current version. " +
+        "The documents in a project that carry MEMBERS — who is on each one. " +
           "Pass `member` to ask only about one (usually yourself: \"what am I on?\"). Membership lives in the document itself as a " +
           "`::members{who=a|b}` line, so it is his to edit and yours to read — never a registry somewhere else. A document with no " +
           "members is not listed at all.",
@@ -1235,12 +1236,13 @@ function toolsFor(identity = {}) {
             if (!r || r.error) return text(`no answer: ${(r && r.error) || "the hub said nothing"}`);
             if (!held(r.documents).length)
               return text(a.member ? `${a.member} is not on any document in ${r.project}` : `no document in ${r.project} has members`);
-            const lines = held(r.documents).map(
-              (d) => `${d.behind.length ? "•" : " "} ${d.path} — ${d.who.join(", ")}${d.behind.length ? ` (behind: ${d.behind.join(", ")})` : ""}`
-            );
-            return text(
-              [`${r.withMembers} document${r.withMembers === 1 ? "" : "s"} with members · ${r.withUpdates} with unsent updates`, ...lines].join("\n")
-            );
+            // MEMBERSHIP ONLY. The hub's answer stopped carrying `behind`/`withUpdates` with the
+            // edit channel (his ruling, 2026-11-06: general text sends no updates — who is owed a
+            // FIRE is the fires engine's question, not a prose-hash one), so this prints who is on
+            // what and nothing about who has been told. Tolerant of an older hub that still sends
+            // the dead fields: they are ignored, never printed.
+            const lines = held(r.documents).map((d) => `${d.path} — ${held(d.who).join(", ")}`);
+            return text([`${r.withMembers} document${r.withMembers === 1 ? "" : "s"} with members`, ...lines].join("\n"));
           } catch (e) { return fail(e); }
         }
       ),
