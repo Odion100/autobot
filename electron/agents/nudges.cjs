@@ -9,6 +9,20 @@
 // its debounce window. What survives the gates is a steering message for THE SESSION THAT WROTE
 // IT — sessions.cjs delivers it on the same input-queue ride the run-chaser uses.
 //
+// AND THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3. The standing judges ride the chaser's own idle
+// tick (sessions.cjs), under the chaser's cooldownMin:
+//   - `judgeRuns` — the shell-local standing judge `run-untouched-for-days`: a SOURCED run that is
+//     still open and has not MOVED for `afterDays` days (default 7) is a standing violation.
+//     Movement is any write to the run record EXCEPT the chaser's own nudge stamp — an item
+//     change, a status write, an attachment, a whiteboard edit all move it; being nudged does not
+//     (worklist.markNudged preserves `updatedAt` for exactly this reason). `afterDays` is the
+//     entry's one numeric knob, editable in the record like any other field.
+//   - `judgeProject` — the project-wide judges door, dialled once per CONNECTED project
+//     (~/.autobot/projects.json) per cooldown window, for registry-wide violations no single
+//     write triggers. Delivery is capped per sweep (SWEEP_MAX_STEERS) so a first pass over years
+//     of historical debt steers instead of burying; the rest are re-derived next window, because
+//     violations are never stored.
+//
 // THE BOUNDARY (§1, the cost paragraph that arbitrated the design): the hub judges, because the
 // parsed state already lives there; the shell asks, because the sessions live here. THIS FILE
 // NEVER LEARNS WHAT A BLOCK IS — a violation arrives named, pointed, and already judged. The hub
@@ -52,13 +66,35 @@ const SEED = Object.freeze([
     clock: "write",
     debounceMin: 10,
   }),
+  // THE SHELL-LOCAL STANDING JUDGE — RFC-078 §2.3, slice 3.3. `afterDays` is its one numeric knob:
+  // how many days a sourced, still-open run may sit with no movement (no item change, no status
+  // write — no write of any kind except the chaser's own nudge stamp) before it is a standing
+  // violation. Judged in the shell (judgeRuns) because run state lives here, never by the hub.
+  Object.freeze({
+    name: "run-untouched-for-days",
+    on: true,
+    scope: "global",
+    severity: "steer",
+    message: "",
+    clock: "sweep",
+    afterDays: 7,
+  }),
 ]);
+
+// JUDGED IN THE SHELL, NEVER DELIVERED OFF A HUB ANSWER. The hub knows documents; these two know
+// runs and sessions. A hub answer claiming one of these names is skipped — whichever half judged
+// a violation is the half that delivers it, or one violation arrives twice.
+const SHELL_LOCAL = new Set(["run-chaser", "run-untouched-for-days"]);
 
 // THE BUILT-IN LINES — what arrives while `message` stays empty (c1). The chaser composes its own
 // words in nudge.cjs, so its built-in here is deliberately none.
 const BUILT_IN = Object.freeze({
   "behavioural-claim-cmd-only":
     "a behavioural claim owes a ::test or :::run in its own fold — a cmd is evidence, never the spec",
+  // The facts (which run, how many days) ride the header judgeRuns composes; this is the law in
+  // one breath that follows them, his to replace by editing the entry's message (c1).
+  "run-untouched-for-days":
+    "read `worklist get`, then either drive the run to done or end it honestly — a status starting \"abandoned\" with the account attached. Sitting still is the one thing a sourced run may not do.",
 });
 
 const seedByName = (name) => SEED.find((e) => e.name === name) || null;
@@ -78,6 +114,9 @@ function normalizeEntry(raw) {
   const clock =
     raw.clock === "write" || raw.clock === "sweep" ? raw.clock : (seed && seed.clock) || "write";
   const debounceMin = Math.max(0, Math.round(Number(raw.debounceMin)) || 0);
+  // `afterDays` — the standing judge's one knob, carried the same way: a junk value falls back to
+  // the seed's, and a nudge that never declared one carries none.
+  const afterDays = Math.max(0, Math.round(Number(raw.afterDays)) || 0);
   return {
     name,
     on: typeof raw.on === "boolean" ? raw.on : true,
@@ -86,6 +125,7 @@ function normalizeEntry(raw) {
     message: typeof raw.message === "string" ? raw.message : "",
     clock,
     ...(debounceMin || (seed && seed.debounceMin) ? { debounceMin: debounceMin || seed.debounceMin } : {}),
+    ...(afterDays || (seed && seed.afterDays) ? { afterDays: afterDays || seed.afterDays } : {}),
   };
 }
 
@@ -145,12 +185,18 @@ function messageOf(name, list) {
 // process; a burst that survives a shell restart is a new burst.
 const lastFired = new Map();
 const fireKey = (name, doc, session) => `${name}\u0000${doc}\u0000${session}`;
+// One bookkeeping shape, two windows: the write dial reads the entry's debounceMin; the sweep
+// reads the chaser's cooldownMin (c35). Same keys, same map — a nudge delivered by either clock
+// is a nudge delivered, whichever clock asks next.
+function firedWithin(name, { doc = "", session = "", now = Date.now(), min = 0 } = {}) {
+  const m = Math.max(0, Number(min) || 0);
+  if (!m) return false;
+  const last = Number(lastFired.get(fireKey(name, doc, session))) || 0;
+  return !!last && now - last < m * 60000;
+}
 function inDebounce(name, { doc = "", session = "", now = Date.now() } = {}, list) {
   const e = entryOf(name, list);
-  const min = Math.max(0, Number(e && e.debounceMin) || 0);
-  if (!min) return false;
-  const last = Number(lastFired.get(fireKey(name, doc, session))) || 0;
-  return !!last && now - last < min * 60000;
+  return firedWithin(name, { doc, session, now, min: Number(e && e.debounceMin) || 0 });
 }
 const markFired = (name, { doc = "", session = "", now = Date.now() } = {}) =>
   lastFired.set(fireKey(name, doc, session), now);
@@ -203,4 +249,159 @@ async function judgeWrite({ path: p = "", project = "", slot = "", session = "",
   return out;
 }
 
-module.exports = { FILE, SEED, BUILT_IN, entries, enabledFor, messageOf, inDebounce, markFired, __resetFired, judgeWrite };
+// ── THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3 ──────────────────────────────────────────────────
+//
+// Both halves ride the chaser's existing idle tick (sessions.cjs calls them from the same
+// setInterval that runs maybeNudge), which IS the turn-end discipline: the tick returns early
+// while a turn or a tool is in flight, so a standing violation only ever meets a quiet session
+// (c35). Both are bookkept per nudge × document × session under the chaser's cooldownMin.
+
+// THE SHELL-LOCAL STANDING JUDGE: `run-untouched-for-days`. Pure over the run rows the caller
+// hands in (the caller filters to the ticking agent's own runs — ownership is the chaser's rule,
+// not re-derived here).
+//
+// WHAT COUNTS AS MOVEMENT: `updatedAt`. Every write to a run record bumps it — an item change, a
+// status write, an attachment, a whiteboard edit — EXCEPT the chaser's own nudge stamp, which
+// worklist.markNudged deliberately leaves off the clock: a run that is only ever nudged is the
+// exact run this judge exists to name, and a stamp that reset the clock would silence it forever.
+//
+// WHAT COUNTS AS OPEN: items exist and not all are done, and the run is not excused — `excused`
+// is passed in by the caller (nudge.cjs's excusedOf, the §2.4 rule: status starting "abandoned"
+// AND at least one attachment), so the one definition stays in the chaser's module. The fallback
+// here implements the same rule for a caller that passes nothing.
+function judgeRuns({ runs = [], project = "", slot = "", session = "", now = Date.now(), cooldownMin = 30, excused } = {}) {
+  const name = "run-untouched-for-days";
+  const list = entries();
+  const e = entryOf(name, list);
+  if (!e || e.clock !== "sweep") return []; // its own clock, symmetric with the write dial
+  if (!enabledFor(name, { project, slot }, list)) return [];
+  const afterDays = Math.max(1, Number(e.afterDays) || 7);
+  const isExcused =
+    typeof excused === "function"
+      ? excused
+      : (r) =>
+          /^\s*abandoned/i.test(String((r && r.status && r.status.text) || "")) &&
+          Array.isArray(r && r.attachments) &&
+          r.attachments.some(Boolean);
+  const out = [];
+  for (const r of runs || []) {
+    if (!r || !String(r.source || "")) continue; // a session's own plan is never judged
+    const total = Number(r.total) || 0;
+    const done = Number(r.done) || 0;
+    if (!total || done >= total) continue; // closed: every item done
+    if (isExcused(r)) continue; // ended honestly: abandoned with its account attached
+    const moved = Number(r.updatedAt) || 0;
+    if (!moved) continue; // a record with no clock cannot be aged honestly
+    const days = Math.floor((now - moved) / 86400000);
+    if (days < afterDays) continue;
+    const doc = String(r.owner || "");
+    if (firedWithin(name, { doc, session, now, min: cooldownMin })) continue;
+    const message = messageOf(name, list);
+    if (!message) continue; // nothing to say is not a delivery
+    markFired(name, { doc, session, now });
+    out.push({
+      nudge: name,
+      run: doc,
+      source: String(r.source || ""),
+      days,
+      text:
+        `⏰ Standing nudge — from the harness, not the human. A sourced run has sat untouched for ` +
+        `${days} day${days === 1 ? "" : "s"} — no item changed, no status written: \`${r.source}\` ` +
+        `stands at ${done}/${total}. ${message}`,
+    });
+  }
+  return out;
+}
+
+// WHICH PROJECTS ARE CONNECTED — ~/.autobot/projects.json, the same map every other reader here
+// uses. Env-pointed for tests, same law as the record file: a suite never gets the real keys.
+const PROJECTS_FILE = () =>
+  process.env.AUTOBOT_PROJECTS_FILE || path.join(os.homedir(), ".autobot", "projects.json");
+function connectedProjects() {
+  try {
+    const map = JSON.parse(fs.readFileSync(PROJECTS_FILE(), "utf8"));
+    return map && typeof map === "object" && !Array.isArray(map) ? Object.keys(map) : [];
+  } catch {
+    return []; // no map is no projects — the sweep simply has nowhere to ask about
+  }
+}
+
+// HOW MANY STEERS ONE PROJECT SWEEP MAY DELIVER. The first sweep over a registry carrying years of
+// historical debt can answer dozens of violations at once (the live count the RFC's own c6 found
+// was 82); delivering them all would bury the session in steering turns at a single moment.
+// Three per window steers without burying — and because violations are DERIVED on every ask and
+// never stored, the rest simply arrive in later windows, nothing lost.
+const SWEEP_MAX_STEERS = 3;
+
+// THE PROJECT-WIDE DIAL — once per project per cooldown window, and that ceiling is the point:
+// the idle tick can fire as often as every minute, per session, and a project can hold several
+// sessions, so dialling on every tick would multiply one question by sessions × ticks. Nothing is
+// gained by asking more often than the chaser's cooldownMin, because delivery itself is capped at
+// that window per nudge × document × session — an answer that cannot be delivered is an answer
+// nobody needed yet. The stamp is written BEFORE the fetch so a hub that is down is retried next
+// window, never hammered every tick.
+const lastDialled = new Map(); // project → ts of the last dial
+const __resetSweep = () => lastDialled.clear();
+async function judgeProject({ project = "", slot = "", session = "", now = Date.now(), cooldownMin = 30, hub = "" } = {}) {
+  if (!project) return [];
+  const list = entries();
+  // No sweep-clock, hub-backed nudge is on and in scope → the hub is not even dialled. Shell-local
+  // names never arm the dial: their judging lives here, the door has nothing to say about them.
+  const armed = list.some(
+    (e) => e.clock === "sweep" && !SHELL_LOCAL.has(e.name) && enabledFor(e.name, { project, slot }, list),
+  );
+  if (!armed) return [];
+  const last = Number(lastDialled.get(project)) || 0;
+  if (last && now - last < Math.max(1, Number(cooldownMin) || 30) * 60000) return [];
+  lastDialled.set(project, now);
+  let violations;
+  try {
+    const res = await fetch(`${hub || HUB()}/judges?project=${encodeURIComponent(project)}`);
+    if (!res || !res.ok) return []; // down, or an older hub with no judges route — nothing to report
+    const body = await res.json();
+    violations = Array.isArray(body) ? body : body && Array.isArray(body.violations) ? body.violations : [];
+  } catch {
+    return []; // a hub that cannot answer is a hub with nothing to report
+  }
+  // LEAST-RECENTLY-STEERED FIRST, never the hub's order. With more standing violations than the
+  // cap, the hub's first three would re-deliver every window (their cooldown is the same length as
+  // the dial window) and the rest would starve forever; ranking by last-fired rotates the whole
+  // debt through the cap, so "the rest arrive in later windows" is true rather than hopeful.
+  const lastOf = (v) =>
+    Number(lastFired.get(fireKey(String((v && v.nudge) || ""), String((v && v.path) || ""), session))) || 0;
+  const ranked = violations.slice().sort((a, b) => lastOf(a) - lastOf(b));
+  const out = [];
+  for (const v of ranked) {
+    if (out.length >= SWEEP_MAX_STEERS) break; // the rest re-derive next window — never marked, never lost
+    if (!v || typeof v !== "object") continue;
+    const name = String(v.nudge || "").trim();
+    if (!name || SHELL_LOCAL.has(name)) continue;
+    const e = entryOf(name, list);
+    if (!e || e.clock !== "sweep") continue; // a write nudge waits for its own clock, symmetrically
+    if (!enabledFor(name, { project, slot }, list)) continue;
+    const doc = String(v.path || "");
+    if (!doc) continue;
+    if (firedWithin(name, { doc, session, now, min: cooldownMin })) continue;
+    const message = messageOf(name, list);
+    if (!message) continue; // nothing to say is not a delivery
+    const line = Number(v.line) || 0;
+    const detail = String(v.detail || "").trim();
+    markFired(name, { doc, session, now });
+    out.push({
+      nudge: name,
+      path: doc,
+      ...(line ? { line } : {}),
+      text:
+        `⚖️ Standing nudge — from the harness, not the human. The sweep found a standing ` +
+        `violation in this project's registry: ${message}\n\n→ ${doc}${line ? `:${line}` : ""}` +
+        (detail ? ` — ${detail}` : ""),
+    });
+  }
+  return out;
+}
+
+module.exports = {
+  FILE, SEED, BUILT_IN, SHELL_LOCAL, SWEEP_MAX_STEERS, entries, enabledFor, messageOf,
+  inDebounce, firedWithin, markFired, __resetFired, judgeWrite,
+  judgeRuns, connectedProjects, judgeProject, __resetSweep,
+};

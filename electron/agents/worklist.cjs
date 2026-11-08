@@ -147,7 +147,11 @@ function save(owner, patch) {
     // (a set() that clobbered the board made the two features enemies). `broughtIn` was the first
     // passenger; `selfDirected` (RFC-066) is the newest, and it rides for the same reason: it is
     // stamped once at a run's birth, so every later list write is a write that does not know it.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, nudges: cur.nudges, ...patch, updatedAt: Date.now() };
+    // A WRITER MAY KEEP THE CLOCK WHERE IT WAS by passing its own `updatedAt` — markNudged does,
+    // because the chaser's stamp is bookkeeping and not movement: RFC-078's standing judge
+    // (run-untouched-for-days) reads this field as "when did somebody move this", which is what
+    // the comment above always promised it meant. Every ordinary write still stamps now.
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, nudges: cur.nudges, ...patch, updatedAt: Number(patch && patch.updatedAt) > 0 ? Number(patch.updatedAt) : Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
@@ -741,9 +745,12 @@ function markNudged(owner, { ts = 0 } = {}) {
   const o = String(owner || "");
   if (!o) return null;
   let prev = {};
+  let movedAt = 0;
   try {
     if (!fs.existsSync(fileFor(o))) return null;
-    prev = (readFile(o) || {}).nudges || {};
+    const cur = readFile(o) || {};
+    prev = cur.nudges || {};
+    movedAt = Number(cur.updatedAt) || 0;
   } catch {
     return null;
   }
@@ -751,7 +758,11 @@ function markNudged(owner, { ts = 0 } = {}) {
     count: (Number(prev && prev.count) || 0) + 1,
     lastAt: Number(ts) > 0 ? Number(ts) : Date.now(),
   };
-  save(o, { nudges });
+  // THE STAMP IS NOT MOVEMENT. `updatedAt` means "when did somebody move this" (save()'s own
+  // words), and the chaser stamping it on every nudge made a chased run read permanently fresh —
+  // which would have silenced RFC-078's run-untouched-for-days judge on exactly the runs it exists
+  // to name ("nudged 3 times, no movement" reading as movement). The clock is carried through.
+  save(o, { nudges, ...(movedAt ? { updatedAt: movedAt } : {}) });
   return nudges;
 }
 

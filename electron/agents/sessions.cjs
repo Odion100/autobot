@@ -790,6 +790,10 @@ function armIdle(s) {
     if (quietMin < 1) return;
     try { fireHooks(s, { kind: "idle", quietMin }); } catch {}
     try { maybeNudge(s, quietMin); } catch {}
+    // THE SWEEP CLOCK rides the same tick (RFC-078 §2.3, c11) — and the tick's own early return
+    // above (turnActive / toolsInFlight) is what makes every standing delivery turn-end (c35):
+    // a session mid-turn is never even asked.
+    try { maybeSweepJudges(s); } catch {}
   }, every);
   if (s.idleTimer.unref) s.idleTimer.unref();
 }
@@ -1393,29 +1397,86 @@ function maybeSteerWrite(s, event) {
       slot: s.agentId || s.projectCode, // the slot identity hooks use; the project code when a session runs bare
       session: s.key, // debounce is per nudge × document × SESSION — the key is the session's identity
     })
-    .then((steers) => {
-      for (const st of steers || []) {
-        try {
-          s.input.push({
-            type: "user",
-            message: { role: "user", content: [{ type: "text", text: st.text }] },
-            parent_tool_use_id: null,
-            session_id: "",
-          });
-          s.nextTurnFromHook = true;
-          // THE RECEIPT CARRIES WHAT WAS SAID — a nudge that only exists as an injected turn is
-          // invisible the moment the transcript scrolls, and nothing here runs invisibly.
-          emit(s, {
-            kind: "nudge.steered",
-            nudge: st.nudge,
-            path: st.path,
-            ...(st.line ? { line: st.line } : {}),
-            text: st.text,
-          });
-          logLife(s, `steered: ${st.nudge} on ${st.path}`);
-        } catch {}
-      }
-    })
+    .then((steers) => deliverSteers(s, steers))
+    .catch(() => {}); // a hub that cannot answer fires nothing and breaks nothing
+}
+
+// ONE DELIVERY FOR EVERY STEERING NUDGE, whichever clock judged it — the chaser's own ride: a user
+// turn pushed onto the session's input queue, `nextTurnFromHook` marked so the harness knows no
+// human typed it, a receipt in the feed. A second copy of this block per clock is how the two
+// clocks would start delivering differently.
+function deliverSteers(s, steers) {
+  for (const st of steers || []) {
+    try {
+      s.input.push({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: st.text }] },
+        parent_tool_use_id: null,
+        session_id: "",
+      });
+      s.nextTurnFromHook = true;
+      // THE RECEIPT CARRIES WHAT WAS SAID — a nudge that only exists as an injected turn is
+      // invisible the moment the transcript scrolls, and nothing here runs invisibly.
+      emit(s, {
+        kind: "nudge.steered",
+        nudge: st.nudge,
+        ...(st.path ? { path: st.path } : {}),
+        ...(st.run ? { run: st.run } : {}),
+        ...(st.line ? { line: st.line } : {}),
+        text: st.text,
+      });
+      logLife(s, `steered: ${st.nudge} on ${st.path || st.run || ""}`);
+    } catch {}
+  }
+}
+
+// THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3: the standing judges, on the chaser's existing idle
+// tick (c11). Called only from the tick, whose early return already guarantees this session is
+// between turns — that is the whole of "delivers at turn end, never mid-turn" (c35), bought from
+// the discipline the chaser already had rather than built again.
+//
+// FREQUENCY, CHOSEN AND WHY: the tick can fire as often as every minute and a project can hold
+// several sessions, so the project-wide door is NOT dialled per tick — nudges.judgeProject stamps
+// each project and refuses to re-dial inside the chaser's cooldownMin window (default 30min).
+// That window is the ceiling because delivery itself is capped at it (per nudge × document ×
+// session): asking the hub more often than anything could be delivered buys nothing. And only a
+// CONNECTED project is dialled at all — ~/.autobot/projects.json is the roster — with each
+// project's own sessions driving its sweep, so a connected project with no running session costs
+// no dial and misses nothing: violations are derived on every ask, never stored, and are simply
+// found by whichever session of that project next sits idle.
+function maybeSweepJudges(s) {
+  let cfg;
+  try { cfg = nudge.readSettings(); } catch { return; }
+  const now = Date.now();
+  const cooldownMin = cfg.cooldownMin;
+  const slot = s.agentId || s.projectCode;
+  // THE SHELL'S OWN STANDING JUDGE over run state — this agent's runs, by the chaser's own
+  // ownership rule (sameAgent), with the chaser's own closed-condition passed in (excusedOf, §2.4)
+  // so "open" keeps exactly one definition.
+  try {
+    const mine = worklist.all().filter((r) => nudge.sameAgent(r.session, s.worklistOwner));
+    deliverSteers(
+      s,
+      nudges.judgeRuns({
+        runs: mine,
+        project: s.projectCode,
+        slot,
+        session: s.key,
+        now,
+        cooldownMin,
+        excused: nudge.excusedOf,
+      }),
+    );
+  } catch {}
+  // THE PROJECT-WIDE DOOR, dialled for this session's own project when it is a connected one.
+  // Delivery lands on this session — a RUNNING session of the project by construction, idle at
+  // this instant by the tick's guard.
+  try {
+    if (!s.projectCode || !nudges.connectedProjects().includes(s.projectCode)) return;
+  } catch { return; }
+  nudges
+    .judgeProject({ project: s.projectCode, slot, session: s.key, now, cooldownMin })
+    .then((steers) => deliverSteers(s, steers))
     .catch(() => {}); // a hub that cannot answer fires nothing and breaks nothing
 }
 

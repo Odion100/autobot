@@ -13,6 +13,18 @@
 //   7. The wiring (source-read, the house pattern tests/nudge.js set): emit() dials on
 //      file.changed, delivery rides the chaser's own input-queue push, and the hub is only ever
 //      dialled — no listener anywhere in the record module.
+//
+// AND THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3 (c11, c35):
+//   8. `run-untouched-for-days`: a SOURCED, still-open run that has not moved for `afterDays`
+//      days is a standing violation; movement is any write except the chaser's nudge stamp;
+//      abandoned-with-account ends it; the knob, the switch, the scope and the clock all gate it;
+//      delivery is bookkept per nudge × run × session under the chaser's cooldownMin.
+//   9. The project-wide door: dialled once per connected project per cooldown window — never per
+//      tick — deaf to write-clock and shell-local names, capped per sweep with the overflow
+//      rotating through later windows, degrading to silence like every dial here.
+//  10. The chaser's stamp is NOT movement: markNudged leaves the run's updatedAt where it was.
+//  11. The wiring: the idle tick runs the standing judges behind its own turn-guard (that IS
+//      turn-end delivery), and both clocks deliver through one deliverSteers.
 import rawAssert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,6 +37,10 @@ const require = createRequire(import.meta.url);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-nudges-"));
 const RECORD = path.join(scratch, "nudges.json");
 process.env.AUTOBOT_NUDGES_FILE = RECORD;
+const PROJECTS = path.join(scratch, "projects.json");
+process.env.AUTOBOT_PROJECTS_FILE = PROJECTS;
+process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
+fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
 
 // NO LIVE HUB — the dial is stubbed the way tests/hub-skew.js stubs it. `ANSWER` is what the hub
 // says; `CALLS` is every URL it was asked, so "the hub was not even dialled" is checkable.
@@ -65,21 +81,28 @@ const VIOLATION = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9
 {
   assert.ok(!fs.existsSync(RECORD), "scratch starts with no record");
   const list = nudges.entries();
-  assert.equal(list.length, 2);
+  assert.equal(list.length, 3);
   assert.equal(list[0].name, "run-chaser");
   assert.equal(list[1].name, "behavioural-claim-cmd-only");
+  assert.equal(list[2].name, "run-untouched-for-days");
   assert.ok(fs.existsSync(RECORD), "the first read wrote the seed to disk");
   const onDisk = JSON.parse(fs.readFileSync(RECORD, "utf8"));
   assert.deepEqual(Object.keys(onDisk[0]).sort(), ["clock", "message", "name", "on", "scope", "severity"],
     "the chaser's entry is identity, on/off and scope — none of its nudge.json knobs ride along (c4)");
   assert.equal(onDisk[1].debounceMin, 10);
   assert.equal(onDisk[1].clock, "write");
-  ok("an absent record seeds itself with the two §2.1 entries, the chaser's carrying no chaser knobs");
+  // THE STANDING JUDGE'S ENTRY — sweep clock, one numeric knob (afterDays), message his to edit.
+  assert.deepEqual(Object.keys(onDisk[2]).sort(), ["afterDays", "clock", "message", "name", "on", "scope", "severity"],
+    "run-untouched-for-days carries exactly the record fields plus its one knob");
+  assert.equal(onDisk[2].clock, "sweep");
+  assert.equal(onDisk[2].afterDays, 7);
+  assert.equal(onDisk[2].message, "");
+  ok("an absent record seeds itself with the §2.1 entries plus the standing judge, knobs in their place");
 }
 {
   fs.writeFileSync(RECORD, "{ this is not json");
   const list = nudges.entries();
-  assert.equal(list.length, 2, "an unreadable record answers as the seed in memory");
+  assert.equal(list.length, 3, "an unreadable record answers as the seed in memory");
   assert.equal(fs.readFileSync(RECORD, "utf8"), "{ this is not json", "…and the broken file is NOT overwritten");
   ok("a corrupt record is read as the seed without destroying what he half-edited");
 }
@@ -135,6 +158,8 @@ const VIOLATION = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9
   writeRecord([{ name: "behavioural-claim-cmd-only", on: true, scope: "global", severity: "steer", message: "his words, verbatim", clock: "write", debounceMin: 10 }]);
   assert.equal(nudges.messageOf("behavioural-claim-cmd-only"), "his words, verbatim");
   assert.equal(nudges.messageOf("run-chaser"), "", "the chaser composes its own words elsewhere — no built-in here");
+  assert.ok(/worklist get/.test(nudges.BUILT_IN["run-untouched-for-days"]),
+    "the standing judge carries a built-in law line too — the run's facts ride the header it composes");
   ok("the built-in line holds until he writes one; then his words are what arrives (c1)");
 }
 
@@ -292,15 +317,302 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
   assert.ok(/nudges\s*\.judgeWrite\(/.test(body), "the gating and the dial live in nudges.cjs, not re-derived here");
   assert.ok(/project: s\.projectCode/.test(body) && /session: s\.key/.test(body),
     "the session's own identity is what the gates and the debounce see");
-  assert.ok(/s\.input\.push\(/.test(body) && /s\.nextTurnFromHook = true/.test(body),
+  assert.ok(/deliverSteers\(s, steers\)/.test(body),
+    "delivery goes through the one shared ride — a second copy per clock is how clocks drift apart");
+  const d = /function deliverSteers\(s, steers\) \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(d, "deliverSteers exists — one delivery for every steering nudge, whichever clock judged it");
+  assert.ok(/s\.input\.push\(/.test(d[0]) && /s\.nextTurnFromHook = true/.test(d[0]),
     "delivery is the chaser's own ride — a user turn on the session's input queue, marked as no human's (c9)");
-  assert.ok(/kind: "nudge\.steered"/.test(body), "…with a receipt in the feed, because nothing runs invisibly");
-  assert.ok(!/for \(const \w+ of sessions/.test(body),
+  assert.ok(/kind: "nudge\.steered"/.test(d[0]), "…with a receipt in the feed, because nothing runs invisibly");
+  assert.ok(!/for \(const \w+ of sessions/.test(body) && !/for \(const \w+ of sessions/.test(d[0]),
     "and it reaches ONLY the session the event was emitted into — no walk over other sessions (c9)");
   const chaser = /function maybeNudge\(s, quietMin\) \{[\s\S]*?\n\}/.exec(src);
   assert.ok(chaser && /nudge\.readSettings\(\)/.test(chaser[0]) && !/nudges\./.test(chaser[0]),
     "the chaser still reads its OWN settings file and never this record — its knobs are untouched (c4)");
   ok("the wiring: emit→dial on file.changed, identity from the session, delivery on the chaser's ride, chaser untouched");
+}
+
+// ---- 7. THE STANDING RUN JUDGE — run-untouched-for-days (c11) -----------------------------------
+const DAY = 86400000;
+const NOW = 200 * DAY; // a fake clock: `now` is a parameter everywhere, so no timer is ever faked
+const mkRun = (over = {}) => ({
+  owner: "run:r1", session: "session:sv:1", source: "skill:x", done: 1, total: 3,
+  active: "step", updatedAt: NOW - 8 * DAY, status: null, attachments: null, ...over,
+});
+const judgeRuns = (runs, over = {}) =>
+  nudges.judgeRuns({ runs, project: "sv", slot: "sv", session: "session:sv:1", now: NOW, cooldownMin: 30, ...over });
+
+{
+  seedRecord();
+  nudges.__resetFired();
+  const out = judgeRuns([mkRun()]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].nudge, "run-untouched-for-days");
+  assert.equal(out[0].run, "run:r1");
+  assert.equal(out[0].days, 8);
+  assert.ok(/untouched for 8 days/.test(out[0].text), "the message names how long it has sat");
+  assert.ok(/`skill:x`/.test(out[0].text), "…and the run's source");
+  assert.ok(/1\/3/.test(out[0].text), "…and where it stands");
+  assert.ok(/from the harness, not the human/.test(out[0].text), "…and introduces itself, like every nudge here");
+  assert.ok(/worklist get/.test(out[0].text), "the built-in law line rides while the message stays empty");
+  ok("a sourced run untouched past the threshold is a standing violation naming its source and its days");
+}
+{
+  nudges.__resetFired();
+  assert.deepEqual(judgeRuns([mkRun({ updatedAt: NOW - 2 * DAY })]), [], "moved two days ago: not standing");
+  assert.equal(judgeRuns([mkRun({ updatedAt: NOW - 7 * DAY })]).length, 1, "exactly the threshold: standing");
+  nudges.__resetFired();
+  assert.deepEqual(judgeRuns([mkRun({ updatedAt: NOW - 7 * DAY + 60000 })]), [], "a minute short of it: not yet");
+  ok("the days threshold is a floor on the fake clock — movement inside it is silence");
+}
+{
+  nudges.__resetFired();
+  assert.deepEqual(judgeRuns([mkRun({ source: "" })]), [], "a session's own plan is never judged");
+  assert.deepEqual(judgeRuns([mkRun({ done: 3 })]), [], "every item done: the run closed properly");
+  assert.deepEqual(judgeRuns([mkRun({ done: 0, total: 0 })]), [], "an empty list is not an open run");
+  assert.deepEqual(judgeRuns([mkRun({ updatedAt: 0 })]), [], "a record with no clock cannot be aged honestly");
+  ok("only a sourced, still-open run can stand in violation");
+}
+{
+  // THE §2.4 ENDING ENDS THIS TOO — abandoned WITH the account; the word alone changes nothing.
+  nudges.__resetFired();
+  const excusedRun = mkRun({ status: { text: "abandoned — blocked on his review", ts: NOW - 9 * DAY }, attachments: [{ kind: "report", ref: "r" }] });
+  assert.deepEqual(judgeRuns([excusedRun]), [], "abandoned with its account attached: the judging stops (default rule)");
+  assert.equal(judgeRuns([mkRun({ status: { text: "abandoned — honest", ts: NOW - 9 * DAY } })]).length, 1,
+    "the word with nothing attached keeps the judge alive — exactly the chaser's own law (c13)");
+  nudges.__resetFired();
+  assert.deepEqual(judgeRuns([mkRun()], { excused: () => true }), [],
+    "the caller's own excusedOf is honored when passed — one definition, the chaser's (§2.4)");
+  ok("abandoned-with-account ends the standing judge the same way it ends the chase");
+}
+{
+  // THE KNOB: afterDays is the entry's, editable like any field, junk falling back to the seed's 7.
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  list[2].afterDays = 30;
+  writeRecord(list);
+  nudges.__resetFired();
+  assert.deepEqual(judgeRuns([mkRun()]), [], "8 days is quiet under a 30-day knob");
+  assert.equal(judgeRuns([mkRun({ updatedAt: NOW - 31 * DAY })]).length, 1, "31 days is not");
+  list[2].afterDays = "soon";
+  writeRecord(list);
+  assert.equal(nudges.entries()[2].afterDays, 7, "a junk knob falls back to the seed's 7, never to nothing");
+  ok("afterDays is his knob — honored when sane, seeded when junk");
+}
+{
+  // THE GATES, SAME LAW AS EVERY NUDGE: switch (c41), scope (c2), the record's absence, the clock.
+  seedRecord();
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  list[2].on = false;
+  writeRecord(list);
+  nudges.__resetFired();
+  assert.deepEqual(judgeRuns([mkRun()]), [], "switched off, the moment passes in silence (c41)");
+  list[2].on = true;
+  list[2].scope = "bu";
+  writeRecord(list);
+  assert.deepEqual(judgeRuns([mkRun()]), [], "scoped to another project, this one hears nothing (c2)");
+  writeRecord([list[0], list[1]]);
+  assert.deepEqual(judgeRuns([mkRun()]), [], "no entry in the record means OFF — the record is the authority");
+  seedRecord();
+  const edited = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  edited[2].clock = "write";
+  writeRecord(edited);
+  assert.deepEqual(judgeRuns([mkRun()]), [], "moved onto the write clock, the sweep leaves it alone — its own clock, symmetrically");
+  ok("the standing judge obeys the record's switch, scope, presence and clock like every nudge");
+}
+{
+  // THE COOLDOWN DISCIPLINE (c35): the chaser's window, bookkept per nudge × run × session.
+  seedRecord();
+  nudges.__resetFired();
+  assert.equal(judgeRuns([mkRun()]).length, 1);
+  assert.deepEqual(judgeRuns([mkRun()], { now: NOW + 10 * 60000 }), [], "ten minutes on: inside the 30-minute window");
+  assert.equal(judgeRuns([mkRun()], { now: NOW + 31 * 60000 }).length, 1, "past the window, it may speak again");
+  assert.equal(judgeRuns([mkRun({ owner: "run:r2" })], { now: NOW + 10 * 60000 }).length, 1,
+    "a DIFFERENT run is its own bookkeeping row");
+  assert.equal(judgeRuns([mkRun()], { now: NOW + 40 * 60000, session: "session:sv:other" }).length, 1,
+    "and a different target session is too — per nudge × run × session");
+  ok("standing deliveries ride the chaser's cooldown, keyed per nudge × run × session (c35)");
+}
+{
+  // HIS WORDS WIN HERE TOO (c1) — the header keeps the facts his message cannot know.
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  list[2].message = "park it or finish it";
+  writeRecord(list);
+  nudges.__resetFired();
+  const [st] = judgeRuns([mkRun()]);
+  assert.ok(/park it or finish it/.test(st.text));
+  assert.ok(!/worklist get/.test(st.text), "the built-in line is gone the moment his words exist");
+  assert.ok(/untouched for 8 days/.test(st.text) && /`skill:x`/.test(st.text),
+    "the source and the days still arrive — they are the judge's facts, not the message's");
+  ok("editing the standing judge's message delivers his words on the next firing (c1)");
+}
+
+// ---- 8. THE PROJECT-WIDE DOOR ON THE SWEEP (c11) ------------------------------------------------
+// A hub-backed sweep nudge for the fixtures — the seed ships none ON the sweep clock, so the suite
+// writes the record a hand-edit would: that is the record being the setting, not a test cheat.
+const SWEEP_ENTRY = { name: "met-without-note", on: true, scope: "global", severity: "steer", message: "a met mark owes the statement beside it", clock: "sweep" };
+const sweepRecord = () => { seedRecord(); const l = JSON.parse(fs.readFileSync(RECORD, "utf8")); l.push(SWEEP_ENTRY); writeRecord(l); };
+const SWEEP_VIOLATION = { nudge: "met-without-note", path: "/repo/RFCs/RFC-9.md", line: 4, project: "sv", detail: "c2 met, no note" };
+const dialProject = (over = {}) =>
+  nudges.judgeProject({ project: "sv", slot: "sv", session: "session:sv:1", now: NOW, cooldownMin: 30, ...over });
+
+{
+  sweepRecord();
+  nudges.__resetFired();
+  nudges.__resetSweep();
+  CALLS.length = 0;
+  FAIL = null;
+  ANSWER = { ok: true, violations: [SWEEP_VIOLATION] };
+  const out = await dialProject();
+  assert.equal(out.length, 1);
+  assert.equal(out[0].nudge, "met-without-note");
+  assert.ok(/a met mark owes the statement/.test(out[0].text), "the steer carries the message");
+  assert.ok(/\/repo\/RFCs\/RFC-9\.md:4/.test(out[0].text), "…and the violation's path:line pointer");
+  assert.ok(/from the harness, not the human/.test(out[0].text), "…and introduces itself");
+  assert.equal(CALLS.length, 1);
+  assert.ok(/\/judges\?project=sv$/.test(CALLS[0]), "the door is asked per PROJECT — the sweep question, a GET dial (c12)");
+  ok("a standing registry violation becomes one steering message off the project door");
+}
+{
+  // THE FREQUENCY CEILING: once per project per cooldown window — never per tick, never per session.
+  assert.deepEqual(await dialProject({ now: NOW + 5 * 60000 }), []);
+  assert.deepEqual(await dialProject({ now: NOW + 5 * 60000, session: "session:sv:2" }), []);
+  assert.equal(CALLS.length, 1, "five minutes of ticks and a second session bought ZERO new dials");
+  nudges.__resetFired();
+  assert.equal((await dialProject({ now: NOW + 31 * 60000 })).length, 1, "past the window, the project is asked again");
+  assert.equal(CALLS.length, 2);
+  ok("the door is dialled once per project per cooldown window — the tick multiplies nothing (c11)");
+}
+{
+  // ARMED OR NOT EVEN DIALLED: no sweep-clock hub nudge on and in scope → no fetch at all.
+  seedRecord(); // the seed's only sweep entries are shell-local — nothing for the door
+  nudges.__resetSweep();
+  CALLS.length = 0;
+  assert.deepEqual(await dialProject(), []);
+  assert.equal(CALLS.length, 0, "shell-local sweep nudges never arm the project dial");
+  sweepRecord();
+  const l = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  l[3].on = false;
+  writeRecord(l);
+  nudges.__resetSweep();
+  assert.deepEqual(await dialProject(), []);
+  assert.equal(CALLS.length, 0, "switched off, the moment passes without a dial (c41)");
+  l[3].on = true;
+  l[3].scope = "bu";
+  writeRecord(l);
+  nudges.__resetSweep();
+  assert.deepEqual(await dialProject(), []);
+  assert.equal(CALLS.length, 0, "out of scope, the project is not even asked (c2)");
+  ok("with nothing armed for the sweep, the hub is not even dialled");
+}
+{
+  // DEAF TO THE WRONG NAMES: write-clock nudges wait for their clock; shell-local names are judged
+  // here, never delivered off a hub answer; unrecorded names are OFF; junk rows are skipped.
+  sweepRecord();
+  nudges.__resetFired();
+  nudges.__resetSweep();
+  ANSWER = { ok: true, violations: [
+    { nudge: "behavioural-claim-cmd-only", path: "/x.md", line: 1 },
+    { nudge: "run-untouched-for-days", path: "/x.md", line: 1 },
+    { nudge: "run-chaser", path: "/x.md", line: 1 },
+    { nudge: "never-recorded", path: "/x.md", line: 1 },
+    null, 7, { path: "/no-name.md" },
+    SWEEP_VIOLATION,
+  ] };
+  const out = await dialProject();
+  assert.equal(out.length, 1);
+  assert.equal(out[0].nudge, "met-without-note");
+  ok("the sweep delivers sweep-clock hub nudges alone — write-clock, shell-local, unrecorded and junk all pass through it");
+}
+{
+  // DEGRADATION IS LAW HERE TOO — and a down hub is retried next window, never hammered per tick.
+  for (const mode of ["down", "404", "bad-json"]) {
+    nudges.__resetSweep();
+    nudges.__resetFired();
+    FAIL = mode;
+    assert.deepEqual(await dialProject(), [], `a ${mode} hub means nothing to report`);
+  }
+  CALLS.length = 0;
+  FAIL = "down";
+  assert.deepEqual(await dialProject({ now: NOW + 60 * 60000 }), []);
+  assert.equal(CALLS.length, 1);
+  assert.deepEqual(await dialProject({ now: NOW + 61 * 60000 }), []);
+  assert.equal(CALLS.length, 1, "the failed dial still spent the window — a down hub is not hammered every tick");
+  FAIL = null;
+  ok("down, older, or junk-answering: the sweep reads absence as nothing to report, and retries on the window");
+}
+{
+  // THE CAP, AND THE ROTATION THAT KEEPS IT HONEST: a registry carrying years of debt steers three
+  // at a time, least-recently-steered first, so the overflow ARRIVES later instead of starving.
+  nudges.__resetFired();
+  nudges.__resetSweep();
+  const many = [1, 2, 3, 4, 5].map((n) => ({ nudge: "met-without-note", path: `/repo/RFCs/RFC-${n}.md`, line: n }));
+  ANSWER = { ok: true, violations: many };
+  const first = await dialProject();
+  assert.equal(first.length, 3, "one sweep delivers at most three");
+  assert.deepEqual(first.map((v) => v.path), ["/repo/RFCs/RFC-1.md", "/repo/RFCs/RFC-2.md", "/repo/RFCs/RFC-3.md"]);
+  const second = await dialProject({ now: NOW + 31 * 60000 });
+  assert.equal(second.length, 3);
+  assert.ok(second.some((v) => v.path === "/repo/RFCs/RFC-4.md") && second.some((v) => v.path === "/repo/RFCs/RFC-5.md"),
+    "the next window reaches the violations the cap held back — nothing starves, nothing was stored");
+  ok("the sweep caps per window and rotates the standing debt through later windows");
+}
+
+// ---- 9. THE CONNECTED-PROJECT ROSTER ------------------------------------------------------------
+{
+  fs.writeFileSync(PROJECTS, JSON.stringify({ sv: "/repo/sv", bu: "/repo/bu" }));
+  assert.deepEqual(nudges.connectedProjects(), ["sv", "bu"]);
+  fs.writeFileSync(PROJECTS, "not json at all");
+  assert.deepEqual(nudges.connectedProjects(), [], "a junk roster is no roster");
+  fs.writeFileSync(PROJECTS, JSON.stringify(["sv"]));
+  assert.deepEqual(nudges.connectedProjects(), [], "a list is not the map this file has always been");
+  fs.unlinkSync(PROJECTS);
+  assert.deepEqual(nudges.connectedProjects(), [], "and no file is simply no projects — never a crash");
+  ok("the sweep's roster is ~/.autobot/projects.json, read tolerantly like every file here");
+}
+
+// ---- 10. THE CHASER'S STAMP IS NOT MOVEMENT -----------------------------------------------------
+{
+  // Without this, every chased run reads permanently fresh and the standing judge is silenced on
+  // exactly the runs it exists to name — "nudged 3 times, no movement" must stay literally true.
+  const worklist = require("../electron/agents/worklist.cjs");
+  worklist.writeRun("u1", "session:sv:1", [{ text: "a", state: "active" }], "skill:x");
+  const f = path.join(worklist.DIR, "run-u1.json");
+  const aged = JSON.parse(fs.readFileSync(f, "utf8"));
+  aged.updatedAt = 1000;
+  fs.writeFileSync(f, JSON.stringify(aged, null, 2));
+  worklist.markNudged("run:u1");
+  assert.equal(JSON.parse(fs.readFileSync(f, "utf8")).updatedAt, 1000,
+    "a nudge stamp leaves the movement clock exactly where it was");
+  assert.equal(JSON.parse(fs.readFileSync(f, "utf8")).nudges.count, 1, "…while the count still lands");
+  worklist.markStatus("u1", { text: "waiting on review" });
+  assert.ok(JSON.parse(fs.readFileSync(f, "utf8")).updatedAt > 1000,
+    "a status write IS movement — it moves the clock like any real touch");
+  ok("markNudged bookkeeps without touching updatedAt; a real write still moves it");
+}
+
+// ---- 11. THE SWEEP WIRING, READ FROM THE SOURCE (c11, c35) --------------------------------------
+{
+  const src = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
+  const tick = /function armIdle\(s\) \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(tick, "armIdle exists");
+  assert.ok(/maybeNudge\(s, quietMin\)/.test(tick[0]) && /maybeSweepJudges\(s\)/.test(tick[0]),
+    "the standing judges ride the SAME tick the chaser rides — a second clock, not a second mechanism (c11)");
+  assert.ok(/if \(s\.turnActive \|\| s\.toolsInFlight > 0\) return/.test(tick[0]),
+    "…behind the tick's own turn-guard, which is what makes every standing delivery turn-end (c35)");
+  const sweep = /function maybeSweepJudges\(s\) \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(sweep, "maybeSweepJudges exists");
+  const sb = sweep[0];
+  assert.ok(/nudges\.judgeRuns\(/.test(sb), "the shell-local standing judge runs on the tick (c11)");
+  assert.ok(/excused: nudge\.excusedOf/.test(sb),
+    "…with the chaser's own §2.4 closed-condition passed in — one definition of 'ended honestly'");
+  assert.ok(/nudge\.sameAgent\(/.test(sb), "…over this agent's own runs, by the chaser's ownership rule");
+  assert.ok(/nudges\.connectedProjects\(\)/.test(sb),
+    "the project door is gated on the connected roster — projects.json, not a guess");
+  assert.ok(/nudges\s*\.judgeProject\(/.test(sb), "…and the project-wide door is dialled from the same tick (c11)");
+  assert.ok(/cooldownMin/.test(sb), "both halves ride the chaser's cooldown discipline (c35)");
+  assert.ok((sb.match(/deliverSteers\(/g) || []).length >= 2 && !/for \(const \w+ of sessions/.test(sb),
+    "delivery is the one shared ride, to the ticking session alone — no walk over other sessions");
+  ok("the wiring: one tick, two standing judges, the chaser's guard and cooldown, one delivery ride");
 }
 
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the dial asks, the hub is never a pusher`);
