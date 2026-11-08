@@ -1074,13 +1074,24 @@ function toolsFor(identity = {}) {
               };
             // WRITTEN FOR A READER — his rule: these are OUR logs, and they come out human. The
             // same words serve the model and the chat; nothing downstream reformats them.
+            //
+            // AND THE BODY COMES BACK WHOLE. Delivery used to cut a note at 300 chars and a chunk
+            // at 400 while the SCORE was computed over all of it — chunks run 370–2170, so the
+            // match said the right thing was found and the text handed back did not contain the
+            // reason it matched. Measured 2026-11-02 with three blind subagents: all three hit it
+            // on tables, all three answered by inference, which is why it read as a pass. The
+            // indexer's split threshold already bounds a chunk and the store's curation bounds a
+            // note — a second cap here was two copies of one rule, drifting. Newlines survive too:
+            // the measured amputations were TABLES, and a table flattened to one line is barely
+            // readable even when whole.
+            const indent = (t) => String(t || "").trim().split("\n").map((l) => `  ${l}`).join("\n");
             const lines = hits.map((h) => {
-              const body = h.text.split("\n").slice(1).join(" ").slice(0, 300);
+              const body = indent(h.text.split("\n").slice(1).join("\n"));
               const where = h.scope.startsWith("agent:") ? "your own lessons" : h.scope.startsWith("project:") ? `the ${h.scope.slice(8)} project` : "system conventions";
               // THE ID RIDES EVERY HIT (his rule: "there's no reason anyone can not update the
               // system") — it is what remember(id=) and forget() take, so any agent can point at
               // the exact note it just read, not only its own recent writes.
-              return `• ${h.meta.title} — from ${where}, match ${h.score.toFixed(2)} [${h.id}]\n  ${body}${h.meta.pointer ? `\n  see: ${h.meta.pointer}` : ""}`;
+              return `• ${h.meta.title} — from ${where}, match ${h.score.toFixed(2)} [${h.id}]\n${body}${h.meta.pointer ? `\n  see: ${h.meta.pointer}` : ""}`;
             });
             // THE TWO HALVES READ DIFFERENTLY ON PURPOSE. A note is true because someone learned
             // it; a chunk is true only while its file has not changed. Saying which is which — and
@@ -1091,7 +1102,7 @@ function toolsFor(identity = {}) {
               // the score rides here too — the notes half always had one, and a shelf without it
               // reads as unranked (his catch, the moment the log finally showed both halves)
               const sc = typeof h.score === "number" ? `, match ${h.score.toFixed(2)}` : "";
-              return `▸ ${where}${h.part ? ` (${h.part})` : ""} — ${h.corpus}${sc} [${h.corpus}:${h.source}#]${h.stale ? "\n  ⚠ the file has CHANGED since this was indexed" : ""}\n  ${String(h.text).replace(/\n+/g, " ").slice(0, 400)}`;
+              return `▸ ${where}${h.part ? ` (${h.part})` : ""} — ${h.corpus}${sc} [${h.corpus}:${h.source}#]${h.stale ? "\n  ⚠ the file has CHANGED since this was indexed" : ""}\n${indent(h.text)}`;
             });
             const parts = [];
             if (hits.length)

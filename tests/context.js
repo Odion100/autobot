@@ -229,6 +229,48 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     fs.rmSync(CORPORA, { force: true });
   }
 
+  // ---- DELIVERY PRINTS WHAT THE SCORE WAS COMPUTED OVER --------------------------------------
+  // Measured 2026-11-02: a chunk's score was computed over its whole text (370–2170 chars) and the
+  // answer printed ~400 — three blind subagents all hit it on tables, all answered by inference,
+  // which is why it read as a pass. The indexer's split threshold bounds a chunk and curation
+  // bounds a note; a second cap at delivery was two copies of one rule. These claims go through
+  // the REAL `context` tool handler, because the cap lived in the handler's rendering and a test
+  // against search() underneath would have passed on the day the cap shipped.
+  {
+    const tools = ctx.serverFor({ slot: "smoketest", projectCode: "smoketest-sys" }).instance._registeredTools;
+    const said = (r) => (r.content || []).map((c) => c.text).join("");
+    const AG = "agent:smoketest";
+    const subScopes = { ...scopes, slot: "smoketest", by: "smoketest" };
+
+    // A NOTE LONGER THAN THE OLD 300 — the tail is the claim.
+    const longBody =
+      "The delivery wholeness fixture: retrieval must hand back the entire body the score was computed over. " +
+      "Filler so the body clears the old cap by a margin: " + "lorem ipsum dolor sit amet ".repeat(12) +
+      "and the part that used to be amputated arrives last: TAIL-MARKER-WHOLE-NOTE";
+    const longNote = await ctx.remember(subScopes, { text: longBody, scope: AG, title: "delivery wholeness fixture" });
+    const noteAns = await tools.context.handler({ question: "delivery wholeness fixture — retrieval hands back the entire body", scope: AG, kind: "notes" }, {});
+    ok(/TAIL-MARKER-WHOLE-NOTE/.test(said(noteAns)),
+      "a note longer than the old 300-char cap comes back WHOLE — the tail is in the answer");
+    ctx.deleteNote(AG, longNote.id);
+
+    // A DOC CHUNK LONGER THAN THE OLD 400, AND IT IS A TABLE — the measured failure shape. Rows
+    // survive as rows (newlines kept), and the last row is in the answer.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "whole-chunk-"));
+    const rows = Array.from({ length: 14 }, (_, i) => `| step-${i + 1} | what step ${i + 1} does in the wholeness fixture pipeline |`).join("\n");
+    fs.writeFileSync(path.join(dir, "pipeline.md"),
+      `# Wholeness fixture pipeline\n\nThe table the score is computed over:\n\n| step | meaning |\n|---|---|\n${rows}\n| step-last | TAIL-ROW-LAST of the wholeness fixture |\n`);
+    const CORP = "smoketest-wholeness";
+    const madeWhole = await tools.docsIndex.handler({ name: CORP, root: dir }, {});
+    ok(!madeWhole.isError, "the wholeness fixture corpus indexes");
+    const docAns = await tools.context.handler({ question: "wholeness fixture pipeline table of steps", corpus: CORP }, {});
+    ok(/TAIL-ROW-LAST/.test(said(docAns)),
+      "a chunk longer than the old 400-char cap comes back WHOLE — the last table row is in the answer");
+    ok(/\|\s*step-2\s*\|[^\n]*\n/.test(said(docAns)),
+      "...and the table survives as ROWS — newlines are kept, because a flattened table was the measured failure");
+    await vectors.drop("docs-" + CORP);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // ── RFC-013 — CONTEXT SUBSCRIPTIONS ─────────────────────────────────────────────────────
   // The reader subscribes; content is never touched. Subscriptions live in the agent's DEF —
   // so these claims create a throwaway agent definition and delete it after.
