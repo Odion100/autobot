@@ -2,7 +2,7 @@
 //
 // TOUCHES NO REAL CORPUS AND NO REAL VECTOR STORE. `AUTOBOT_CORPORA` points the module at a temp
 // config, and `vectors.cjs` is replaced in the require cache by an in-memory double that COUNTS
-// EMBEDDING CALLS — which is the only way to prove the claim that matters: a file whose hash has
+// EMBEDDING CALLS — which is the only way to prove the assertion that matters: a file whose hash has
 // not changed costs nothing to re-index.
 import fs from "node:fs";
 import os from "node:os";

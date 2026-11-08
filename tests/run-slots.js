@@ -11,7 +11,7 @@
 // The reach-back explains all three: with `currentRun` null the stamp falls through to the job run
 // that most recently closed, which is a neighbour rather than the one that filed.
 //
-// These claims are about the decision only. Whether sessions.cjs calls them at the right moments is
+// These assertions are about the decision only. Whether sessions.cjs calls them at the right moments is
 // covered by reading the three call sites; there is no harness that drives a live session's run
 // slots, and pretending otherwise would be worse than saying so.
 import assert from "node:assert";
@@ -107,4 +107,4 @@ const SKILL = { id: "r-skill", source: "skill:context-maintenance" };
   ok("a half-written slot answers null instead of a pointer that cannot land");
 }
 
-console.log(`\n  ${n} claims, all green — a job keeps its run under a lane\n`);
+console.log(`\n  ${n} assertions, all green — a job keeps its run under a lane\n`);

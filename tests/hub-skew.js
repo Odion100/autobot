@@ -151,4 +151,4 @@ for (const c of CASES) {
   ok(`${c.what} renders instead of ending the verb`);
 }
 
-console.log(`\n  ${n} claims — the renderer survives a hub older than the shell it answers in`);
+console.log(`\n  ${n} assertions — the renderer survives a hub older than the shell it answers in`);

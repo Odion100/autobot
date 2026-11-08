@@ -16,7 +16,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
 // THE SUITE MUST NOT READ HIS LIVE NUDGE SETTINGS. The nudge — on by default — sets an idle-clock
-// floor for every session; that is ITS claim (tests/nudge.js #8), not this file's. The idle claims
+// floor for every session; that is ITS to assert (tests/nudge.js #8), not this file's. The idle assertions
 // below are about HOOK thresholds, so the nudge is parked off in a scratch file — otherwise this
 // suite passes or fails with whatever he last set in the cog, which is a suite reading the user's
 // live config to decide what is true.
@@ -121,7 +121,7 @@ try {
   ok("carried → fires", hooks.fire(ev, { carries: [HOOK2], fired: new Map() }).some((h) => h.name === HOOK2));
 
   // -------------------------------------------------------------------------------------------
-  // A SUBSCRIPTION IS A CARRIED HOOK WHOSE `do` NAMES CONTENT (settled 2026-10-05). The claims
+  // A SUBSCRIPTION IS A CARRIED HOOK WHOSE `do` NAMES CONTENT (settled 2026-10-05). The assertions
   // here are the MECHANISM half — the vocabulary, the classification, and the two writing-door
   // refusals that need no context store. Delivery, the caps and the `when`/`rate` gates are proved
   // in tests/context.js, where the notes to point at already exist.
@@ -441,7 +441,7 @@ try {
 
   // -------------------------------------------------------------------------------------------
   // THE BOUNDARY ITSELF, driven without a model on the other end. `result` is the SDK's real
-  // yield, so these claims are about a signal we HAVE — the debounce only has to survive the gap
+  // yield, so these assertions are about a signal we HAVE — the debounce only has to survive the gap
   // between that yield and a turn the human had already queued.
   console.log("\nthe pointer waits for the yield, and a pause is not an ending");
   await (async () => {
@@ -497,11 +497,11 @@ try {
 
     // ---------------------------------------------------------------------------------------
     // THE IDLE EVENT — the turn ended and nobody came back. Driven with the real timer, not a
-    // mocked clock, so the claims are about the mechanism as it will actually run; IDLE_MS is
+    // mocked clock, so the assertions are about the mechanism as it will actually run; IDLE_MS is
     // read from the module and temporarily shortened, which is the only way to assert a
     // five-minute quiet inside a smoke test.
     // QUIET TICKS AND REPORTS; THE HOOK DECIDES WHAT COUNTS. No threshold lives in the emitter,
-    // so what these claims check is that `quietMin` keeps an honest count, that activity resets
+    // so what these assertions check is that `quietMin` keeps an honest count, that activity resets
     // it, and that a hook's own `when` is what picks a duration out of it.
     console.log("\nquiet ticks, and the hook picks its own threshold");
     {
@@ -556,7 +556,7 @@ try {
 
     // -------------------------------------------------------------------------------------------
     // THE FIRE RATE — his decomposition. `when` is a condition about NOW; the rate is a fact about
-    // this hook and this agent over TIME, and they are orthogonal. Every claim here is about the
+    // this hook and this agent over TIME, and they are orthogonal. Every assertion here is about the
     // half that was broken: a rate longer than one session silently became once-per-session,
     // because the fire history lived in a Map the session threw away.
     console.log("\nthe fire rate is persisted, parsed, and refused when malformed");

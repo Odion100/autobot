@@ -153,4 +153,4 @@ ok("a hold says why, once — the reading repeats every usage event and the log 
 
 try { fs.unlinkSync(TMP); } catch {}
 try { fs.rmSync(LOGS, { recursive: true, force: true }); } catch {}
-console.log(`\n${n} claims, all green — auto-compaction, the release valve`);
+console.log(`\n${n} assertions, all green — auto-compaction, the release valve`);

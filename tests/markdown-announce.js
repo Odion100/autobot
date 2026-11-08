@@ -185,7 +185,7 @@ console.log("\nthe doc-registry keeps itself current off the same parse");
   // project is re-indexed HERE, fire-and-forget. Real embedding needs the model (docs.js swaps a
   // vector double in to assert chunks; this suite does not), so what this pins is the TRIGGER —
   // that the save calls index() for the covering corpus and skips corpora of other projects. The
-  // embedding itself is docs.js's 81 claims.
+  // embedding itself is docs.js's 81 assertions.
   const docsEngine = require("../electron/agents/docs.cjs");
   fs.writeFileSync(
     process.env.AUTOBOT_CORPORA,
@@ -200,7 +200,7 @@ console.log("\nthe doc-registry keeps itself current off the same parse");
   // THE TRIGGER IS DEBOUNCED — one trailing pass per project, not one per parse. The startup sweep
   // re-announces every registered row for every resuming session, and the per-parse version was ~27
   // racing hash passes on the main process at the moment he clicks the tab (his report, the hour it
-  // armed). So the pin is now TWO claims: a burst of parses asks ONCE, and it still asks only the
+  // armed). So the pin is now TWO assertions: a burst of parses asks ONCE, and it still asks only the
   // covering corpus. The seam shortens the trailing window the way __setIdleTick shortens the tick.
   sessions.__setRegistryReindexMs(20);
   const probe = path.join(root, "RFCs", "RFC-204-current.md");
@@ -292,4 +292,4 @@ console.log("\nmarkBlock — the agent's door, with its rules");
 
 off();
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`\n${n} claims held — the announce door`);
+console.log(`\n${n} assertions held — the announce door`);

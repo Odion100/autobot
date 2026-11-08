@@ -48,4 +48,4 @@ ok("the tool call still sits between the two utterances");
 
 fs.rmSync(dir, { recursive: true, force: true });
 fs.rmSync(cwd, { recursive: true, force: true });
-console.log(`\n${n} claims, all green — adjacent text blocks are one utterance`);
+console.log(`\n${n} assertions, all green — adjacent text blocks are one utterance`);

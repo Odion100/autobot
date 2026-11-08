@@ -456,4 +456,4 @@ console.log("\nas=spec owes a RUNNABLE block — the kind consumed by being run,
   ok("the missing declarations are reported together, not one at a time");
 }
 
-console.log(`\n${n} claims held — what a row says about a decision, and what a mark rests on`);
+console.log(`\n${n} assertions held — what a row says about a decision, and what a mark rests on`);

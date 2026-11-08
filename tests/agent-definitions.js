@@ -26,7 +26,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "autobot-defs-"));
 process.env.HOME = scratch;
 os.homedir = () => scratch;
 
-// AND THE WORKLIST STORE TOO, EXPLICITLY. The chore-board claims below reach worklist.cjs — which
+// AND THE WORKLIST STORE TOO, EXPLICITLY. The chore-board assertions below reach worklist.cjs — which
 // sweeps closed runs at module load and whose pruneRuns, run against the real store, once deleted
 // the user's live lane records (see the comment at worklist.cjs's DIR). The scratch HOME above
 // would already cover it; this says so out loud, because a janitor reached transitively is still a
@@ -34,7 +34,7 @@ os.homedir = () => scratch;
 process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
 fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
 // AND THE SETTINGS STORE. The retention window is a SETTING now (`nudge.json keepHours`), so the
-// sweep claim below would otherwise read whatever is configured on this machine and pass or fail
+// sweep assertion below would otherwise read whatever is configured on this machine and pass or fail
 // for a reason that has nothing to do with the code. A scratch path that does not exist reads as
 // the defaults.
 process.env.AUTOBOT_NUDGE_FILE = path.join(scratch, "nudge.json");
@@ -235,7 +235,7 @@ ok("the subscription sidecar round-trips `if` and `rate`, and a plain row keeps 
 const sources = require("../electron/agents/skillSources.cjs");
 
 // A FIXTURE, NOT THE MACHINE. This suite points HOME at a scratch dir, so the first version of
-// these claims found zero skills and its `if (skill)` guards skipped in silence — passing while
+// these assertions found zero skills and its `if (skill)` guards skipped in silence — passing while
 // asserting nothing, which is the exact shape I had just filed against someone else's test runner.
 // So the sources are DECLARED here (which exercises the config path too) and populated on disk.
 const writeSkill = (dir, name, body) => {
@@ -431,4 +431,4 @@ assert.ok(swept.at > 0, "because the close left a stamp the janitor does not swe
 ok("a monthly line survives the sweep — the stamp is the residue a swept run leaves");
 
 fs.rmSync(scratch, { recursive: true, force: true });
-console.log(`\n${pass} claims held — RFC-003 definitions + adoption + round-trip + skill sources + the chore board\n`);
+console.log(`\n${pass} assertions held — RFC-003 definitions + adoption + round-trip + skill sources + the chore board\n`);

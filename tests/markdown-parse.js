@@ -128,4 +128,4 @@ console.log("\nnormalizeFences — the platform owns the write rule too");
   ok("fences inside a code block are examples, not structure");
 }
 
-console.log(`\n${n} claims held — the platform's parse`);
+console.log(`\n${n} assertions held — the platform's parse`);

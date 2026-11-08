@@ -2,10 +2,10 @@
 //
 // WHY THIS FILE EXISTS. These verbs decide two things nothing else can undo: whether work that may
 // exist nowhere else gets deleted, and whether the row in his strip tells the truth about where that
-// work landed. Both shipped with zero claims on them, because `serverFor` handed its tools straight
+// work landed. Both shipped with zero assertions on them, because `serverFor` handed its tools straight
 // to the SDK and nothing on this side could hold a handler. `toolsFor` is that door (2026-10-09).
 //
-// THE HUB IS STUBBED, deliberately and narrowly: these claims are about the TOOL's rules — what it
+// THE HUB IS STUBBED, deliberately and narrowly: these assertions are about the TOOL's rules — what it
 // refuses, what it insists on saying, what it records in the same call — not about git. The hub's own
 // behaviour is the hub's suite. What is NOT stubbed is the registration read, because "is this branch
 // a lane" is the rule under test.
@@ -44,7 +44,7 @@ global.fetch = async (url, init) => {
   calls.push({ fn, args });
   const answer = HUB[fn] ? HUB[fn](...args) : { ok: false, error: `no stub for ${mod}.${fn}` };
   // THE ENVELOPE IS PART OF THE CONTRACT. `hub()` returns `body.returnValue`, so a stub answering
-  // the bare object answers `undefined` and every claim below reads "the hub said no" — which is
+  // the bare object answers `undefined` and every assertion below reads "the hub said no" — which is
   // the shape of a test that passes for the wrong reason, or in this case fails for one.
   return { ok: true, status: 200, text: async () => JSON.stringify({ returnValue: answer }) };
 };
@@ -192,7 +192,7 @@ const lanes = (identity = {}) =>
 // A LANE'S BRANCH MAY LIVE IN A COUPLED REPO (2026-10-13). Registration ran `git rev-parse`
 // against the session's cwd and nothing else, so a branch cut in autobot could not be registered
 // from a systemview session — and the refusal it printed told the agent to cut a branch it had
-// already cut. A proactive run died on exactly that. These claims are about `repoHolding`, the
+// already cut. A proactive run died on exactly that. These assertions are about `repoHolding`, the
 // resolution that replaced it: real git, real registry, because "where does this branch live" is
 // the rule under test and stubbing it would test nothing.
 {
@@ -217,8 +217,8 @@ const lanes = (identity = {}) =>
 
   // THE CASE THAT WAS IMPOSSIBLE. Read the registry the way the resolution does and pick any root
   // that is NOT the cwd — then its own current branch must be found from here. Self-configuring on
-  // purpose: hard-coding a repo would make this claim a fact about one machine.
-  // A WORKTREE SHARES ITS PARENT'S REFS, which is what made the first version of this claim wrong:
+  // purpose: hard-coding a repo would make this assertion a fact about one machine.
+  // A WORKTREE SHARES ITS PARENT'S REFS, which is what made the first version of this assertion wrong:
   // autobot's own branch resolved to this worktree, correctly. So the candidate must be a branch
   // genuinely INVISIBLE from here — checked with git directly rather than through the code under test.
   const visibleHere = (b) => {
@@ -236,7 +236,7 @@ const lanes = (identity = {}) =>
         if (!b || b === "HEAD" || visibleHere(b)) continue;
         other = { dir, b };
         break;
-      } catch { /* not a readable repo — not this claim's business */ }
+      } catch { /* not a readable repo — not this assertion's business */ }
     }
   } catch { /* no registry on this machine */ }
 
@@ -244,7 +244,7 @@ const lanes = (identity = {}) =>
     assert.equal(sessions.repoHolding(other.b, here), other.dir);
     ok(`a branch living only in a COUPLED repo resolves to that repo (${other.b} -> ${other.dir})`);
   } else {
-    ok("no second registry repo on this machine — the coupled-repo claim had nothing to assert against");
+    ok("no second registry repo on this machine — the coupled-repo assertion had nothing to assert against");
   }
 }
 
@@ -329,4 +329,4 @@ const lanes = (identity = {}) =>
   ok("...and a registered branch that still exists is never mistaken for one");
 }
 
-console.log(`\n${n} claims held — the lane verb`);
+console.log(`\n${n} assertions held — the lane verb`);

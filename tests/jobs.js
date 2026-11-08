@@ -144,7 +144,7 @@ try {
   // The one requirement the design calls worthless if it is not enforced: a missing input is a
   // REFUSAL, not a guess. Which means it has to be computable — a declaration that lives only in a
   // paragraph is a refusal nobody can ever compute, so it is a refusal nobody ever gets. These
-  // claims are about the declaration being machine-readable, the refusal naming what was missing,
+  // assertions are about the declaration being machine-readable, the refusal naming what was missing,
   // and — the one with teeth — no run existing for a job that was given too little.
   {
     const NEEDY = `---\nrequires: ["period", "ledger"]\n---\n\n# needs two things\n\n## 2 · What it must be given\n` +
@@ -345,7 +345,7 @@ try {
   ok("a record with no reports answers empty rather than throwing");
 }
 
-  console.log(`\n${pass} claims held — jobs\n`);
+  console.log(`\n${pass} assertions held — jobs\n`);
 } finally {
   try { jobs.remove(ID); } catch {}
 }

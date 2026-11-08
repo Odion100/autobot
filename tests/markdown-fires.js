@@ -178,4 +178,4 @@ console.log("\nscan — one parse, three answers");
   ok("a commit record is an account and wakes nobody; the decision beside it still does");
 }
 
-console.log(`\n${n} claims held — the fire scan`);
+console.log(`\n${n} assertions held — the fire scan`);

@@ -43,7 +43,7 @@ ok("the host registers documents:send-update");
 }
 
 {
-  // THE PIPES ARE THE POINT, and this is the claim that says why.
+  // THE PIPES ARE THE POINT, and this is the assertion that says why.
   const { EVENTS } = require("../electron/agents/hooks.cjs");
   const decl = (EVENTS || []).find((x) => x.name === "document.updated");
   assert.ok(decl, "the event is declared in the vocabulary — a hook can only attach to one that is");
@@ -74,13 +74,13 @@ ok("the host registers documents:send-update");
 // claiming a subscription nobody was honouring.
 {
   const sessions = require("../electron/agents/sessions.cjs");
-  // The real module is replaced in this process (see the cache stub above), so these claims run
+  // The real module is replaced in this process (see the cache stub above), so these assertions run
   // against a hand-built stand-in of the session registry the real one iterates.
   const made = [];
   const fakeSession = (projectCode) => ({ projectCode, input: { push: (m) => made.push({ projectCode, m }) } });
 
   // deliverToMembers is not exported — it is called from emitAmbient, which IS the contract: an
-  // event that is emitted reaches the members named on it. So the claim goes through the door.
+  // event that is emitted reaches the members named on it. So the assertion goes through the door.
   assert.ok(typeof sessions.emitAmbient === "function", "emitAmbient is the door this rides on");
   ok("delivery hangs off the ambient emit, so anything that announces a document reaches its members");
 }
@@ -325,4 +325,4 @@ ok("the host registers documents:send-update");
   ok("a wake with no decision count is read as an edit rather than throwing");
 }
 
-console.log(`\n  ${n} claims, all green — a document update is an event\n`);
+console.log(`\n  ${n} assertions, all green — a document update is an event\n`);

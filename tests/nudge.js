@@ -237,5 +237,5 @@ console.log("the countdown is the selector's answer — the door ships the pick"
   ok("an unplaceable session is its own agent — no project, no sharing");
 }
 
-console.log(`\n  ${pass} claims, all green — an unfinished run nudges its agent\n`);
+console.log(`\n  ${pass} assertions, all green — an unfinished run nudges its agent\n`);
 fs.rmSync(scratch, { recursive: true, force: true });

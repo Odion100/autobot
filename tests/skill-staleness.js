@@ -6,7 +6,7 @@
 //   3. Creating a skill the agent already names changes it too — a carried name with no file is 0,
 //      and 0 → mtime is a change.
 //   4. The order of the carried list does not matter; the content of the files does.
-//   5. The scan is SHARED AND CACHED: one pass per TTL however many sessions ask. This is the claim
+//   5. The scan is SHARED AND CACHED: one pass per TTL however many sessions ask. This is the assertion
 //      that keeps the fix from becoming the 154%-CPU bug the file warns about.
 //   6. `Skills` is its own named part of the composition, so the panel can say which input moved.
 import assert from "node:assert";
@@ -117,7 +117,7 @@ ok("the order of the carried list does not matter — the files' contents do");
   }
 }
 
-console.log(`\n  ${pass} claims, all green — editing a skill makes a session stale\n`);
+console.log(`\n  ${pass} assertions, all green — editing a skill makes a session stale\n`);
 fs.rmSync(scratch, { recursive: true, force: true });
 
 // The TTL is real time, so a test that edits a file and asks again inside the same millisecond

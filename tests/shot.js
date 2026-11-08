@@ -3,7 +3,7 @@
 // WHY THIS FILE EXISTS. `capturePage()` needs a live window and nothing here can stand one up, so
 // the capture itself is proved by one press of his. Everything AROUND it can be wrong silently and
 // is exactly the sort of wrong that looks like evidence: the wrong window photographed, a path
-// handed back for a file that is empty, a prune that eats the shot it just took. Those are claims.
+// handed back for a file that is empty, a prune that eats the shot it just took. Those are the assertions here.
 import assert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
@@ -175,4 +175,4 @@ const win = (title, { focused = false, dead = false, size = { width: 1440, heigh
   ok("a zero-area child is not a page — it falls back rather than photographing nothing");
 }
 
-console.log(`\n  ${n} claims, all green — the harness can photograph its own window\n`);
+console.log(`\n  ${n} assertions, all green — the harness can photograph its own window\n`);

@@ -818,4 +818,4 @@ console.log("\nreapGone — a document deleted by somebody else still loses its 
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`\n${n} claims held — the registry`);
+console.log(`\n${n} assertions held — the registry`);

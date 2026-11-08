@@ -11,7 +11,7 @@
 // are declared, that the description teaches what a status is FOR (an undescribed parameter is a
 // parameter no agent passes), and that both reach the hub unchanged. Whether the hub then writes one
 // slot, replaces it, or clears it on an empty string is the HUB's claim and it has its own suite —
-// systemview `api/board.test.js`, 17 claims. Nothing here covers the panel.
+// systemview `api/board.test.js`, 17 assertions. Nothing here covers the panel.
 //
 // THE HUB IS STUBBED and answers the shape the real one answers. Inventing a field here is how a
 // suite stays green while production reads something else — the lesson `tests/lanes.js` §6 paid for.
@@ -181,4 +181,4 @@ const board = () =>
   ok("the index prints as scannable lines and `brief` is not swallowed on the way to the hub");
 }
 
-console.log(`\n  ${n} claims, all green — the board tool's contract\n`);
+console.log(`\n  ${n} assertions, all green — the board tool's contract\n`);

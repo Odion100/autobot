@@ -135,4 +135,4 @@ console.log("\nwriteAttr — the file door");
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log(`\n${n} claims held — the platform's write`);
+console.log(`\n${n} assertions held — the platform's write`);

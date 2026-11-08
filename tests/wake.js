@@ -92,4 +92,4 @@ const fake = (over = {}) => {
   ok("a busy session never gets the push — held, merged in place, receipted as held");
 }
 
-console.log(`\n  ${n} claims, all green — an outside event starts a turn, never rides his message\n`);
+console.log(`\n  ${n} assertions, all green — an outside event starts a turn, never rides his message\n`);

@@ -2,7 +2,7 @@
 //
 // WHAT THIS IS REALLY GUARDING: false alarms. A watch exists so something can fire unattended, and
 // the expensive failure mode is not "it missed a change" — it is "it announced one that did not
-// happen" at 3am, repeatedly, until the human turns the whole mechanism off. So most of the claims
+// happen" at 3am, repeatedly, until the human turns the whole mechanism off. So most of the assertions
 // below are about the cases that must stay QUIET: a node that has not rendered yet, the first read
 // after a restart, a value that is the same.
 //
@@ -148,7 +148,7 @@ try {
     ok("a tab with no watch on its origin is never entered — the poll is narrow, not ambient");
   }
 
-  console.log(`\n${pass} claims held — page events and watches\n`);
+  console.log(`\n${pass} assertions held — page events and watches\n`);
 } finally {
   restore();
 }

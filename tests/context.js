@@ -16,7 +16,7 @@ import os from "node:os";
 // createRequire — same bridge same-origin.js uses to read shipped source.
 const require = createRequire(import.meta.url);
 // A TEMP CORPUS CONFIG, set before context.cjs pulls in docs.cjs — which reads AUTOBOT_CORPORA at
-// load time, once. The corpus claims at the bottom of this file CREATE and PROMOTE corpora; against
+// load time, once. The corpus assertions at the bottom of this file CREATE and PROMOTE corpora; against
 // the live ~/.autobot/corpora.json that would repoint the human's handbooks and publish a test
 // fixture into everybody's unnamed search. Same lesson as the throwaway scopes above.
 
@@ -27,7 +27,7 @@ process.env.AUTOBOT_CORPORA = CORPORA;
 // measured 2026-10-19: one run recorded reads against `he-never-wants-preemptive-rules…`,
 // `file-chips-one-colon-links…` and others — and read counts are exactly the signal maintenance
 // uses to decide what has gone quiet and what has become a doc-candidate. The searches stay real
-// (that is what makes the claims worth anything); the LEDGER is restored byte for byte afterwards,
+// (that is what makes the assertions worth anything); the LEDGER is restored byte for byte afterwards,
 // the same save-and-restore `page-events` uses for the watches file.
 const USAGE = path.join(os.homedir(), ".autobot", "context", "usage.jsonl");
 const usageBefore = (() => { try { return fs.readFileSync(USAGE); } catch { return null; } })();
@@ -43,7 +43,7 @@ process.on("exit", restoreUsage);
 process.on("SIGINT", () => { restoreUsage(); process.exit(130); });
 process.on("uncaughtException", (e) => { restoreUsage(); console.error(e); process.exit(1); });
 // A SCRATCH ~/.autobot FOR JOBS.CJS ONLY, pinned before anything loads it. jobs.cjs resolves its
-// DIR from os.homedir() at module load, once — so the job claims at the bottom of this file would
+// DIR from os.homedir() at module load, once — so the job assertions at the bottom of this file would
 // otherwise create and delete fixtures in his REAL ~/.autobot/jobs. Same lesson as the throwaway
 // scopes above, and the same technique tests/agent-definitions.js uses.
 //
@@ -60,7 +60,7 @@ os.homedir = () => JOBS_HOME;
 const jobsMod = require("../electron/agents/jobs.cjs");
 os.homedir = realHomedir;
 if (!jobsMod.DIR.startsWith(JOBS_HOME)) {
-  // LOUD, and before a single write: if the pin failed, the job claims below would be running
+  // LOUD, and before a single write: if the pin failed, the job assertions below would be running
   // against the live store. This file has wiped his real context twice; it does not get a third.
   console.error("FAIL jobs.cjs is pointing at " + jobsMod.DIR + " — the scratch home did not take");
   process.exit(1);
@@ -233,7 +233,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
   // Measured 2026-11-02: a chunk's score was computed over its whole text (370–2170 chars) and the
   // answer printed ~400 — three blind subagents all hit it on tables, all answered by inference,
   // which is why it read as a pass. The indexer's split threshold bounds a chunk and curation
-  // bounds a note; a second cap at delivery was two copies of one rule. These claims go through
+  // bounds a note; a second cap at delivery was two copies of one rule. These assertions go through
   // the REAL `context` tool handler, because the cap lived in the handler's rendering and a test
   // against search() underneath would have passed on the day the cap shipped.
   {
@@ -242,7 +242,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     const AG = "agent:smoketest";
     const subScopes = { ...scopes, slot: "smoketest", by: "smoketest" };
 
-    // A NOTE LONGER THAN THE OLD 300 — the tail is the claim.
+    // A NOTE LONGER THAN THE OLD 300 — the tail is the assertion.
     const longBody =
       "The delivery wholeness fixture: retrieval must hand back the entire body the score was computed over. " +
       "Filler so the body clears the old cap by a margin: " + "lorem ipsum dolor sit amet ".repeat(12) +
@@ -273,7 +273,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
 
   // ── RFC-013 — CONTEXT SUBSCRIPTIONS ─────────────────────────────────────────────────────
   // The reader subscribes; content is never touched. Subscriptions live in the agent's DEF —
-  // so these claims create a throwaway agent definition and delete it after.
+  // so these assertions create a throwaway agent definition and delete it after.
   {
     const defs = require("../electron/agents/definitions.cjs");
     const sessions = require("../electron/agents/sessions.cjs");
@@ -430,7 +430,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     // ---- A DELETE THAT MISSES MUST SAY SO ---------------------------------------------------
     // Measured 2026-11-01: fifteen `forget` calls passed the SHORT id surfaces print in brackets,
     // all fifteen answered "Forgot <id>", and the store held 26 notes before and 26 after. The
-    // claims below are counted, not reported — a prune that cannot show the count moving has
+    // assertions below are counted, not reported — a prune that cannot show the count moving has
     // demonstrated nothing, which is the whole lesson of the original failure.
     {
       const tools = ctx.toolsFor({ slot: "smoketest", projectCode: "smoketest-sys" });
@@ -473,7 +473,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     }
 
     // ---- THE DECISION IS A PARAMETER ON `remember` (2026-10-04, his call) --------------------
-    // Through the REAL TOOL HANDLER, not the module function underneath: everything claimed here
+    // Through the REAL TOOL HANDLER, not the module function underneath: everything asserted here
     // lives at the tool layer — that the parameter is required, that it subscribes without an id,
     // that a refused shelf still keeps the note. A test that went around the tool would prove none
     // of it, which is the `markBroughtIn` lesson.
@@ -519,7 +519,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     // Settled 2026-10-05. A subscription had the same axes a hook has, with two amputated: no
     // condition on the moment, no cadence. The merge gives it both by making the row READ AS A
     // HOOK and running it through hooks.cjs's own matcher and hooks.cjs's own rate ledger — so
-    // every claim below is about behaviour this harness did not have, plus the ones proving the
+    // every assertion below is about behaviour this harness did not have, plus the ones proving the
     // surface he asked not to move did not move.
     //
     // THE SCOPES ARE STILL THE THROWAWAY ONES. The hook files are named `smoke-*` and removed; the
@@ -686,13 +686,13 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
 
   // ── RFC-067 §3 — THE TWO JOB VERBS ──────────────────────────────────────────────────────
   // Through the REAL TOOL HANDLERS out of toolsFor(), never the module underneath. Everything
-  // claimed here IS the tool layer: that the verbs exist at all, that the list is a label and not
+  // asserted here IS the tool layer: that the verbs exist at all, that the list is a label and not
   // the documents, and that an absent job is a refusal an agent reads rather than a blank success.
   // A test that called jobs.list()/jobs.doc() directly would pass on the day both tools were
   // deleted — the `markBroughtIn` lesson again.
   //
   // FIXTURES ARE WRITTEN BY HAND, as directories, under the scratch home pinned at the top of this
-  // file. By hand rather than through jobs.save() because the claim is "jobsList returns what is ON
+  // file. By hand rather than through jobs.save() because the assertion is "jobsList returns what is ON
   // DISK": a fixture built by the same writer the reader trusts proves less.
   {
     const tools = ctx.toolsFor({ slot: "smoketest", projectCode: "smoketest-sys" });
@@ -868,7 +868,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     try { hooksMod.remove(HOOK); } catch {}
     // EXPLICITLY EMPTY, because save() MERGES. The fixture used to omit `hooks` and rely on the
     // field being absent — which held only until a failed run left the slot on disk carrying one,
-    // and then the first claim below read "already armed" and failed for a reason that had nothing
+    // and then the first assertion below read "already armed" and failed for a reason that had nothing
     // to do with arming. A fixture that depends on absence depends on the last run having passed.
     defsMod.save({ id: SLOT, name: "carry probe", prompt: "throwaway", skills: ["study"], hooks: [] });
     hooksMod.save({ name: HOOK, on: "usage", when: { pct: { gte: 60 } }, do: "skill:study",
@@ -886,7 +886,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     ok((defsMod.resolve(SLOT).def.hooks || []).includes(HOOK), "IT IS ON DISK — read back, not reported from the input");
 
     // SAVE() MERGES. An earlier version of that function emptied agents silently on a one-field
-    // write, so this is the claim that a carry write cannot cost an agent its definition.
+    // write, so this is the assertion that a carry write cannot cost an agent its definition.
     ok(defsMod.resolve(SLOT).def.prompt === "throwaway", "the rest of the definition survived the write");
     ok((defsMod.resolve(SLOT).def.skills || []).includes("study"), "...skills included");
 
@@ -920,7 +920,7 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
       const armGhost = await carry.handler({ name: "ctxcarry-ghost", carry: true }, {});
       ok(armGhost.isError === true, "but ARMING a name with no hook is still refused — the asymmetry is the point");
       // Leave the carry list as the next block expects to find it: empty, so arming reports an
-      // arm rather than a no-op. A fixture that quietly changes shared state is how a claim below
+      // arm rather than a no-op. A fixture that quietly changes shared state is how an assertion below
       // starts failing for a reason that has nothing to do with what it is testing.
       defsMod.save({ id: SLOT, name: "carry probe", prompt: "throwaway", hooks: [] });
     }
@@ -935,6 +935,6 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     try { defsMod.remove(SLOT); } catch {}
   }
 
-  console.log("\nALL " + n + " CLAIMS PASS");
+  console.log("\nALL " + n + " ASSERTIONS PASS");
   vectors.stop();
 })().catch((e) => { console.error("FAIL", e); process.exit(1); });

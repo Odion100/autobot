@@ -1,4 +1,4 @@
-// THE WORKLIST, PROVEN AGAINST A REAL SESSION — not a mock, because the claim is
+// THE WORKLIST, PROVEN AGAINST A REAL SESSION — not a mock, because the assertion is
 // about what the MODEL does with a tool we hand it, and a mock can only prove
 // what we already believe.
 //
@@ -34,9 +34,9 @@ fs.mkdirSync(path.join(scratch, "work"), { recursive: true });
 process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
 fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
 // AND THE SETTINGS STORE, for the same reason one step further out: the retention window is now a
-// SETTING (`nudge.json keepHours`), so without this override the janitor claims below would read
+// SETTING (`nudge.json keepHours`), so without this override the janitor assertions below would read
 // whatever he has configured on this machine and pass or fail for a reason that has nothing to do
-// with the code. A scratch path that does not exist reads as the defaults, which is what a claim
+// with the code. A scratch path that does not exist reads as the defaults, which is what an assertion
 // about the default window needs.
 process.env.AUTOBOT_NUDGE_FILE = path.join(scratch, "nudge.json");
 
@@ -47,7 +47,7 @@ let pass = 0;
 const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
 
 // ---- 6. OWNERSHIP (RFC-005 §3, pure) -------------------------------------------
-// One concept, two lifetimes: the same structure, keyed by who it belongs to. The claim that
+// One concept, two lifetimes: the same structure, keyed by who it belongs to. The assertion that
 // matters for jobs is separation — a job's list and a session's list must not be the same file,
 // because `job:x` and `session:x` are different things that happen to share a name.
 {
@@ -61,7 +61,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   ok("reading a worklist nobody wrote is empty, not an error");
 
   // ---- THE WHITEBOARD — same file, its own half ----------------------------------
-  // The one claim that makes the two features friends instead of enemies: each write
+  // The one assertion that makes the two features friends instead of enemies: each write
   // patches its own half and preserves the other.
   worklist.writeBoard("session:t-probe", "## held\n- the *draft* under discussion");
   assert.equal(worklist.readBoard("session:t-probe"), "## held\n- the *draft* under discussion");
@@ -86,7 +86,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
   ok("reading a board nobody wrote is empty, not an error");
 
   // ---- RUNS — an execution owns its list --------------------------------------
-  // The claim that motivated the whole feature: a skill firing mid-skill must not
+  // The assertion that motivated the whole feature: a skill firing mid-skill must not
   // destroy the outer skill's half-done list.
   const rid = worklist.newRunId();
   worklist.writeRun(rid, "session:t-probe", [{ id: "1", text: "step one", state: "active" }], "skill:study");
@@ -148,7 +148,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
     // ---- THE RECEIPT (RFC-063) — a record of an ACT, on the record it describes -----------
     // Derivation decays: a lane brought in and then built on top of matches neither by blob nor by
     // patch, and the row said "not brought in" about work already in. The receipt is the moment of
-    // the bring-in, written down. These claims are about the FIELD and its lifetime; the ordering
+    // the bring-in, written down. These assertions are about the FIELD and its lifetime; the ordering
     // rule (a receipt never outranks a derived `out`) is derived in systemview and proven there, in
     // src/organisms/AgentChat/laneVerdict.test.js.
     assert.equal(mine[0].broughtIn, null, "a lane nobody brought in reads null, not undefined");
@@ -187,7 +187,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
       "and it wrote no file doing it");
     ok("markBroughtIn on a run that does not exist writes nothing — a receipt cannot mint a lane");
 
-    // save() carries every key a writer does not own — the claim the receipt needs: a lane's own
+    // save() carries every key a writer does not own — the assertion the receipt needs: a lane's own
     // next list write must not wipe the stamp the owner just put on it.
     worklist.writeRun(lane, "session:proj-a:old-session-id", [{ id: "1", text: "build", state: "done" }], "lane:test/a");
     assert.equal(worklist.laneRuns("proj-a")[0].broughtIn.base, "6dd6cc9",
@@ -260,7 +260,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
     worklist.writeRun(deadRun, "session:t-probe", [{ id: "1", text: "died here", state: "active" }], "skill:dead");
     // THE WINDOW IS PINNED FROM BOTH SIDES, not merely exceeded: a sweep at eleven hours must
     // leave the closed run standing, and one at thirteen must take it. A single far-future call
-    // passed just as happily when the window was fourteen days, so it claimed nothing about it.
+    // passed just as happily when the window was fourteen days, so it asserted nothing about it.
     const fresh = worklist.pruneRuns(Date.now() + 11 * 60 * 60 * 1000);
     assert.equal(worklist.read(worklist.runOwner(oldRun))[0].text, "done long ago",
       "eleven hours on, a closed run is still there — the window is twelve");
@@ -273,7 +273,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
     ok("retention: closed runs age out after twelve hours; died runs stay until someone acts");
 
     // AND THE WINDOW IS HIS TO SET — "how quickly the worklist gets deleted should be added to the
-    // worklist settings." Twelve is the default, not the rule, so the claim has to be that the
+    // worklist settings." Twelve is the default, not the rule, so the assertion has to be that the
     // SETTING decides: the same run that survived eleven hours above is swept at two when the
     // setting says one.
     const settable = worklist.newRunId();
@@ -361,7 +361,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
 
 // ---- THE DOOR'S SHAPE — and no way to testify (RFC-066 §3) ---------------------------------
 // `markBroughtIn` shipped defined, exported and tested with NO caller but its own test: no tool, no
-// IPC, so no agent could write a receipt and zero receipts ever existed. These claims are about the
+// IPC, so no agent could write a receipt and zero receipts ever existed. These assertions are about the
 // door itself — that `set` is the two-parameter verb it has always been, and that there is nothing
 // beside those two an agent could use to claim its own provenance.
 {
@@ -444,7 +444,7 @@ const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
 // find and would read "never" when the truth is "42 days ago", wrong in exactly the case the board
 // exists for. The answer built is one integer per (procedure, place), written at the close.
 //
-// These claims are about that integer. The period arithmetic and the join to an agent's chore
+// These assertions are about that integer. The period arithmetic and the join to an agent's chore
 // lines are proven where they live, in tests/agent-definitions.js.
 //
 // SCRATCH STORE, AND IT IS NOT OPTIONAL: pruneRuns(now + 15 days) below is the call that, run
@@ -603,12 +603,12 @@ ok("a late subscriber renders the current list from history, from ONE event");
 }
 
 // ---- PROVENANCE, READ OFF A REAL SESSION (RFC-066 §3) ---------------------------
-// The claim a unit test cannot make: a model calls the tool it was given, a run is born, and the
+// The assertion a unit test cannot make: a model calls the tool it was given, a run is born, and the
 // HOST — not the input — is what answered "did anyone send me here".
 {
   // A `lane:` SOURCE NEEDS ITS BRANCH TO EXIST (2026-10-08). Registering is what makes a lane a
   // lane — his ruling — so the write is the registration door and it refuses a branch nobody cut.
-  // This session's cwd has to be a real repo holding `test/live-run`, or the claim below would be
+  // This session's cwd has to be a real repo holding `test/live-run`, or the assertion below would be
   // testing the refusal while reading like it tests the write.
   const repo = path.join(scratch, "work");
   const sh = (...args) => require("child_process").spawnSync("git", args, { cwd: repo, encoding: "utf8" });
@@ -687,7 +687,7 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   const now = Date.now();
   const sess = "session:stripproj:abc";
   // writeRun stamps its own `updatedAt`, so the record is aged on disk afterwards — the point of
-  // these claims is the age test, and faking the clock would test the fake.
+  // these assertions is the age test, and faking the clock would test the fake.
   const mk = (id, source, items, updatedAt) => {
     worklist.writeRun(id, sess, items, source);
     const f = path.join(worklist.DIR, `run-${id}.json`);
@@ -761,7 +761,7 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
 // The row above is ABSENT for an unknown source, which is correct and was also silent: nothing
 // told the agent that the list it just wrote is held by nothing. `assignment:run-the-proofs` sat
 // four-of-thirteen and un-nudged from 29 Oct because of exactly that, so the reminder is pinned
-// here beside the claim about the missing row — the two halves of one honest answer.
+// here beside the assertion about the missing row — the two halves of one honest answer.
 {
   const sessions = require("../electron/agents/sessions.cjs");
   const SKILLS = [{ name: "assignment" }];
@@ -789,5 +789,5 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
 }
 
 fs.rmSync(scratch, { recursive: true, force: true });
-console.log(`\n${pass} claims held — the agent worklist\n`);
+console.log(`\n${pass} assertions held — the agent worklist\n`);
 process.exit(0);

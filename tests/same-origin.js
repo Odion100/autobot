@@ -128,4 +128,4 @@ assert.ok(/is not a whitelisted service/.test(src),
   "attach() no longer rejects unknown names — loadService(anyUrl) would become a privilege-escalation primitive");
 ok("attach() still refuses anything not in the whitelist by name");
 
-console.log(`\n${pass} claims held — the same-origin guard (SSRF class)\n`);
+console.log(`\n${pass} assertions held — the same-origin guard (SSRF class)\n`);

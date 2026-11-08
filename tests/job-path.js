@@ -1,6 +1,6 @@
 // smoke:jobpath — THE WHOLE PATH, ONCE, END TO END. RFC-067 §3 and §4.
 //
-// WHY THIS FILE EXISTS. Every piece of the jobs feature had its own claims — the gate in
+// WHY THIS FILE EXISTS. Every piece of the jobs feature had its own assertions — the gate in
 // tests/jobs.js, the pointer in tests/hooks.js, the verbs in tests/context.js, the board in
 // tests/agent-definitions.js, the stamp in tests/worklist.js. Four lanes, five suites, all green,
 // and the sentence nobody had ever asserted was the only one that matters:
@@ -15,7 +15,7 @@
 // hooks.save(), because the tool refused every pointer that was not `skill:` until 2026-10-07 — the
 // engine could fire a job hook that the one agent-facing door could not write. A test that called
 // hooks.save() directly passed throughout. Same for the board: the `chores` TOOL renders it, and the
-// tool was the half with no claims of its own.
+// tool was the half with no assertions of its own.
 import assert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
@@ -79,7 +79,7 @@ requires: ["period"]
   ok("a job is its document — and the document's `requires:` is what the system will refuse against");
 
   // ── 2 · the hook is written through the TOOL, pointing at a JOB, carrying its inputs ───────
-  // The tool, not hooks.save(): see the header. This claim is the door.
+  // The tool, not hooks.save(): see the header. This assertion is the door.
   const tools = ctx.toolsFor({ slot: SLOT, projectCode: "jobpath-proj", by: SLOT });
   const hooksWrite = tools.find((t) => t.name === "hooksWrite");
   const chores = tools.find((t) => t.name === "chores");
@@ -169,7 +169,7 @@ requires: ["period"]
   assert.ok(runs[0].why && /close-the-month/.test(runs[0].why), runs[0].why);
   ok("the run record keeps WHY it ran — §4: you must be able to answer that at 3am");
 
-  // THE LIST IT FINISHED, which this claim used to assert in its NAME and never in its body. The
+  // THE LIST IT FINISHED, which this assertion used to make in its NAME and never in its body. The
   // snapshot read owner `job:<id>` while every item is written under `run:<runId>`, so the field
   // the code calls "the worklist AS IT STOOD when the run ended" came back `[]` on every job that
   // ever closed — and the suite stayed green because it only ever checked status, finishedAt and
@@ -238,7 +238,7 @@ requires: ["period"]
   assert.ok(/\[x\]/.test(said(swept)), said(swept));
   ok("the line stays checked after the 14-day sweep took the run record — the stamp is what the sweep leaves behind");
 
-  // ── 10 · the verb's own refusals, which had no claims anywhere ────────────────────────────
+  // ── 10 · the verb's own refusals, which had no assertions anywhere ────────────────────────────
   const noSlot = ctx.toolsFor({ slot: "", projectCode: "jobpath-proj" }).find((t) => t.name === "chores");
   assert.ok(/no agent slot/.test(said(await noSlot.handler({}, {}))));
   ok("a session with no agent slot carries no chores, and the verb says that rather than answering empty");
@@ -256,7 +256,7 @@ requires: ["period"]
   // record and it is reached only through a hook — so the human path produced a worklist run with
   // the right source and NO job record, and everything reading that record failed SILENTLY: no
   // report pointer could land, the status never flipped, the card had nothing to show. Found by a
-  // behaviour eval on 2026-10-08, not by any of the claims above, because every one of them came
+  // behaviour eval on 2026-10-08, not by any of the assertions above, because every one of them came
   // in through the hook.
   //
   // The fix opens the record when a `job:`-sourced run opens, and says in `why` how it arrived —
@@ -293,7 +293,7 @@ requires: ["period"]
   }
 
   fs.rmSync(scratch, { recursive: true, force: true });
-  console.log(`\n${pass} claims held — the job path, end to end`);
+  console.log(`\n${pass} assertions held — the job path, end to end`);
 })().catch((e) => {
   console.error("FAIL", e);
   try { fs.rmSync(scratch, { recursive: true, force: true }); } catch {}
