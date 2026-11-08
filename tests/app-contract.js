@@ -17,12 +17,63 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(new URL(import.meta.url).pathname);
-const { build } = require(path.join(here, "..", "electron", "apps", "capabilities.cjs"));
+const { build, GRANTS } = require(path.join(here, "..", "electron", "apps", "capabilities.cjs"));
 
 let pass = 0, fail = 0;
 const t = (name, cond) => { cond ? pass++ : fail++; console.log(`  ${cond ? "ok  " : "FAIL"}  ${name}`); };
 
 // ---- the capability map ---------------------------------------------------------------------
+// ---- THE PRELOAD AND THE TABLE MUST AGREE — the bug this file kept missing -----------------------
+//
+// Every assertion above runs `build()` against a LOCAL fixture, which is why a mismatch between
+// the REAL preload and the REAL table was never caught here. Three times now a namespace was added
+// to svPreload.cjs and not to GRANTS, and the gate correctly withheld it for everyone: the surface
+// then rendered "no door" against a shell that HAD the door, and told him to restart — which
+// repeats forever and changes nothing, because a capability missing from the table is ABSENT, not
+// denied. Measured 2026-11-08 on `nudges`: bridge in the preload, handlers in the host, shell four
+// hours newer than both, pane still refusing.
+//
+// So this reads the two REAL files and asserts they agree. A namespace no capability maps is
+// unreachable by every app that will ever exist — which is a silent hole, never a decision.
+{
+  const preload = fs.readFileSync(path.join(here, "..", "electron", "apps", "svPreload.cjs"), "utf8");
+  const start = preload.indexOf("const FULL");
+  assert.ok(start > -1, "svPreload.cjs still declares FULL");
+  const names = [];
+  let depth = 0, entered = false;
+  for (const line of preload.slice(start).split("\n")) {
+    const before = depth;
+    for (const ch of line) {
+      if (ch === "{" || ch === "[" || ch === "(") depth++;
+      else if (ch === "}" || ch === "]" || ch === ")") depth--;
+    }
+    if (!entered && depth > 0) entered = true;
+    const m = /^ {2}([A-Za-z_$][\w$]*)\s*:/.exec(line);
+    if (m && before === 1) names.push(m[1]);
+    if (entered && depth === 0) break;
+  }
+  t("the preload's FULL parses to a real namespace list", names.length > 8);
+
+  // Every namespace any capability can hand over, from the real table.
+  const reachable = new Set();
+  for (const map of Object.values(GRANTS)) for (const ns of Object.keys(map || {})) reachable.add(ns);
+
+  const orphans = names.filter((n) => !reachable.has(n));
+  t(
+    `every preload namespace is mapped by some capability — unmapped: ${orphans.join(", ") || "none"}`,
+    orphans.length === 0,
+  );
+
+  // AND THE OTHER DIRECTION: a table entry naming a namespace the preload does not build is a
+  // grant that hands over nothing, which reads in a registry as a power an app has and does not.
+  const built = new Set(names);
+  const dangling = [...reachable].filter((n) => !built.has(n));
+  t(
+    `every mapped namespace is one the preload actually builds — dangling: ${dangling.join(", ") || "none"}`,
+    dangling.length === 0,
+  );
+}
+
 console.log("\nthe capability map — absent, not denied");
 const FULL = {
   dictation: { listen: 1 }, terminal: { open: 1 }, projects: { list: 1 }, auth: { status: 1 },

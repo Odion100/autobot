@@ -49,6 +49,12 @@ const BUILTINS = [
       "projects", "auth", "agents", "dictation", "voice", "terminal", "components", "systemlynx",
       // The worklist cog's knobs (RFC-075 §3) — the IDE is where the nudge is configured.
       "nudge",
+      // The nudge RECORD — the judges list RFC-078 added (§2.6). Separate from `nudge` because it
+      // is the broader power: an entry switched off here silences a judge for every agent in its
+      // scope. Measured 2026-11-08 — the bridge was in the preload, the handlers were in the host,
+      // the shell was four hours newer than both, and the pane still said "no nudge-record door
+      // yet, restart it" because this word was missing. A restart could never have fixed it.
+      "nudges",
       // The release valve's knobs ride the same cog. THIS line is the one both the nudge's lane and
       // the valve's author forgot: GRANTS maps the capability to namespaces, but an app only gets
       // what its OWN list here asks for — the table alone grants nothing, and the cog renders "no
