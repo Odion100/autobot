@@ -1388,4 +1388,6 @@ function serverFor(identity = {}) {
   return createSdkMcpServer({ name: SERVER, version: "1.0.0", tools: toolsFor(identity) });
 }
 
-module.exports = { SERVER, TOOL_NAMES, serverFor, toolsFor };
+// HUB is exported so the one derivation of the hub's address serves every shell-side dial
+// (nudges.cjs rides it for the judges door) — pointed at, never copied, or it drifts.
+module.exports = { SERVER, TOOL_NAMES, HUB, serverFor, toolsFor };

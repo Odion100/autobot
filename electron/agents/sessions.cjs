@@ -140,6 +140,7 @@ const hooks = require("./hooks.cjs");
 const ledger = require("./ledger.cjs");
 const worklist = require("./worklist.cjs");
 const nudge = require("./nudge.cjs");
+const nudges = require("./nudges.cjs"); // RFC-078 — the nudge record and the write-time judges dial
 const compaction = require("./compaction.cjs");
 const skillSources = require("./skillSources.cjs");
 const context = require("./context.cjs");
@@ -1081,6 +1082,10 @@ function emit(s, event) {
   // ledger that can break a session is worse than no ledger.
   ledger.record(s, event);
   fireHooks(s, event);
+  // RFC-078 §2.3 — THE WRITE-TIME CLOCK. Both halves of `file.changed` (watcher and schema) land
+  // here, so one line covers every write this session makes. Fire-and-forget: the dial is a fetch
+  // and a feed must never wait on a hub.
+  if (event.kind === "file.changed") maybeSteerWrite(s, event);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1369,6 +1374,49 @@ function maybeNudge(s, quietMin) {
     return null;
   }
   return run;
+}
+
+// A VIOLATION STEERS THE SESSION THAT WROTE IT — RFC-078 §2.3, the write-time clock's delivery
+// half. nudges.judgeWrite does everything that can be wrong (the markdown check, the record's
+// gates, the debounce, the dial, the skew-proof read of the answer); this function only delivers —
+// on the SAME ride the run-chaser uses: a user turn pushed onto the session's own input queue,
+// `nextTurnFromHook` marked so the harness knows no human typed it, a receipt in the feed.
+//
+// THE TARGETING IS BY CONSTRUCTION, not by lookup (c9): the event was emitted into `s`, the
+// session whose write it was, and `s` is the only session this function can reach. No other
+// session hears anything because no other session is in the room.
+function maybeSteerWrite(s, event) {
+  nudges
+    .judgeWrite({
+      path: event.path,
+      project: s.projectCode,
+      slot: s.agentId || s.projectCode, // the slot identity hooks use; the project code when a session runs bare
+      session: s.key, // debounce is per nudge × document × SESSION — the key is the session's identity
+    })
+    .then((steers) => {
+      for (const st of steers || []) {
+        try {
+          s.input.push({
+            type: "user",
+            message: { role: "user", content: [{ type: "text", text: st.text }] },
+            parent_tool_use_id: null,
+            session_id: "",
+          });
+          s.nextTurnFromHook = true;
+          // THE RECEIPT CARRIES WHAT WAS SAID — a nudge that only exists as an injected turn is
+          // invisible the moment the transcript scrolls, and nothing here runs invisibly.
+          emit(s, {
+            kind: "nudge.steered",
+            nudge: st.nudge,
+            path: st.path,
+            ...(st.line ? { line: st.line } : {}),
+            text: st.text,
+          });
+          logLife(s, `steered: ${st.nudge} on ${st.path}`);
+        } catch {}
+      }
+    })
+    .catch(() => {}); // a hub that cannot answer fires nothing and breaks nothing
 }
 
 // THE NUDGE'S CLOCK, READABLE (his: "see the countdown… watch it and boom"). The countdown row
