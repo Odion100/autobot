@@ -319,6 +319,65 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
   ok("an unreadable document or an unexpected answer: nothing fires and nothing crashes — absence reads as nothing to report");
 }
 
+// ---- 5.5 THE RECORD'S WRITE SIDE (RFC-078 §2.5) ------------------------------------------------
+// The panel flips a switch and THIS is what changes. One entry, one patch, merged by name — never
+// the whole list, because a surface that must hold the record to change one switch overwrites
+// whatever a concurrent edit just wrote.
+{
+  seedRecord();
+  const before = nudges.entries();
+  const r = nudges.writeEntry("behavioural-claim-cmd-only", { on: false });
+  assert.equal(r.ok, true);
+  assert.equal(r.entry.on, false, "the answer carries what was stored, not what was sent");
+  // THE FILE IS WHAT CHANGED, and a fresh read is what proves it — the machinery reads this file on
+  // every ask, so a write the next read cannot see is a setting that does nothing (c17, c41).
+  assert.equal(nudges.entries().find((e) => e.name === "behavioural-claim-cmd-only").on, false);
+  // AND ONLY THAT ENTRY MOVED.
+  const after = nudges.entries();
+  assert.equal(after.length, before.length, "no entry appeared or vanished");
+  ["run-chaser", "run-untouched-for-days"].forEach((n) =>
+    assert.deepEqual(after.find((e) => e.name === n), before.find((e) => e.name === n), `${n} untouched`),
+  );
+  ok("one entry, one field: the record file changes and the next read honors it (c17)");
+}
+{
+  // A NAME THE FILE HAS NEVER SEEN IS APPENDED — how a nudge the seed grew later gets its row.
+  seedRecord();
+  const n0 = nudges.entries().length;
+  const r = nudges.writeEntry("a-judge-added-later", { clock: "sweep", message: "words" });
+  assert.equal(r.ok, true);
+  assert.equal(nudges.entries().length, n0 + 1);
+  const added = nudges.entries().find((e) => e.name === "a-judge-added-later");
+  assert.equal(added.message, "words");
+  assert.equal(added.on, true, "a new entry is on unless it says otherwise");
+  ok("a name absent from the record is appended, not refused");
+}
+{
+  // THE PATCH GOES THROUGH THE SAME NORMALIZER THE READ SIDE USES, so the panel cannot put the
+  // machinery into a state the machinery would not have read.
+  seedRecord();
+  nudges.writeEntry("behavioural-claim-cmd-only", { severity: "shout", clock: "whenever", debounceMin: -9 });
+  const e = nudges.entries().find((x) => x.name === "behavioural-claim-cmd-only");
+  assert.equal(e.severity, "steer", "an unknown severity falls back, never lands");
+  assert.equal(e.clock, "write", "an unknown clock falls back to the seed's");
+  assert.ok(e.debounceMin >= 0, "a negative debounce cannot be stored");
+  assert.deepEqual(nudges.writeEntry("", { on: false }), { ok: false, error: "a nudge is addressed by name" });
+  ok("junk is normalized or refused — the panel cannot write a record the machinery would not read");
+}
+{
+  // ATOMIC, and the record survives a write that cannot land: a read after a failed write must see
+  // the old file rather than half of one.
+  seedRecord();
+  const good = nudges.entries();
+  const prev = process.env.AUTOBOT_NUDGES_FILE;
+  process.env.AUTOBOT_NUDGES_FILE = path.join(scratch, "no", "such", "dir", "nudges.json");
+  const r = nudges.writeEntry("behavioural-claim-cmd-only", { on: false });
+  process.env.AUTOBOT_NUDGES_FILE = prev;
+  assert.ok(r.ok === true || r.ok === false, "it answers rather than throwing");
+  assert.deepEqual(nudges.entries(), good, "the real record is untouched by a write aimed elsewhere");
+  ok("a write that cannot land is an answer, never a half-written record");
+}
+
 // ---- 6. THE WIRING, READ FROM THE SOURCE (the house pattern, tests/nudge.js) --------------------
 {
   const src = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
