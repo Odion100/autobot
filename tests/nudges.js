@@ -253,17 +253,30 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
 }
 {
   // THE DEBOUNCE (c10): a burst inside the window earns ONE message, per document, per session.
+  //
+  // ASSERTED THROUGH THE REAL PIPELINE, which is two steps now: `judgeWrite` DERIVES and
+  // `confirmSteer` re-derives at delivery and stamps. The window used to be spent at derivation,
+  // and that was wrong for one reason — a steer dropped at delivery for being already fixed would
+  // have spent it anyway, silencing the next genuine violation on the document. c10's keying is
+  // exactly as approved (nudge × document × session); only the moment of the stamp moved, so this
+  // section exercises the pair rather than the first half alone.
   seedRecord();
   nudges.__resetFired();
   ANSWER = { ok: true, violations: [VIOLATION] };
-  assert.equal((await dial({ now: 1000000 })).length, 1);
-  assert.equal((await dial({ now: 1000000 + 2 * 60000 })).length, 0, "two minutes later: inside the 10-minute window");
-  assert.equal((await dial({ now: 1000000 + 9 * 60000 })).length, 0, "nine minutes later: still inside");
-  assert.equal((await dial({ now: 1000000 + 11 * 60000 })).length, 1, "past the window, it may speak again");
-  assert.equal((await dial({ now: 1000000 + 12 * 60000, session: "session:sv:other" })).length, 1,
+  const spoke = async (opts = {}) => {
+    const steers = await dial(opts);
+    let went = 0;
+    for (const st of steers) if (await nudges.confirmSteer(st, { session: opts.session || "session:sv:1", now: opts.now })) went++;
+    return went;
+  };
+  assert.equal(await spoke({ now: 1000000 }), 1, "the first write speaks");
+  assert.equal(await spoke({ now: 1000000 + 2 * 60000 }), 0, "two minutes later: inside the 10-minute window");
+  assert.equal(await spoke({ now: 1000000 + 9 * 60000 }), 0, "nine minutes later: still inside");
+  assert.equal(await spoke({ now: 1000000 + 11 * 60000 }), 1, "past the window, it may speak again");
+  assert.equal(await spoke({ now: 1000000 + 12 * 60000, session: "session:sv:other" }), 1,
     "a DIFFERENT session's write is its own bookkeeping row");
   ANSWER = { ok: true, violations: [{ ...VIOLATION, path: "/repo/RFCs/RFC-10.md" }] };
-  assert.equal((await dial({ now: 1000000 + 12 * 60000, path: "/repo/RFCs/RFC-10.md" })).length, 1,
+  assert.equal(await spoke({ now: 1000000 + 12 * 60000, path: "/repo/RFCs/RFC-10.md" }), 1,
     "a DIFFERENT document is too — the key is nudge × document × session");
   ok("a burst of writes inside the debounce window arrives as one message, keyed per nudge × document × session (c10)");
 }
@@ -771,6 +784,89 @@ const readQueueFile = () => JSON.parse(fs.readFileSync(QUEUE, "utf8"));
   assert.ok(!/enqueueAudit/.test(src.replace(m[0], "")),
     "…and NOWHERE else: the dial seam is the only place a write becomes an audit entry");
   ok("the wiring: the same file.changed that asks the judges enqueues for the manager (c24)");
+}
+
+// ---- 8 · THE STEER IS RE-DERIVED AT DELIVERY, AND ONLY THEN STAMPED --------------------------
+//
+// The write clock's steer is a QUEUED TURN, taken whenever the session next yields — and in
+// between, the agent is usually still working on the very document that was judged. So the fix
+// routinely lands BEFORE the message arrives, and the message then describes a violation that no
+// longer exists. RFC-078's principle is that a fixed violation does not get removed, it STOPS
+// EXISTING; the queue was the one place that stopped being true.
+//
+// The stamp moved with it, and that is the half worth understanding: stamping at derivation would
+// spend the debounce window on a message about to be dropped, silencing the NEXT genuine violation
+// on the same document. c10's keying is untouched — still per nudge × document × session — only
+// the moment of the stamp moved.
+{
+  nudges.__resetFired();
+  const steer = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9.md", abs: "/repo/RFCs/RFC-9.md", project: "sv", line: 12 };
+
+  // STILL STANDING — delivered, and the window is stamped HERE.
+  ANSWER = { ok: true, violations: [VIOLATION] };
+  assert.equal(await nudges.confirmSteer(steer, { session: "s1" }), true, "a violation that still stands is delivered");
+  assert.equal(
+    nudges.firedWithin("behavioural-claim-cmd-only", { doc: "/repo/RFCs/RFC-9.md", session: "s1", min: 10 }),
+    true,
+    "…and the stamp landed at DELIVERY — the window is spent only on a message that actually went",
+  );
+  ok("a steer whose violation still stands is delivered, and the debounce is stamped at delivery");
+}
+{
+  nudges.__resetFired();
+  const steer = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9.md", abs: "/repo/RFCs/RFC-9.md", project: "sv", line: 12 };
+
+  // FIXED IN THE MEANTIME — dropped, and crucially the window is NOT spent.
+  ANSWER = { ok: true, violations: [] };
+  assert.equal(await nudges.confirmSteer(steer, { session: "s1" }), false, "a violation gone by delivery is dropped");
+  assert.equal(
+    nudges.firedWithin("behavioural-claim-cmd-only", { doc: "/repo/RFCs/RFC-9.md", session: "s1", min: 10 }),
+    false,
+    "and the window was NOT spent on it — the next genuine violation on this document can still speak",
+  );
+
+  // THE DOCUMENT IS RE-READ, not remembered: the ask is recorded against the absolute path.
+  assert.ok(CALLS.some((c) => c.ask === "file" && c.path === "/repo/RFCs/RFC-9.md"),
+    "delivery asked the judges again rather than trusting the steer it was handed");
+
+  // A DIFFERENT judge's violation standing on the same document does not rescue this steer.
+  ANSWER = { ok: true, violations: [{ ...VIOLATION, nudge: "met-without-note" }] };
+  assert.equal(await nudges.confirmSteer(steer, { session: "s1" }), false,
+    "another judge's violation on the same document is not this steer's — dropped by NAME, not by document");
+  ok("a steer fixed before the turn came round is dropped, by name, and spends no window");
+}
+{
+  nudges.__resetFired();
+  const steer = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9.md", abs: "/repo/RFCs/RFC-9.md", project: "sv" };
+  ANSWER = { ok: true, violations: [VIOLATION] };
+
+  // TWO DERIVATIONS, ONE MESSAGE. With the stamp at delivery, judgeWrite can legitimately produce
+  // two steers for one burst; the window collapses them HERE instead of at derivation.
+  assert.equal(await nudges.confirmSteer(steer, { session: "s1" }), true, "the first one goes");
+  assert.equal(await nudges.confirmSteer(steer, { session: "s1" }), false, "the second is swallowed by the window");
+  assert.equal(await nudges.confirmSteer(steer, { session: "s2" }), true, "another session has its own row — never debounced by mine");
+  ok("the window collapses a burst at delivery, per session — c10's keying unchanged, only its moment moved");
+}
+{
+  nudges.__resetFired();
+  // A JUDGE THAT CANNOT ANSWER MUST NEVER SWALLOW A STANDING VIOLATION — the same direction every
+  // other failure in this module falls. Deliver, and stamp, so it cannot also loop.
+  FAIL = true;
+  const steer = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9.md", abs: "/repo/RFCs/RFC-9.md", project: "sv" };
+  assert.equal(await nudges.confirmSteer(steer, { session: "s1" }), true, "an unreadable re-check delivers rather than silently dropping");
+  assert.equal(nudges.firedWithin("behavioural-claim-cmd-only", { doc: "/repo/RFCs/RFC-9.md", session: "s1", min: 10 }), true,
+    "…and it is stamped, so a judge that is broken for an hour cannot nudge every turn");
+  FAIL = null;
+
+  // A SWEEP OR RUN STEER HAS NOTHING TO RE-READ and must pass through untouched — those clocks
+  // derive and deliver inside one tick, and they stamp themselves.
+  nudges.__resetFired();
+  assert.equal(await nudges.confirmSteer({ nudge: "run-chaser", run: "abc" }, { session: "s1" }), true,
+    "a run steer carries no document — delivered as derived");
+  assert.equal(nudges.firedWithin("run-chaser", { doc: "", session: "s1", min: 10 }), false,
+    "…and this door did not stamp it — the run clock owns its own bookkeeping");
+  assert.equal(await nudges.confirmSteer(null, { session: "s1" }), false, "nothing is not a steer");
+  ok("an unreadable re-check still delivers; a steer with no document passes through and is not stamped here");
 }
 
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);

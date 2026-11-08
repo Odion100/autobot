@@ -256,10 +256,16 @@ async function judgeWrite({ path: p = "", project = "", slot = "", session = "",
     if (!message) continue; // nothing to say is not a delivery
     const line = Number(v.line) || 0;
     const detail = String(v.detail || "").trim();
-    markFired(name, { doc, session, now });
+    // NO STAMP HERE — see confirmSteer below. This clock's steer is QUEUED as a turn and delivered
+    // whenever the session next takes one, so the stamp belongs at delivery: stamping now would
+    // spend the window on a message that may be dropped for being stale, silencing the next
+    // GENUINE violation on this document. The two sweep clocks still stamp at derivation because
+    // they derive and deliver inside one tick.
     out.push({
       nudge: name,
       path: doc,
+      abs: p, // what delivery re-reads — `path` may be the violation's relative one
+      project,
       ...(line ? { line } : {}),
       text:
         `⚖️ Steering nudge — from the harness, not the human. A judge reported a violation in a ` +
@@ -268,6 +274,48 @@ async function judgeWrite({ path: p = "", project = "", slot = "", session = "",
     });
   }
   return out;
+}
+
+// DERIVED ON EVERY ASK INCLUDES THE ASK AT DELIVERY — the write clock's one honest gap, closed.
+//
+// `judgeWrite` derives when the file changes; `deliverSteers` pushes a TURN, which the session
+// takes whenever it next yields. Between those two moments the agent is usually still working on
+// the very document that was judged — so the fix often lands first and the steer then reports a
+// violation that no longer exists. Measured 2026-11-08: a claim was marked met with no fold, the
+// fold went in, the mark then came off entirely, and the steer still arrived describing the
+// original state. RFC-078's own principle is that a violation is not removed but STOPS EXISTING
+// (the derived-on-every-ask claim); a queued message was the one place that stopped being true.
+//
+// So the steer is re-derived here, and only now is the debounce stamped. Three outcomes:
+//   · the violation is gone      → dropped, and the caller says so in the feed (nothing is invisible)
+//   · another steer already went  → dropped by the window, which is what the window is for
+//   · it still stands             → stamped and delivered
+//
+// A re-read that THROWS delivers anyway: a judge that cannot answer must never swallow a standing
+// violation, which is the same direction every other failure in this module falls.
+async function confirmSteer(st, { session = "", now = Date.now() } = {}) {
+  if (!st || typeof st !== "object") return false;
+  if (!st.abs) return true; // a sweep or run steer — derived and delivered in one tick, nothing to re-read
+  const name = String(st.nudge || "").trim();
+  if (!name) return false;
+  const doc = String(st.path || st.abs);
+  const list = entries();
+  if (inDebounce(name, { doc, session, now }, list)) return false;
+  let violations;
+  try {
+    // THE JUDGES DIRECTLY, not judgeDocument — that wrapper returns [] on a throw, which would
+    // make "the judge could not read it" indistinguishable from "there is no violation" and so
+    // drop a STANDING violation silently. The distinction is the whole point of this branch, and
+    // the suite's unreadable-re-check case is what caught it.
+    const out = await judges().forFile(st.abs, { path: st.abs, project: st.project || "" });
+    violations = Array.isArray(out) ? out : [];
+  } catch {
+    markFired(name, { doc, session, now });
+    return true;
+  }
+  if (!(violations || []).some((v) => v && String(v.nudge || "").trim() === name)) return false;
+  markFired(name, { doc, session, now });
+  return true;
 }
 
 // ── THE AUDIT QUEUE — RFC-078 §2.7, slice 3.4 ──────────────────────────────────────────────────
@@ -539,5 +587,5 @@ module.exports = {
   writeEntry, writeRecord,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
   QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
-  isRegisteredDocumentWrite,
+  isRegisteredDocumentWrite, confirmSteer,
 };

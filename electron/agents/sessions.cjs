@@ -1414,9 +1414,24 @@ function maybeSteerWrite(s, event) {
 // turn pushed onto the session's input queue, `nextTurnFromHook` marked so the harness knows no
 // human typed it, a receipt in the feed. A second copy of this block per clock is how the two
 // clocks would start delivering differently.
-function deliverSteers(s, steers) {
+async function deliverSteers(s, steers) {
   for (const st of steers || []) {
     try {
+      // RE-DERIVED AT DELIVERY (nudges.confirmSteer): a write-clock steer is a queued TURN, so the
+      // agent has usually kept working on the judged document in between and the fix often lands
+      // first. A message describing a violation that no longer exists is worse than no message —
+      // it sends a reader to a correct document and spends their trust. The drop is SAID in the
+      // feed, because a steer that vanishes silently is indistinguishable from one never derived.
+      if (!(await nudges.confirmSteer(st, { session: s.key }))) {
+        emit(s, {
+          kind: "nudge.dropped",
+          nudge: st.nudge,
+          ...(st.path ? { path: st.path } : {}),
+          reason: "the violation was gone by the time the turn came round",
+        });
+        logLife(s, `steer dropped (already fixed): ${st.nudge} on ${st.path || ""}`);
+        continue;
+      }
       s.input.push({
         type: "user",
         message: { role: "user", content: [{ type: "text", text: st.text }] },
@@ -1475,7 +1490,7 @@ function maybeSweepJudges(s) {
         cooldownMin,
         excused: nudge.excusedOf,
       }),
-    );
+    ).catch(() => {}); // async now — the enclosing try cannot catch a rejection it does not await
   } catch {}
   // THE PROJECT-WIDE DOOR, dialled for this session's own project when it is a connected one.
   // Delivery lands on this session — a RUNNING session of the project by construction, idle at
