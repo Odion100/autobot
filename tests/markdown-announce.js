@@ -265,6 +265,29 @@ console.log("\nmarkBlock — the agent's door, with its rules");
   const prose = await sessions.markBlock(doc, 2, { state: "met", note: "x" }, "buapi");
   assert.ok(!prose.ok && /nothing to mark/.test(prose.error));
   ok("a line holding neither block refuses — the verb cannot write into prose");
+
+  // A CLAIM GROWN A PROOF FOLD IS STILL A CLAIM. The doctrine grows `::claim` to a `::::claim`
+  // container the moment it carries evidence — and the two-colon matcher refused exactly those,
+  // so the better a claim got, the deader the door (found marking RFC-076's c19/c20/c22, each
+  // standing right there with its proof folded in, the verb answering "nothing to mark").
+  const grown = path.join(tmp, "grown.md");
+  fs.writeFileSync(grown, [
+    "# a plan",
+    "",
+    "::rfc{id=RFC-202}",
+    "::members{who=buapi}",
+    "",
+    "::::claim[the grown one]{id=c1}",
+    ":::cmd",
+    "echo proof",
+    ":::",
+    "::::",
+  ].join("\n"));
+  await sessions.announceDocument(grown);
+  const container = await sessions.markBlock(grown, 6, { state: "met", note: "ran it; saw it" }, "buapi");
+  assert.ok(container.ok && container.marked === "claim", container.error || "");
+  assert.match(fs.readFileSync(grown, "utf8").split("\n")[5], /state=met by=buapi/);
+  ok("a ::::claim container marks through the same door — growing the proof fold cannot kill the verb");
 }
 
 off();

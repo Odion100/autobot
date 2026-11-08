@@ -1699,7 +1699,13 @@ async function markBlock(absPath, line, { state, note } = {}, by = "") {
   } catch {
     return { ok: false, error: `cannot read ${abs}` };
   }
-  const isClaim = /^\s*::claim\b/.test(row);
+  // `:{2,}`, NOT exactly two — a claim that carries its proof is GROWN to a container
+  // (`::::claim` with result blocks in its body, RFC-075's own instruction), and the two-colon
+  // matcher refused exactly the claims the doctrine says to build: marked-and-proved ones. Found
+  // 2026-11-08, marking RFC-076's c19/c20/c22 after folding their proofs in — the door said
+  // "nothing to mark" about three claims standing right there. The objective matcher below always
+  // accepted its container depths.
+  const isClaim = /^\s*:{2,}\s*claim\b/.test(row);
   const isObjective = /^\s*:{3,}\s*objective\b/.test(row);
   if (!isClaim && !isObjective)
     return { ok: false, error: `line ${n} holds no ::claim and no :::objective — nothing to mark` };
