@@ -312,6 +312,48 @@ function readAuditQueue() {
     .filter((e) => e.project && e.path && e.at);
 }
 
+// ── THE RECORD'S WRITE SIDE (RFC-078 §2.5) ──────────────────────────────────────────────────────
+// The panel flips a switch and THIS is what changes — the file the machinery reads on every ask, so
+// there is no second copy of the state and no cache to go stale (c17, c41). Read is `entries()`
+// above; nothing else in this module writes.
+//
+// MERGE BY NAME, NEVER REPLACE THE LIST. The panel sends one entry's one changed field, the way
+// nudge.writeSettings takes a patch, because a surface that has to hold the whole record to change
+// one switch is a surface that overwrites whatever a concurrent edit just wrote. A name that is not
+// in the file yet is APPENDED, which is how a nudge the seed grew later gets its row.
+//
+// WHAT IT WILL NOT DO: invent entries, reorder them, or write a field normalizeEntry would reject.
+// Every patch goes through the same normalizer the read side uses, so the panel cannot put the
+// machinery into a state the machinery would not have read.
+function writeEntry(name, patch = {}) {
+  const key = String(name || "").trim();
+  if (!key) return { ok: false, error: "a nudge is addressed by name" };
+  const list = entries();
+  const at = list.findIndex((e) => e.name === key);
+  const merged = normalizeEntry({ ...(at >= 0 ? list[at] : { name: key }), ...patch, name: key });
+  if (!merged) return { ok: false, error: `could not read a nudge out of that patch for "${key}"` };
+  const next = at >= 0 ? list.map((e, i) => (i === at ? merged : e)) : [...list, merged];
+  if (!writeRecord(next)) return { ok: false, error: "the record could not be written" };
+  return { ok: true, entry: merged, entries: next };
+}
+
+// ATOMIC, same discipline as the queue below: tmp in the same directory then rename, so a clock
+// reading mid-write sees the old record or the new one and never half a JSON file. A record that
+// cannot be written is a refusal the caller reports, never a half-applied flip.
+function writeRecord(list) {
+  const f = FILE();
+  const tmp = `${f}.tmp-${process.pid}`;
+  try {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(tmp, `${JSON.stringify(list, null, 2)}\n`);
+    fs.renameSync(tmp, f);
+    return true;
+  } catch {
+    try { fs.unlinkSync(tmp); } catch {}
+    return false;
+  }
+}
+
 // ATOMIC: tmp in the same directory, then rename — a drain that reads mid-write must see the old
 // queue or the new one, never half a JSON file.
 function writeAuditQueue(list) {
@@ -494,6 +536,7 @@ async function judgeProject({ project = "", slot = "", session = "", now = Date.
 module.exports = {
   FILE, SEED, BUILT_IN, SHELL_LOCAL, SWEEP_MAX_STEERS, entries, enabledFor, messageOf,
   inDebounce, firedWithin, markFired, __resetFired, judgeWrite, judgeDocument, __setJudges,
+  writeEntry, writeRecord,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
   QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
   isRegisteredDocumentWrite,

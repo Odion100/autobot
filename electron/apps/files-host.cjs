@@ -10,6 +10,7 @@ const files = require("./files.cjs");
 const sessions = require("../agents/sessions.cjs");
 const definitions = require("../agents/definitions.cjs");
 const nudge = require("../agents/nudge.cjs");
+const nudges = require("../agents/nudges.cjs");
 const compaction = require("../agents/compaction.cjs");
 
 const PROJECTS_FILE = path.join(os.homedir(), ".autobot", "projects.json");
@@ -228,6 +229,26 @@ function register(getWin) {
     picks: typeof sessions.nudgePicks === "function" ? sessions.nudgePicks() : {},
   }));
   ipcMain.handle("nudge:settings-write", (_e, patch = {}) => nudge.writeSettings(patch));
+
+  // THE NUDGE RECORD (RFC-078 §2.1, drawn by §2.5's band panel) — the LIST of nudges, which is a
+  // different file from the chaser's own knobs above: `nudges.json` is identity, on/off, scope,
+  // severity, wording and clock per nudge, while `nudge.json` holds the chaser's idle/cooldown
+  // numbers. Both doors exist for the same one-home reason — the harness reads these on every clock
+  // tick, so a copy the window owned would be a setting that changes nothing.
+  //
+  // `builtIn` rides along because a row has to show what WOULD arrive while its message is empty;
+  // without it the panel would either render a blank where the real line goes or keep a second copy
+  // of the wording. `shellLocal` tells the panel which rows are judged over run state rather than
+  // documents, which is what decides whether a debounce field means anything on that row.
+  ipcMain.handle("nudges:record", () => ({
+    ok: true,
+    entries: nudges.entries(),
+    builtIn: nudges.BUILT_IN,
+    shellLocal: [...nudges.SHELL_LOCAL],
+  }));
+  // ONE ENTRY, ONE PATCH — merged by name and normalized by the same reader the machinery uses, so
+  // the panel cannot write a record the machinery would not have read.
+  ipcMain.handle("nudges:record-write", (_e, { name = "", patch = {} } = {}) => nudges.writeEntry(name, patch));
 
   // AUTO-COMPACTION — the release valve's settings door, same contract as the nudge's: defaults
   // returned whether or not a file exists, writes merge one field at a time, and the harness owns

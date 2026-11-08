@@ -65,6 +65,15 @@ const FULL = {
     read: () => ipcRenderer.invoke("nudge:settings"),
     write: (patch) => ipcRenderer.invoke("nudge:settings-write", patch),
   },
+  // THE NUDGE RECORD — the LIST (RFC-078), beside the singular `nudge` above which is the chaser's
+  // own knobs. Plural because they are two files and two subjects: this one is which nudges exist,
+  // where each applies, what it says and which clock runs it. `write` takes one entry's name and a
+  // patch of changed fields, never the whole list, so two surfaces editing different rows cannot
+  // overwrite each other.
+  nudges: {
+    read: () => ipcRenderer.invoke("nudges:record"),
+    write: (name, patch) => ipcRenderer.invoke("nudges:record-write", { name, patch }),
+  },
   // AUTO-COMPACTION — the release valve's knobs, same one-home rule as the nudge's: the harness
   // reads these on every usage tick, so a copy the window owned would be a setting that does nothing.
   compaction: {
