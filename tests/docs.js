@@ -334,6 +334,26 @@ try {
   try { await docs.index("badreg", { registry: "no-such-project" }); } catch (e) { threw = e.message; }
   ok("an unknown project is refused, not an empty success", /unknown project/.test(threw));
 
+  // ---- RFC-078 §2.6 — THE TREATMENT: how to read hits from this shelf --------------------------
+  console.log("\na shelf's treatment is two layers off one record — the registry flag IS the baseline");
+  ok("a plain corpus with no treatment says nothing", docs.treatmentOf(docs.corpusNamed("smoke")) === null);
+  const regT = docs.treatmentOf(docs.corpusNamed("regdocs"));
+  ok("a registry-fed corpus earns the derived baseline with nobody authoring a word",
+    regT && regT.said === null && /auto-generated from this project's registered documents — work history, not doctrine/.test(regT.derived));
+  docs.saveCorpora(docs.corpora().map((c) => (c.name === "regdocs" ? { ...c, treatment: "trust the dates, not the prose" } : c)));
+  const bothT = docs.treatmentOf(docs.corpusNamed("regdocs"));
+  ok("his statement rides ON TOP of the baseline — both layers, same record",
+    bothT && bothT.said === "trust the dates, not the prose" && /work history, not doctrine/.test(bothT.derived));
+  docs.saveCorpora(docs.corpora().map((c) => (c.name === "smoke" ? { ...c, treatment: "the handbook — doctrine, follow it" } : c)));
+  const saidOnly = docs.treatmentOf(docs.corpusNamed("smoke"));
+  ok("an authored-only corpus prints just his statement", saidOnly && saidOnly.said === "the handbook — doctrine, follow it" && saidOnly.derived === null);
+  ok("a treatment of pure whitespace is no statement at all", docs.treatmentOf({ name: "x", treatment: "   " }) === null);
+
+  console.log("\nlistCorpora carries the treatment out to the panel — the field it edits is the field it shows");
+  const listed = docs.listCorpora();
+  ok("the authored treatment rides the row", (listed.find((c) => c.name === "smoke") || {}).treatment === "the handbook — doctrine, follow it");
+  ok("a corpus with none carries no key", !("treatment" in (listed.find((c) => c.name === "vendor-api") || {})));
+
   console.log("\ndrop removes what was embedded, never what was written");
   const d = await docs.drop("scratch");
   ok("the collection is gone", !store.has("docs-scratch"));

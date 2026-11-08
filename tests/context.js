@@ -271,6 +271,64 @@ let n = 0; const ok = (b, what) => { n++; if (!b) { console.error("FAIL", what);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // ---- RFC-078 §2.6 — A SHELF SAYS HOW TO READ IT -------------------------------------------
+  // One line per contributing corpus, at the BOTTOM of any answer carrying its hits — instructions
+  // where the results are, not metadata in a manual. Two layers off one record: his `treatment`
+  // statement, and the derived machine-fed baseline a `registry:` entry earns by construction.
+  // Exercised through the REAL `context` tool handler, because the lines live in its rendering —
+  // a test against docs.treatmentOf() alone would pass with retrieval printing nothing.
+  {
+    const tools = ctx.serverFor({ slot: "smoketest", projectCode: "smoketest-sys" }).instance._registeredTools;
+    const said = (r) => (r.content || []).map((c) => c.text).join("");
+    const CORP = "smoketest-shelf";
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shelf-treatment-"));
+    fs.writeFileSync(path.join(dir, "shelf.md"),
+      "# Shelf treatment fixture\n\nthe SHELF-TREATMENT-FIXTURE body: how retrieval says what a shelf is, written long enough to clear the chunker's floor.\n");
+    const made = await tools.docsIndex.handler({ name: CORP, root: dir }, {});
+    ok(!made.isError, "the shelf-treatment fixture corpus indexes");
+    const ask = () => tools.context.handler({ question: "SHELF-TREATMENT-FIXTURE how retrieval says what a shelf is", corpus: CORP, kind: "docs" }, {});
+    // reshape the one record under test — the same file the panel's save writes
+    const reshape = (patch) =>
+      docs.saveCorpora(docs.corpora().map((c) => {
+        if (c.name !== CORP) return c;
+        const next = { ...c, ...patch };
+        for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+        return next;
+      }));
+
+    // NEITHER layer — no line at all. A shelf with nothing to say must not print a header.
+    const bare = await ask();
+    ok(/SHELF-TREATMENT-FIXTURE/.test(said(bare)) && !/How to read these shelves/.test(said(bare)),
+      "a corpus with no treatment and no registry prints NO reading line");
+
+    // HIS STATEMENT ALONE (c20): the treatment prints, and prints at the BOTTOM — after the hits.
+    reshape({ treatment: "the vendor's word, not ours — quote it, never paraphrase it" });
+    const authored = await ask();
+    const aText = said(authored);
+    ok(/How to read these shelves:\n◦ smoketest-shelf — the vendor's word, not ours/.test(aText),
+      "a corpus carrying a treatment prints it, one line, named for the corpus");
+    ok(aText.indexOf("How to read these shelves") > aText.indexOf("SHELF-TREATMENT-FIXTURE body"),
+      "...and the line is at the BOTTOM of the results, after the hits");
+
+    // THE DERIVED BASELINE (c21): a registry-fed corpus says it is machine-fed with nobody
+    // authoring a word — `registry:` on the record is the whole trigger.
+    reshape({ treatment: undefined, registry: "smoketest-regproj" });
+    const derived = await ask();
+    ok(/◦ smoketest-shelf — auto-generated from this project's registered documents — work history, not doctrine/.test(said(derived)),
+      "a registry-fed corpus prints the derived baseline with no authored word anywhere");
+
+    // BOTH (c37): his statement prints ON TOP of the baseline — first on the shelf's one line.
+    reshape({ treatment: "the janitor's ledger — trust the dates, not the prose" });
+    const layered = await ask();
+    const lText = said(layered);
+    const line = (lText.split("How to read these shelves:\n")[1] || "").split("\n")[0];
+    ok(/^◦ smoketest-shelf — the janitor's ledger — trust the dates, not the prose · auto-generated from this project's registered documents/.test(line),
+      "a registry corpus with a treatment prints HIS statement on top of the derived baseline, one line");
+
+    await vectors.drop("docs-" + CORP);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // ── RFC-013 — CONTEXT SUBSCRIPTIONS ─────────────────────────────────────────────────────
   // The reader subscribes; content is never touched. Subscriptions live in the agent's DEF —
   // so these assertions create a throwaway agent definition and delete it after.

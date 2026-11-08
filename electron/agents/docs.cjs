@@ -195,6 +195,25 @@ function carries(corpus, slot) {
   return who.includes(String(slot));
 }
 
+// RFC-078 §2.6 — HOW TO READ HITS FROM THIS SHELF. Two layers, one fact. A corpus fed by the
+// documents registry is machine-fed, and SAYS SO without anybody authoring a word — the derived
+// baseline below is true by construction, keyed off the same `registry:` flag that feeds the
+// corpus, so there is no second copy to drift. His `treatment` value, when he writes one, prints
+// on top of that baseline; an authored-only corpus prints just its statement; a corpus with
+// neither prints nothing. Retrieval renders these at the bottom of any answer carrying the
+// corpus's hits — instructions where the results are, not metadata in a manual.
+const DERIVED_TREATMENT =
+  "auto-generated from this project's registered documents — work history, not doctrine";
+
+function treatmentOf(corpus) {
+  if (!corpus) return null;
+  const said =
+    typeof corpus.treatment === "string" && corpus.treatment.trim() ? corpus.treatment.trim() : null;
+  const derived = corpus.registry ? DERIVED_TREATMENT : null;
+  if (!said && !derived) return null;
+  return { said, derived };
+}
+
 function saveCorpora(list) {
   fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
   fs.writeFileSync(CONFIG, JSON.stringify(list, null, 2));
@@ -679,6 +698,8 @@ function listCorpora() {
       kind: c.kind || "permanent",
       agents: audienceOf(c),
       ...(c.registry ? { registry: c.registry } : { root: c.root, glob: c.glob || "**/*.md" }),
+      // his statement on how to read hits from this shelf — the panel edits it, retrieval prints it
+      ...(c.treatment ? { treatment: c.treatment } : {}),
       matched,
       files: sources.size,
       chunks: rows.length,
@@ -694,6 +715,7 @@ module.exports = {
   corpora,
   saveCorpora,
   corpusNamed,
+  treatmentOf,
   audienceOf,
   carries,
   collectionOf,

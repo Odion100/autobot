@@ -309,13 +309,25 @@ function register(surfaceOf) {
       // re-publish a corpus to everyone.
       const was = docs.corpora().find((c) => c.name === rec.name) || {};
       const audience = rec.agents !== undefined ? rec.agents : was.agents;
+      // THE TREATMENT SURVIVES A SAVE the same way the audience does — carried from the form when
+      // the form sends it, from the existing record when it does not. An empty string from the
+      // form CLEARS it: the spread below drops the key, which is how he takes a statement back.
+      const treatment = rec.treatment !== undefined ? rec.treatment : was.treatment;
+      // A REGISTRY CORPUS STAYS REGISTRY-FED (RFC-078 §2.6 — one fact, no second copy). The feed
+      // is not the form's to rewrite: rebuilding a machine-fed record with the form's root/glob
+      // would turn it into a broken glob corpus on any save of its treatment or audience.
       docs.saveCorpora(all.concat([{
         name: rec.name,
         kind: rec.kind === "working" ? "working" : "permanent",
-        root: rec.root,
-        glob: rec.glob || "**/*.md",
-        ...(Array.isArray(rec.exclude) && rec.exclude.length ? { exclude: rec.exclude } : {}),
+        ...(was.registry
+          ? { registry: was.registry }
+          : {
+              root: rec.root,
+              glob: rec.glob || "**/*.md",
+              ...(Array.isArray(rec.exclude) && rec.exclude.length ? { exclude: rec.exclude } : {}),
+            }),
         ...(audience !== undefined ? { agents: audience } : {}),
+        ...(typeof treatment === "string" && treatment.trim() ? { treatment: treatment.trim() } : {}),
       }]));
       return { corpora: docs.listCorpora() };
     } catch (e) {

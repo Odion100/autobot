@@ -1109,7 +1109,18 @@ function toolsFor(identity = {}) {
               parts.push(`${hits.length === 1 ? "One note matches" : hits.length + " notes match"} — learned, and editable with remember(id=) / forget():\n\n` + lines.join("\n\n"));
             if (sections.length)
               parts.push(`${sections.length} documentation section(s) — derived from files; to change one, fix the file and re-index:\n\n` + docLines.join("\n\n"));
-            return { content: [{ type: "text", text: parts.join("\n\n") + heldLine + blind }] };
+            // RFC-078 §2.6 — HOW TO READ WHAT JUST ANSWERED. One line per contributing corpus, at
+            // the bottom of the results — instructions where the hits are, not metadata in a
+            // manual nobody opens. Two layers: a registry-fed corpus says it is machine-fed with
+            // nobody authoring a word (true by construction, off the same `registry:` flag that
+            // feeds it), and his `treatment` statement prints on top of that baseline when he has
+            // written one. A corpus carrying neither prints nothing.
+            const readLines = [...new Set(sections.map((h) => h.corpus))]
+              .map((name) => ({ name, t: docs.treatmentOf(docs.corpusNamed(name)) }))
+              .filter((x) => x.t)
+              .map(({ name, t }) => `◦ ${name} — ${[t.said, t.derived].filter(Boolean).join(" · ")}`);
+            const readBlock = readLines.length ? "\n\nHow to read these shelves:\n" + readLines.join("\n") : "";
+            return { content: [{ type: "text", text: parts.join("\n\n") + readBlock + heldLine + blind }] };
           } catch (e) {
             return { content: [{ type: "text", text: e.message }], isError: true };
           }
