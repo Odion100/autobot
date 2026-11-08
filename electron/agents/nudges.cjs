@@ -202,12 +202,19 @@ const markFired = (name, { doc = "", session = "", now = Date.now() } = {}) =>
   lastFired.set(fireKey(name, doc, session), now);
 const __resetFired = () => lastFired.clear();
 
+// ONE GATE FOR "THIS WRITE COULD BE A REGISTERED DOCUMENT" — the shell-side approximation
+// (markdown under a project's session) that the judges dial has always used, factored out because
+// the audit enqueue (§2.7, slice 3.4) rides the exact same condition. One predicate, two riders:
+// if they shared only a copy of the regex, the day one copy moved the dial and the queue would
+// disagree about what a document is, and nothing would say so.
+const isRegisteredDocumentWrite = (p) => /\.(md|markdown)$/i.test(String(p || ""));
+
 // ── THE WRITE-TIME DIAL ─────────────────────────────────────────────────────────────────────────
 // `file.changed` landed in a session; is there anything to steer it with? Returns the gated
 // steering messages — the caller (sessions.cjs) owns the delivery. Every failure path returns [].
 async function judgeWrite({ path: p = "", project = "", slot = "", session = "", now = Date.now(), hub = "" } = {}) {
   // Only a markdown file can be a registered document — anything else never costs a dial.
-  if (!/\.(md|markdown)$/i.test(String(p || ""))) return [];
+  if (!isRegisteredDocumentWrite(p)) return [];
   const list = entries();
   // No write-clock nudge is on and in scope for this session → the hub is not even dialled.
   const armed = list.some((e) => e.clock === "write" && enabledFor(e.name, { project, slot }, list));
@@ -247,6 +254,78 @@ async function judgeWrite({ path: p = "", project = "", slot = "", session = "",
     });
   }
   return out;
+}
+
+// ── THE AUDIT QUEUE — RFC-078 §2.7, slice 3.4 ──────────────────────────────────────────────────
+// The system reaches out to the manager: no agent ever asks for an audit. When a registered-
+// document write lands in a session, an entry {project, path, at} is appended here for the
+// manager's drain (the work-audit job, slice 3.5) to read.
+//
+// A DELIBERATE NARROWING, stated: §2.7 says the dial "sees met-marks and report filings" — but
+// the shell NEVER LEARNS WHAT A BLOCK IS (the boundary at the top of this file), so it cannot
+// tell a met-mark from a typo fix. The enqueue condition is therefore "a write to a registered
+// document" — the exact gate the judges dial rides (isRegisteredDocumentWrite, one predicate for
+// both) — and the met-mark/report-filing specificity moves to the DRAIN, which reads the document
+// and decides what, if anything, needs auditing. A few spurious entries cost the drain one read
+// each; a shell that parses blocks costs the boundary.
+//
+// THE ENTRY LEAVES ONLY WHEN THE DRAIN REMOVES IT (3.5). This half only appends, debounced per
+// document by the same debounceMin discipline the write dial keeps: one entry per document per
+// window, and a later write inside the window refreshes NOTHING — not even `at`, because the
+// drain reads the document fresh and a refreshed stamp would only push the audit further away.
+// Debounced against the QUEUE ITSELF, not the in-memory map, so a burst spanning a shell restart
+// is still one entry.
+const QUEUE_FILE = () =>
+  process.env.AUTOBOT_AUDIT_QUEUE_FILE || path.join(os.homedir(), ".autobot", "audit-queue.json");
+
+// The default window, matching the seed's write-dial debounceMin. When the manager's own entry
+// lands in the record (3.5), this knob can move there with the rest of its settings.
+const AUDIT_DEBOUNCE_MIN = 10;
+
+// TOLERANT LIKE EVERY FILE HERE: missing is empty, junk is empty, and junk ROWS are dropped one
+// by one — a half-broken queue never crashes the write path that feeds it.
+function readAuditQueue() {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(QUEUE_FILE(), "utf8"));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((e) => e && typeof e === "object")
+    .map((e) => ({ project: String(e.project || ""), path: String(e.path || ""), at: Number(e.at) || 0 }))
+    .filter((e) => e.project && e.path && e.at);
+}
+
+// ATOMIC: tmp in the same directory, then rename — a drain that reads mid-write must see the old
+// queue or the new one, never half a JSON file.
+function writeAuditQueue(list) {
+  const f = QUEUE_FILE();
+  const tmp = `${f}.tmp-${process.pid}`;
+  try {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(tmp, `${JSON.stringify(list, null, 2)}\n`);
+    fs.renameSync(tmp, f);
+    return true;
+  } catch {
+    try { fs.unlinkSync(tmp); } catch {}
+    return false; // a queue that cannot be written must never break the write that fed it
+  }
+}
+
+// The append — called from the same seam as the judges dial (sessions.cjs maybeSteerWrite, on
+// `file.changed`). Returns the entry it wrote, or null when the gate or the window said no.
+function enqueueAudit({ path: p = "", project = "", now = Date.now(), debounceMin = AUDIT_DEBOUNCE_MIN } = {}) {
+  if (!project) return null; // no project, no scope for the drain to read — not an auditable write
+  if (!isRegisteredDocumentWrite(p)) return null; // the one gate, shared with the judges dial
+  const doc = String(p);
+  const queue = readAuditQueue();
+  const windowMs = Math.max(0, Number(debounceMin) || 0) * 60000;
+  if (windowMs && queue.some((e) => e.path === doc && now - e.at < windowMs)) return null;
+  const entry = { project: String(project), path: doc, at: now };
+  if (!writeAuditQueue([...queue, entry])) return null;
+  return entry;
 }
 
 // ── THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3 ──────────────────────────────────────────────────
@@ -404,4 +483,6 @@ module.exports = {
   FILE, SEED, BUILT_IN, SHELL_LOCAL, SWEEP_MAX_STEERS, entries, enabledFor, messageOf,
   inDebounce, firedWithin, markFired, __resetFired, judgeWrite,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
+  QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
+  isRegisteredDocumentWrite,
 };

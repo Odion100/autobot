@@ -25,6 +25,13 @@
 //  10. The chaser's stamp is NOT movement: markNudged leaves the run's updatedAt where it was.
 //  11. The wiring: the idle tick runs the standing judges behind its own turn-guard (that IS
 //      turn-end delivery), and both clocks deliver through one deliverSteers.
+//
+// AND THE AUDIT QUEUE — RFC-078 §2.7, slice 3.4 (c24's shell half):
+//  12. A registered-document write appends {project, path, at} to the queue — behind the SAME
+//      gate the judges dial rides (one predicate, two riders) and on the same emit() seam —
+//      debounced per document: a burst in one window is ONE entry, and a later write inside the
+//      window refreshes nothing. Reads are tolerant (missing/junk = empty), the write is atomic
+//      (tmp+rename), and this half only ever appends — removal belongs to the drain (3.5).
 import rawAssert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,6 +46,8 @@ const RECORD = path.join(scratch, "nudges.json");
 process.env.AUTOBOT_NUDGES_FILE = RECORD;
 const PROJECTS = path.join(scratch, "projects.json");
 process.env.AUTOBOT_PROJECTS_FILE = PROJECTS;
+const QUEUE = path.join(scratch, "audit-queue.json");
+process.env.AUTOBOT_AUDIT_QUEUE_FILE = QUEUE;
 process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
 fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
 
@@ -613,6 +622,94 @@ const dialProject = (over = {}) =>
   assert.ok((sb.match(/deliverSteers\(/g) || []).length >= 2 && !/for \(const \w+ of sessions/.test(sb),
     "delivery is the one shared ride, to the ticking session alone — no walk over other sessions");
   ok("the wiring: one tick, two standing judges, the chaser's guard and cooldown, one delivery ride");
+}
+
+// ---- 12. THE AUDIT QUEUE — RFC-078 §2.7, slice 3.4 ----------------------------------------------
+// The system reaches out to the manager: no agent ever asks for an audit. The shell half appends
+// and dedupes-within-window ONLY — an entry leaves the queue when the drain (3.5) removes it.
+const readQueueFile = () => JSON.parse(fs.readFileSync(QUEUE, "utf8"));
+{
+  assert.ok(!fs.existsSync(QUEUE), "scratch starts with no queue");
+  assert.deepEqual(nudges.readAuditQueue(), [], "a missing queue reads as empty — never a crash");
+  const entry = nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 5000000 });
+  assert.deepEqual(entry, { project: "sv", path: "/repo/RFCs/RFC-9.md", at: 5000000 });
+  assert.deepEqual(readQueueFile(), [entry], "the entry on disk is {project, path, at} — nothing more");
+  assert.equal(nudges.enqueueAudit({ path: "/repo/src/thing.js", project: "sv", now: 5000000 }), null);
+  assert.equal(nudges.enqueueAudit({ path: "/repo/RFCs/RFC-8.md", project: "", now: 5000000 }), null);
+  assert.equal(readQueueFile().length, 1, "a .js write and a projectless write never reach the queue");
+  ok("a registered-document write appends {project, path, at}; anything else never touches the file (c24)");
+}
+{
+  // THE WINDOW — c24's twenty-in-one half: one entry per document per debounce window, and a later
+  // write inside the window refreshes NOTHING, not even `at` — the drain reads the document fresh.
+  for (let i = 1; i <= 20; i++)
+    nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 5000000 + i * 20000 });
+  const q = readQueueFile();
+  assert.equal(q.length, 1, "twenty writes to one document inside the window land as ONE entry");
+  assert.equal(q[0].at, 5000000, "…and the survivor keeps its first stamp — a later write refreshes nothing");
+  assert.ok(nudges.enqueueAudit({ path: "/repo/RFCs/RFC-10.md", project: "sv", now: 5000000 + 60000 }),
+    "a DIFFERENT document inside the window is its own entry — the window is per document");
+  assert.ok(nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 5000000 + 11 * 60000 }),
+    "past the window the same document may enqueue again — removal is the drain's (3.5), never this half's");
+  assert.equal(readQueueFile().length, 3, "and this half only ever GREW the queue");
+  assert.equal(nudges.AUDIT_DEBOUNCE_MIN, 10, "the default window matches the seed's write-dial debounceMin");
+  assert.equal(nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 5000000 + 12 * 60000 }),
+    null, "one minute after the re-enqueue: inside the new window");
+  assert.ok(nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 5000000 + 12 * 60000, debounceMin: 0 }),
+    "a zero window disables the debounce — the knob is honored");
+  ok("a burst inside the window is one entry per document, un-refreshed; the queue is append-only here");
+}
+{
+  // TOLERANT LIKE EVERY FILE HERE — and junk rows are dropped one by one, never the whole queue.
+  fs.writeFileSync(QUEUE, "{ this is not json");
+  assert.deepEqual(nudges.readAuditQueue(), [], "junk reads as empty");
+  assert.ok(nudges.enqueueAudit({ path: "/repo/RFCs/RFC-1.md", project: "sv", now: 9000000 }),
+    "…and the next append still lands — the junk never crashes the write path that feeds the queue");
+  fs.writeFileSync(QUEUE, JSON.stringify({ a: 1 }));
+  assert.deepEqual(nudges.readAuditQueue(), [], "a non-list is no queue");
+  fs.writeFileSync(QUEUE, JSON.stringify([null, 7, { project: "sv" }, { project: "sv", path: "/x.md", at: 123 }, { path: "/y.md", at: 5 }]));
+  assert.deepEqual(nudges.readAuditQueue(), [{ project: "sv", path: "/x.md", at: 123 }],
+    "junk ROWS are dropped one by one — the good entry survives");
+  ok("missing, junk, or half-junk: the queue reads tolerantly and the feed it rides never breaks");
+}
+{
+  // ATOMIC: write then read back exactly, no tmp residue, and the source says tmp+rename — a drain
+  // reading mid-write sees the old queue or the new one, never half a JSON file.
+  const list = [{ project: "sv", path: "/a.md", at: 1 }, { project: "bu", path: "/b.md", at: 2 }];
+  assert.equal(nudges.writeAuditQueue(list), true);
+  assert.deepEqual(nudges.readAuditQueue(), list, "write then read back: the round trip is exact");
+  assert.ok(!fs.readdirSync(scratch).some((f) => f.includes("audit-queue.json.tmp")),
+    "no tmp residue left beside the queue");
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const w = /function writeAuditQueue\(list\) \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(w && /\.tmp-/.test(w[0]) && /renameSync/.test(w[0]),
+    "the write goes to a tmp file and renames into place — old or new, never half");
+  ok("the queue write is atomic: exact round trip, tmp+rename, no residue");
+}
+{
+  // ONE GATE, TWO RIDERS — the anti-drift assertion: the judges dial and the audit enqueue share
+  // the single registered-document predicate, so they cannot disagree about what a document is.
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const bare = src.replace(/\/\/[^\n]*/g, "");
+  assert.equal((bare.match(/\\\.\(md\|markdown\)/g) || []).length, 1,
+    "ONE markdown predicate in the whole module — a second copy is how the dial and the queue drift");
+  const jw = /async function judgeWrite\([\s\S]*?\n\}/.exec(src);
+  const eq = /function enqueueAudit\([\s\S]*?\n\}/.exec(src);
+  assert.ok(jw && /isRegisteredDocumentWrite\(p\)/.test(jw[0]), "the judges dial rides the shared gate");
+  assert.ok(eq && /isRegisteredDocumentWrite\(p\)/.test(eq[0]), "…and the enqueue rides the SAME one");
+  for (const [p, is] of [["/a/doc.md", true], ["/a/doc.markdown", true], ["/a/DOC.MD", true], ["/a/x.js", false], ["/a/doc.mdx", false], ["", false]])
+    assert.equal(nudges.isRegisteredDocumentWrite(p), is, `gate(${p || "(empty)"}) should be ${is}`);
+  ok("the judges dial and the audit enqueue fire on one shared gate — they cannot drift apart");
+}
+{
+  // THE WIRING: the enqueue rides the dial's own seam in sessions.cjs — and nowhere else.
+  const src = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
+  const m = /function maybeSteerWrite\(s, event\) \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(m && /nudges\.enqueueAudit\(\{ path: event\.path, project: s\.projectCode \}\)/.test(m[0]),
+    "the enqueue rides the judges dial's own seam — one moment, one gate, no second wiring to drift");
+  assert.ok(!/enqueueAudit/.test(src.replace(m[0], "")),
+    "…and NOWHERE else: the dial seam is the only place a write becomes an audit entry");
+  ok("the wiring: the same file.changed that dials the judges enqueues for the manager (c24)");
 }
 
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the dial asks, the hub is never a pusher`);

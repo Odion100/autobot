@@ -1390,6 +1390,15 @@ function maybeNudge(s, quietMin) {
 // session whose write it was, and `s` is the only session this function can reach. No other
 // session hears anything because no other session is in the room.
 function maybeSteerWrite(s, event) {
+  // RFC-078 §2.7, slice 3.4 — THE AUDIT QUEUE rides the SAME moment, behind the SAME gate
+  // (nudges.isRegisteredDocumentWrite, inside enqueueAudit): a registered-document write lands an
+  // entry for the manager's drain, debounced per document. The shell never learns what a block is,
+  // so "met-mark or report filing" narrows here to "registered-document write" — the drain (3.5)
+  // reads the document and decides. Synchronous and swallowed: a queue that cannot be written must
+  // never break the feed that fed it.
+  try {
+    nudges.enqueueAudit({ path: event.path, project: s.projectCode });
+  } catch {}
   nudges
     .judgeWrite({
       path: event.path,
