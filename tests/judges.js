@@ -176,37 +176,51 @@ const names = (vs) => vs.map((v) => v.nudge).sort();
   ok("the judges' names match the record's — a name drift would make a judge undeliverable");
 }
 
-// ---- 7 · A DOCUMENT VIOLATION NEVER BECOMES A GAP (c33) ----------------------------------------
+// ---- 7 · THE DERIVATION PATH OFFERS NO ESCALATION ---------------------------------------------
 {
-  // THE BOUND IS A NEGATIVE, WHICH IS WHY IT NEEDS A GUARD RATHER THAN A READING. Nobody tries the
-  // thing they were told is impossible, so "it never files a gap" is the kind of claim that is true
-  // the day it is written and quietly stops being true the first time somebody adds an escalation
-  // path "for the serious ones". The reason the bound exists: a gap is a message to ANOTHER repo's
-  // owner, and a document violation has no other repo in it — the document is right there and so is
-  // the agent who wrote it, so a gap would route a local fix through a stranger's queue.
+  // WHAT THIS DOES AND DOES NOT ESTABLISH, because the first version of it over-claimed and a
+  // blind review caught that. RFC-078's c33 ("never does a document violation become a gap") is a
+  // bound on the MANAGER's conduct — its implementation is a sentence in `job:work-audit`, and an
+  // agent with Write can file a `::gap{}` document any time it decides to. No test over these
+  // modules can establish that, because the manager does not use them. Delete that sentence from
+  // the job document and the "never" dies with zero code change here.
   //
-  // Code drift DOES become a gap (c30), and that is the manager's own judgment in the work-audit
-  // job, never derived here. So the assertion is about THIS path: everything the judges derive, and
-  // everything the record delivers, lands on the document and on its writer.
-  const judgeSrc = fs.readFileSync(new URL("../electron/markdown/judges.cjs", import.meta.url), "utf8");
-  const nudgeSrc = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
-  for (const [name, src] of [["judges.cjs", judgeSrc], ["nudges.cjs", nudgeSrc]])
-    assert.ok(!/gap/i.test(src.replace(/\/\/[^\n]*/g, "")),
-      `${name} mentions gap NOWHERE in its code — a document violation cannot escalate out of the document`);
+  // So this check is COVERAGE, not that proof: the derivation path neither performs nor assists an
+  // escalation, and the violation it hands on carries no address outside the document's own
+  // project. That is worth guarding on its own — an escalation added here would be the cheapest
+  // possible route to breaking the bound — and it is NOT the claim.
+  //
+  // NOT COVERED, said out loud: `sessions.cjs` is the third module in the route (it delivers the
+  // steer) and is not guarded here, because it legitimately contains the word in its registration
+  // predicate `::(arc|rfc|report|gap){`. A substring guard over that file would be noise.
+  const strip = (src) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "")   // block comments too — a JSDoc mentioning gaps is not a gap path
+      .replace(/\/\/[^\n]*/g, "")
+      .replace(/`(?:[^`\\]|\\.)*`/g, "``"); // and template strings, for the same reason
+  for (const [name, rel] of [
+    ["judges.cjs", "../electron/markdown/judges.cjs"],
+    ["nudges.cjs", "../electron/agents/nudges.cjs"],
+  ])
+    assert.ok(
+      !/gap/i.test(strip(fs.readFileSync(new URL(rel, import.meta.url), "utf8"))),
+      `${name} has no gap path in its CODE — comments and template strings may say the word`,
+    );
 
-  // AND THE VIOLATION ITSELF CARRIES NOTHING A GAP COULD BE BUILT FROM: four fields, all of them
-  // addresses INTO the document. No repo, no owner, no severity — nothing that names another party.
+  // EVERY JUDGE, not one fixture's worth. The shape is the contract: five fields, and the only
+  // project any of them names is the document's own — which is the honest statement. `project` IS
+  // a repo name, so "it names no repo" would be false; what is true is that it names no OTHER one.
   const doc = path.join(scratch, "c33.md");
-  fs.writeFileSync(doc, '::::claim[a behavioural claim with only a cmd behind it]{id=g1}\n:::cmd\necho hi\n:::\n::::\n');
+  fs.writeFileSync(doc, '::::claim[a behavioural claim with only a cmd behind it]{id=g1}\n:::cmd\necho hi\n:::\n::::\n::claim[a wordless met mark]{id=g2 state=met by=someone at=1}\n');
   const found = await judges.forFile(doc, { path: "c33.md", project: "fx" });
-  assert.equal(found.length, 1, "the violating document is reported once");
-  assert.deepEqual(Object.keys(found[0]).sort(), ["detail", "line", "nudge", "path", "project"],
-    "a violation is five fields — nudge, path, project, line, detail");
-  assert.ok(found[0].detail.startsWith("g1 "),
-    "…and detail opens with the CLAIM's own id, so even the prose points back into the document");
-  assert.ok(!/repo|owner|severity|escalat/i.test(JSON.stringify(found[0])),
-    "nothing in a violation names another party — there is no second address to send it to");
-  ok("a document violation never becomes a gap: no gap path in either module, and the violation carries nothing to address one with (c33)");
+  assert.equal(found.length, judges.names.length, "both judges report on this document — the shape is checked for each");
+  for (const v of found) {
+    assert.deepEqual(Object.keys(v).sort(), ["detail", "line", "nudge", "path", "project"], `${v.nudge}: five fields`);
+    assert.equal(v.project, "fx", `${v.nudge}: the only project named is the document's own`);
+    assert.ok(v.detail.startsWith(`${v.nudge === "met-without-note" ? "g2" : "g1"} `),
+      `${v.nudge}: even the prose opens with the claim's own id`);
+  }
+  ok("the derivation path offers no escalation: no gap path in either module's code, and every judge's violation names only the document's own project");
 }
 
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch {}
