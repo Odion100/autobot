@@ -288,6 +288,71 @@ console.log("\nmarkBlock — the agent's door, with its rules");
   assert.ok(container.ok && container.marked === "claim", container.error || "");
   assert.match(fs.readFileSync(grown, "utf8").split("\n")[5], /state=met by=buapi/);
   ok("a ::::claim container marks through the same door — growing the proof fold cannot kill the verb");
+
+  // A REVIEWER AGREEING MUST NOT EAT THE MARKER'S WORDS. by= is a |-list and the press treats a
+  // press-on-the-standing-state as a signature; this door wrote by= flat, so a named reviewer
+  // agreeing replaced the marker's name, at= and note=. Found 2026-11-08 countersigning RFC-078
+  // c13/c14 — the door did not refuse, it would have overwritten.
+  const signed = path.join(tmp, "countersign.md");
+  fs.writeFileSync(signed, [
+    "# a plan",
+    "",
+    "::rfc{id=RFC-203}",
+    "::members{who=buapi}",
+    "",
+    '::claim[the reviewed one]{id=c1 reviewers=autobot state=met by=buapi at=1700000000000 note="ran it; saw state=met in the row" told=buapi|autobot}',
+  ].join("\n"));
+  await sessions.announceDocument(signed);
+  const before = fs.readFileSync(signed, "utf8").split("\n")[5];
+
+  const cs = await sessions.markBlock(signed, 6, { state: "met" }, "autobot");
+  assert.ok(cs.ok && cs.countersigned === true, cs.error || "the agreement was not read as a countersign");
+  assert.equal(cs.by, "buapi|autobot");
+  const after = fs.readFileSync(signed, "utf8").split("\n")[5];
+  assert.match(after, /by=buapi\|autobot/);
+  assert.equal(
+    after.replace("by=buapi|autobot", "by=buapi"),
+    before,
+    "a countersign moves the by= list and NOTHING else — not at=, not note=, not told=",
+  );
+  ok("a reviewer agreeing with a standing mark COUNTERSIGNS — by= gains the name, the marker's at=, note= and told= are untouched");
+
+  // The note=-bearing regex trap this door used to be one line away from: the standing note says
+  // `state=met` in its prose, so a naive scan of the row would have read the state off the note.
+  assert.ok(/note="ran it; saw state=met in the row"/.test(after), "the note survived the write verbatim");
+  ok("and the standing note quoting `state=met` did not confuse the reader — the bag is tokenized, never regexed");
+
+  const twice = await sessions.markBlock(signed, 6, { state: "met" }, "autobot");
+  assert.ok(twice.ok && twice.changed === false && /already signs/.test(twice.already || ""));
+  assert.equal(fs.readFileSync(signed, "utf8").split("\n")[5], after, "signing twice wrote nothing");
+  ok("signing a mark you already sign is an idempotent answer, not a second name and not a toggle");
+
+  const withNote = await sessions.markBlock(signed, 6, { state: "met", note: "I checked it too" }, "systemview");
+  assert.ok(withNote.ok && withNote.countersigned && /note= was not written/.test(withNote.noteNotWritten || ""));
+  assert.ok(/note="ran it; saw state=met in the row"/.test(fs.readFileSync(signed, "utf8").split("\n")[5]));
+  ok("a note passed WITH a countersign is neither written nor silently dropped — the door says whose account stands and where to put yours");
+
+  // A FLIP NEVER EATS A SIGNATURE — the press stashes the outgoing state's signers and restores
+  // them when that state returns (his: "why did yours go away just because I said unmet?"), and
+  // two doors with different signature semantics on one grammar is the drift this mirrors away.
+  const flipped = await sessions.markBlock(signed, 6, { state: "unmet", note: "it regressed under me" }, "systemview");
+  assert.ok(flipped.ok && !flipped.countersigned, flipped.error || "");
+  const fline = fs.readFileSync(signed, "utf8").split("\n")[5];
+  assert.match(fline, /state=unmet/);
+  assert.match(fline, /by=systemview\b/);
+  assert.match(fline, /metBy=buapi\|autobot/);
+  assert.match(fline, /note="it regressed under me"/);
+  assert.ok(!/told=/.test(fline), "a flip is a new decision — the receipt clears");
+  ok("a FLIP stashes the outgoing state's signers in metBy= and stands under the flipper's name alone — the mark moves, the signatures are kept");
+
+  const back = await sessions.markBlock(signed, 6, { state: "met", note: "fixed, and I watched it pass" }, "systemview");
+  assert.ok(back.ok && !back.countersigned, back.error || "");
+  const bline = fs.readFileSync(signed, "utf8").split("\n")[5];
+  assert.match(bline, /state=met/);
+  assert.match(bline, /by=buapi\|autobot\|systemview/);
+  assert.ok(!/metBy=/.test(bline), "the stash emptied into by= — leaving it would double every name");
+  assert.ok(!/unmetBy=/.test(bline), "the only unmet signature was the caller's own — stashing yourself is not a signature to keep");
+  ok("flipping BACK restores the stashed signatures into by= and clears the stash — buapi and autobot never signed anything twice and never lost their names");
 }
 
 off();

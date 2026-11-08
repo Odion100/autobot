@@ -1831,6 +1831,42 @@ async function markBlock(absPath, line, { state, note } = {}, by = "") {
   if (isClaim) {
     if (!["met", "unmet", "not-met"].includes(value))
       return { ok: false, error: 'a claim is marked state=met or state=unmet' };
+    const want = value === "not-met" ? "unmet" : value;
+    // AGREEING IS NOT MARKING, AND IT MUST NOT ERASE THE OTHER SIGNER. `by=` is a |-LIST — the
+    // window's press says it in a comment: "countersign — agreement adds a name, touches nothing
+    // else" — and this door wrote the field FLAT. So a named reviewer agreeing with a mark that
+    // already stood replaced the marker's name, their at= AND THEIR NOTE with its own. Found
+    // 2026-11-08 countersigning RFC-078 c13/c14 as the named reviewer: the door did not refuse,
+    // it would have overwritten, which is the worse failure of the two. When the state asked for
+    // is the one already standing and somebody else holds it, this is a COUNTERSIGN: `by` gains a
+    // name and NOTHING else on the line moves — not at=, not note=, not told=, because the
+    // decision did not change, only who stands behind it.
+    const prior = docWrite.attrsOf(row);
+    const listOf = (raw) => String(raw || "").split(/[|,]/).map((x) => x.trim()).filter(Boolean);
+    const signers = listOf(prior.by);
+    const me = by || "agent";
+    if (prior.state === want && signers.length) {
+      if (signers.includes(me))
+        return { ok: true, changed: false, marked: "claim", state: want, already: `${me} already signs this mark` };
+      const next = [...signers, me].join("|");
+      const w = docWrite.writeAttr(abs, n, { by: next });
+      if (!w.ok) return w;
+      const a = await announceDocument(abs, { by });
+      return {
+        ok: true,
+        marked: "claim",
+        state: want,
+        countersigned: true,
+        by: next,
+        fired: a.fired || 0,
+        // A NOTE PASSED WITH A COUNTERSIGN IS NOT SILENTLY DROPPED AND NOT WRITTEN EITHER: the
+        // standing note is somebody else's statement of what THEY saw, and there is no second
+        // slot in the grammar. Say so, and name where the account goes instead.
+        ...(String(note || "").trim()
+          ? { noteNotWritten: `note= was not written — the standing note is ${signers.join("|")}'s account and a countersign never rewrites it; say yours in the document's thread` }
+          : {}),
+      };
+    }
     if (!String(note || "").trim())
       return {
         ok: false,
@@ -1840,13 +1876,29 @@ async function markBlock(absPath, line, { state, note } = {}, by = "") {
     // A NEW MARK CLEARS THE RECEIPT. told= is per-decision, not per-block — whoever heard the old
     // state has not heard this one, and a stale stamp reads as "fully delivered" forever (measured
     // live 2026-11-06 on the window's presses; the agent's door obeys the same rule).
-    const w = docWrite.writeAttr(abs, n, {
-      state: value === "not-met" ? "unmet" : value,
-      by: by || "agent",
+    // AND A FLIP NEVER EATS A SIGNATURE. A signature belongs to the STATE it signed (his, at the
+    // press: "why did yours go away just because I said unmet? It better come back when I switch
+    // to met"), so the outgoing state's signers are stashed in `metBy=`/`unmetBy=` and restored
+    // when that state returns. This is the ~6-line mirror of the window's `press()` — two doors
+    // with different signature semantics on one grammar is a drift whose cost is already known,
+    // and the stash was the decided behaviour before this door existed. The note and at= DO move
+    // here, because a flip is a new decision and not an agreement.
+    const stashKey = prior.state === "met" ? "metBy" : prior.state === "unmet" ? "unmetBy" : null;
+    const restoreKey = want === "met" ? "metBy" : "unmetBy";
+    const restored = listOf(prior[restoreKey]).filter((x) => x !== me);
+    const pairs = {
+      state: want,
+      by: [...restored, me].join("|"),
       at: Date.now(),
       note: String(note).trim(),
       told: null,
-    });
+      [restoreKey]: null, // the restored names are in by= now; a stale stash would double them
+    };
+    if (stashKey) {
+      const others = signers.filter((x) => x !== me);
+      pairs[stashKey] = others.length ? others.join("|") : null;
+    }
+    const w = docWrite.writeAttr(abs, n, pairs);
     if (!w.ok) return w;
   } else {
     if (!["open", "doing", "done", "blocked"].includes(value))

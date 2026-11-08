@@ -140,4 +140,23 @@ function writeAttr(absPath, line, pairs) {
   return { ok: true, changed: true, ...(sanitized.length ? { sanitized } : {}) };
 }
 
-module.exports = { setAttr, writeAttr, sanitizeValue };
+/**
+ * READ the end-of-line bag back as an object — the SAME tokenizer `setOne` writes through, which
+ * is the whole reason it lives here. A caller that needs to know what a directive already says
+ * (the mark door, deciding whether it is countersigning or flipping) must not regex the row: a
+ * `note="…state=met…"` matches a naive scan and the door then acts on prose. Values come back
+ * unquoted; a bare word is ignored.
+ */
+function attrsOf(row) {
+  const braces = String(row == null ? "" : row).match(/\{([^}]*)\}\s*$/);
+  if (!braces) return {};
+  const out = {};
+  for (const p of parseBag(braces[1])) {
+    if (!p.key) continue;
+    const v = String(p.val == null ? "" : p.val);
+    out[p.key] = /^"[\s\S]*"$|^'[\s\S]*'$/.test(v) ? v.slice(1, -1) : v;
+  }
+  return out;
+}
+
+module.exports = { setAttr, writeAttr, sanitizeValue, attrsOf };
