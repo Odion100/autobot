@@ -150,4 +150,35 @@ const board = () =>
   ok("clearing a declaration is a real value — leaving a card undeclared again cannot require deleting it");
 }
 
+// ── READING THE INDEX RATHER THAN THE BODIES ──────────────────────────────────────────────────
+// `brief` exists because a run that read the board to CHOOSE work spent ~12k tokens on it and the
+// answer truncated mid-card. Two things have to be true at this layer for that to be fixed: the
+// parameter must be declared (the SDK strips one that is not, so a skill naming it would be naming
+// something inert), and the index must print as LINES — pretty-printed JSON spends most of its
+// characters on punctuation and gives back what the index was for.
+{
+  const t = board();
+  assert.ok(t.inputSchema && t.inputSchema.brief, "brief is declared on the input schema");
+  assert.ok(/index/i.test(t.inputSchema.brief.description || ""), "...and says what it hands back");
+
+  calls.length = 0;
+  answer = {
+    project: "board-test", board: "board", title: "b", of: 125,
+    brief: [
+      { ts: 1000, title: "a titled card", state: "partial", report: "spec", chars: 900 },
+      { ts: 2000, title: "raw from a voice recorder", untitled: true, state: "open", chars: 44, replies: 2 },
+    ],
+  };
+  const out = said(await board().handler({ projectCode: "board-test", brief: true }, {}));
+  assert.strictEqual(calls.find((c) => c.fn === "board").args.brief, true, "it reached the hub, not stripped");
+  assert.ok(/2 of 125/.test(out), out);
+  assert.ok(/1000/.test(out) && /a titled card/.test(out), out);
+  assert.ok(/\[spec\]/.test(out), "what the card owes is on the line — it is how a picker prefers one");
+  assert.ok(/\(untitled\)/.test(out), "and an untitled card says so rather than looking titled");
+  assert.ok(/2 replies/.test(out), out);
+  assert.ok(/at: <id>/.test(out), "the line that says how to read one whole");
+  assert.ok(!/^\s*\{/m.test(out), "it is lines, not JSON — the JSON is three times the size for the same facts");
+  ok("the index prints as scannable lines and `brief` is not swallowed on the way to the hub");
+}
+
 console.log(`\n  ${n} claims, all green — the board tool's contract\n`);

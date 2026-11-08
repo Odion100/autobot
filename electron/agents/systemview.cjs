@@ -928,7 +928,9 @@ function toolsFor(identity = {}) {
             .describe(
               "which card the reply or the status targets — its id, its TITLE, or an unambiguous part " +
                 "of its title (\"the status picker\"). Never a position: positions shift when anyone adds " +
-                "a card. Two cards matching one title is refused with both named rather than resolved to the first."
+                "a card. Two cards matching one title is refused with both named rather than resolved to the first. " +
+                "ON ITS OWN, WITH NO WRITE, IT READS THAT ONE CARD — whole, with its replies, which is the " +
+                "other half of `brief`: pick from the index, then read the one."
             ),
           title: z
             .string()
@@ -952,6 +954,16 @@ function toolsFor(identity = {}) {
                 "which is the group a context-maintenance board pass sweeps for — so declaring one on a card " +
                 "you reviewed is part of reviewing it. `context(\"which report kind should I file, and why is " +
                 "its window that length\")` for which kind and why."
+            ),
+          brief: z
+            .boolean()
+            .optional()
+            .describe(
+              "read back the INDEX instead of the bodies — one line per card: its id, its title, its " +
+                "state, what it owes, how many characters of body are waiting, how many replies. Reach " +
+                "for it whenever you are CHOOSING what to work on rather than reading one thing: the " +
+                "bodies are the whole cost, and a board read whole has truncated mid-card. Then read the " +
+                "one you picked with `at` on its own. Composes with `state`."
             ),
           state: z
             .enum(["resolved", "reviewed", "partial", "blocked", "open"])
@@ -979,6 +991,27 @@ function toolsFor(identity = {}) {
         async (a) => {
           try {
             const r = await hub("Agent", "board", { ...a, as: who });
+            // THE INDEX IS PRINTED AS LINES, not as JSON. The whole purpose of `brief` is a board a
+            // reader can scan to choose one card, and pretty-printed JSON spends most of its
+            // characters on punctuation and field names — about three times the lines for the same
+            // facts, which gives back what the index was for.
+            if (r && Array.isArray(r.brief)) {
+              const rows = r.brief.map(
+                (b) =>
+                  `${b.ts}  ${b.state.padEnd(8)} ${b.report ? `[${b.report}]` : "[ — ]"} ` +
+                  `${b.title}${b.untitled ? " (untitled)" : ""}  ${b.chars}c` +
+                  `${b.replies ? ` · ${b.replies} repl${b.replies > 1 ? "ies" : "y"}` : ""}`
+              );
+              return text(
+                [
+                  `board — ${r.project}${r.board !== "board" ? ` · ${r.board}` : ""}` +
+                    `${r.state ? ` · ${r.state}` : ""} — ${r.brief.length} of ${r.of}`,
+                  ...rows,
+                  "",
+                  "read one whole with at: <id>",
+                ].join("\n")
+              );
+            }
             if (r && r.notes) {
               const lines = (r.notes || []).map((n, i) => `${i + 1}. ${typeof n === "string" ? n : n.text || JSON.stringify(n)}`);
               return text([`board — ${r.project}${r.board !== "board" ? ` · ${r.board}` : ""}`, ...lines].join("\n"));
