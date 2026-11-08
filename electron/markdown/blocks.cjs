@@ -253,13 +253,25 @@ function specsOf(blocks) {
     }));
 }
 
-/** Every proof block sitting INSIDE a container's own body, counted by half. */
-function proofInside(blocks, owner) {
+/**
+ * Every block sitting INSIDE a container's own body — ONE definition of "in its fold".
+ *
+ * A LEAF CLAIM HAS NO BODY, so `from === to` and this is empty — which is the point: a one-line
+ * `::claim[…]` cannot carry its proof, so it cannot be met until somebody grows it.
+ *
+ * Exported because the judges (judges.cjs) ask a finer question than the counts below — *is there a
+ * CONTRACT spec in this fold, or only a cmd* — and a second span implementation beside this one is
+ * two definitions of containment waiting to disagree about an edge.
+ */
+function insideOf(blocks, owner) {
   const from = Number(owner.line) || 0;
   const to = Number(owner.end) || from;
-  // A LEAF CLAIM HAS NO BODY, so `from === to` and this is 0 of each — which is the point: a
-  // one-line `::claim[…]` cannot carry its proof, so it cannot be met until somebody grows it.
-  const inside = (blocks || []).filter((b) => b !== owner && Number(b.line) > from && Number(b.end || b.line) <= to);
+  return (blocks || []).filter((b) => b !== owner && Number(b.line) > from && Number(b.end || b.line) <= to);
+}
+
+/** Every proof block sitting INSIDE a container's own body, counted by half. */
+function proofInside(blocks, owner) {
+  const inside = insideOf(blocks, owner);
   return {
     spec: inside.filter((b) => PROOF_KINDS.spec.includes(b.name)).length,
     shown: inside.filter((b) => PROOF_KINDS.shown.includes(b.name)).length,
@@ -582,6 +594,7 @@ module.exports = {
   PROOF_KINDS,
   SPECS,
   specsOf,
+  insideOf,
   proofInside,
   proofOwed,
   claimProved,

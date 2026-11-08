@@ -7,28 +7,28 @@
 //   3. The gate's precedence: no entry → off; `on` must be literally true; "global" hits everyone;
 //      a slot list hits those slots alone; any other string is a project code and hits it alone.
 //   4. His words win while written; the built-in line arrives while the field stays empty.
-//   5. The dial: markdown only, gated before the fetch, pointered after it, debounced per
+//   5. The ask: markdown only, gated before the parse, pointered after it, debounced per
 //      nudge × document × session, deaf to sweep-clock nudges.
 //   6. Degradation is law: a hub down, older (404), or answering junk means [] — never a crash.
-//   7. The wiring (source-read, the house pattern tests/nudge.js set): emit() dials on
+//   7. The wiring (source-read, the house pattern tests/nudge.js set): emit() asks on
 //      file.changed, delivery rides the chaser's own input-queue push, and the hub is only ever
-//      dialled — no listener anywhere in the record module.
+//      asked — no listener anywhere in the record module.
 //
 // AND THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3 (c11, c35):
 //   8. `run-untouched-for-days`: a SOURCED, still-open run that has not moved for `afterDays`
 //      days is a standing violation; movement is any write except the chaser's nudge stamp;
 //      abandoned-with-account ends it; the knob, the switch, the scope and the clock all gate it;
 //      delivery is bookkept per nudge × run × session under the chaser's cooldownMin.
-//   9. The project-wide door: dialled once per connected project per cooldown window — never per
+//   9. The project sweep: walked once per connected project per cooldown window — never per
 //      tick — deaf to write-clock and shell-local names, capped per sweep with the overflow
-//      rotating through later windows, degrading to silence like every dial here.
+//      rotating through later windows, degrading to silence like every ask here.
 //  10. The chaser's stamp is NOT movement: markNudged leaves the run's updatedAt where it was.
 //  11. The wiring: the idle tick runs the standing judges behind its own turn-guard (that IS
 //      turn-end delivery), and both clocks deliver through one deliverSteers.
 //
 // AND THE AUDIT QUEUE — RFC-078 §2.7, slice 3.4 (c24's shell half):
 //  12. A registered-document write appends {project, path, at} to the queue — behind the SAME
-//      gate the judges dial rides (one predicate, two riders) and on the same emit() seam —
+//      gate the judges ask rides (one predicate, two riders) and on the same emit() seam —
 //      debounced per document: a burst in one window is ONE entry, and a later write inside the
 //      window refreshes nothing. Reads are tolerant (missing/junk = empty), the write is atomic
 //      (tmp+rename), and this half only ever appends — removal belongs to the drain (3.5).
@@ -51,20 +51,32 @@ process.env.AUTOBOT_AUDIT_QUEUE_FILE = QUEUE;
 process.env.AUTOBOT_WORKLISTS_DIR = path.join(scratch, "worklists");
 fs.mkdirSync(process.env.AUTOBOT_WORKLISTS_DIR, { recursive: true });
 
-// NO LIVE HUB — the dial is stubbed the way tests/hub-skew.js stubs it. `ANSWER` is what the hub
-// says; `CALLS` is every URL it was asked, so "the hub was not even dialled" is checkable.
+// THE JUDGES ARE STUBBED, NOT THE TRANSPORT — there is no transport. The document judges are a
+// module in this same process (markdown/judges.cjs), injected here through `__setJudges`, which
+// makes this suite about the thing it is actually for: the GATING. `ANSWER` is what the judges
+// found; `CALLS` is every ask they were given, so "the judges were not even consulted" stays
+// checkable, and now it records the ASK (which document, which project) rather than a URL string.
+// The judges' own correctness is tests/judges.js — one subject per suite.
 let ANSWER = null;
-let FAIL = null; // "down" | "404" | "bad-json" — the degradation dials
+let FAIL = null; // the judges throwing — an unreadable or unparseable document
 const CALLS = [];
-global.fetch = async (url) => {
-  CALLS.push(String(url));
-  if (FAIL === "down") throw new Error("ECONNREFUSED");
-  if (FAIL === "404") return { ok: false, status: 404, json: async () => ({}) };
-  if (FAIL === "bad-json") return { ok: true, status: 200, json: async () => { throw new Error("unexpected token"); } };
-  return { ok: true, status: 200, json: async () => ANSWER };
+const asList = (a) => (Array.isArray(a) ? a : a && Array.isArray(a.violations) ? a.violations : []);
+const JUDGE_STUB = {
+  names: ["behavioural-claim-cmd-only", "met-without-note"],
+  forFile: async (abs, { path: rel = "", project = "" } = {}) => {
+    CALLS.push({ ask: "file", path: rel || abs, project });
+    if (FAIL) throw new Error("the judges could not read it");
+    return asList(ANSWER);
+  },
+  forProject: async (pc) => {
+    CALLS.push({ ask: "project", project: String(pc || "") });
+    if (FAIL) throw new Error("the judges could not walk it");
+    return asList(ANSWER);
+  },
 };
 
 const nudges = require("../electron/agents/nudges.cjs");
+nudges.__setJudges(JUDGE_STUB);
 
 // THE SIGN-OFF COUNTS ASSERTIONS — every call through this proxy is one checked fact, so the
 // closing line is arithmetic, never testimony.
@@ -130,8 +142,8 @@ const VIOLATION = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9
   const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
   assert.ok(!/nudge\.json/.test(src.replace(/\/\/[^\n]*/g, "")), "nudges.cjs never names the chaser's own settings file outside a comment");
   assert.ok(!/require\("\.\/nudge\.cjs"\)/.test(src), "…and never requires the chaser module (c4: its knobs stay untouched)");
-  assert.ok(!/createServer|\.listen\(/.test(src), "no listener — the hub is only ever dialled, never dialled BY (c12)");
-  ok("the record module cannot touch nudge.json and holds no door a hub could push through (c4, c12)");
+  assert.ok(!/createServer|\.listen\(/.test(src), "no listener — nothing can push into the record module (c12)");
+  ok("the record module cannot touch nudge.json and opens no listener anything could push through (c4, c12)");
 }
 
 // ---- 2. THE GATE'S PRECEDENCE -----------------------------------------------------------------
@@ -187,16 +199,16 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
   assert.ok(/\/repo\/RFCs\/RFC-9\.md:12/.test(out[0].text), "…and the violation's path:line pointer");
   assert.ok(/from the harness, not the human/.test(out[0].text), "…and introduces itself, like every nudge here");
   assert.equal(CALLS.length, 1);
-  assert.ok(/\/systemview\/api\/judges\?path=%2Frepo%2FRFCs%2FRFC-9\.md$/.test(CALLS[0]),
-    "the hub is asked at its judges door, path encoded — a GET dial, nothing pushed (c12)");
+  assert.deepEqual(CALLS[0], { ask: "file", path: "/repo/RFCs/RFC-9.md", project: "sv" },
+    "the judges are asked about THAT document, in this process — no wire, nothing pushed (c12)");
   ok("a violation on a write becomes one steering message carrying the law and the pointer");
 }
 {
   nudges.__resetFired();
   CALLS.length = 0;
   assert.deepEqual(await dial({ path: "/repo/src/thing.js" }), []);
-  assert.equal(CALLS.length, 0, "a .js write never costs a dial");
-  ok("only a markdown path — the only thing that can be a registered document — dials the hub");
+  assert.equal(CALLS.length, 0, "a .js write never costs a parse");
+  ok("only a markdown path — the only thing that can be a registered document — is judged");
 }
 {
   // THE EDITED MESSAGE RIDES THE NEXT FIRING (c1, end to end through the dial).
@@ -217,7 +229,7 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
   nudges.__resetFired();
   CALLS.length = 0;
   assert.deepEqual(await dial(), []);
-  assert.equal(CALLS.length, 0, "with every write-nudge off, the moment passes without a dial");
+  assert.equal(CALLS.length, 0, "with every write-nudge off, the moment passes unjudged");
   ok("switched off, the moment passes in silence — the machinery obeys the record, not a panel (c41)");
 }
 {
@@ -231,7 +243,7 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
   ANSWER = { ok: true, violations: [VIOLATION] };
   assert.equal((await dial()).length, 1, "the named project is steered");
   assert.deepEqual(await dial({ project: "bu", slot: "bu", session: "session:bu:1" }), []);
-  assert.equal(CALLS.length, 1, "the other project's write never even dialled");
+  assert.equal(CALLS.length, 1, "the other project's write was never even judged");
   list[1].scope = ["systemview-test"];
   writeRecord(list);
   nudges.__resetFired();
@@ -283,36 +295,28 @@ const seedRecord = () => { try { fs.unlinkSync(RECORD); } catch {} nudges.entrie
 }
 
 // ---- 5. DEGRADATION IS LAW --------------------------------------------------------------------
+// WITH THE JUDGING IN THIS PROCESS THERE IS ONE FAILURE LEFT, NOT A LADDER. The three modes this
+// section used to cover — a hub that is down, a hub too old to carry the route, a hub answering
+// non-JSON — were all transport, and transport is gone: the shell no longer asks an app it hosts.
+// What remains is a document it cannot read or parse, and a judge that throws. Both read as nothing
+// to report, which is the rule that survived the move.
 {
   seedRecord();
-  for (const [mode, what] of [
-    ["down", "a hub that is down"],
-    ["404", "an older hub with no judges route"],
-    ["bad-json", "a hub answering something that is not JSON"],
-  ]) {
-    nudges.__resetFired();
-    FAIL = mode;
-    assert.deepEqual(await dial(), [], what);
-  }
+  nudges.__resetFired();
+  FAIL = "throw";
+  assert.deepEqual(await dial(), [], "a judge that throws on an unreadable document");
   FAIL = null;
   for (const [answer, what] of [
-    [{ ok: true }, "an answer with no violations key"],
-    [{ ok: true, violations: "nope" }, "violations that are not a list"],
+    [[], "a document with nothing wrong in it"],
+    [null, "no answer at all"],
+    ["nope", "an answer that is not a list"],
     [42, "a bare number"],
-    [null, "a null body"],
   ]) {
     nudges.__resetFired();
     ANSWER = answer;
     assert.deepEqual(await dial(), [], what);
   }
-  ok("down, older, or answering an unexpected shape: nothing fires and nothing crashes — absence reads as nothing to report");
-}
-{
-  // THE BARE-LIST SHAPE is also accepted — the hub half may answer either spelling.
-  nudges.__resetFired();
-  ANSWER = [VIOLATION];
-  assert.equal((await dial()).length, 1);
-  ok("a hub answering the violations as a bare list is read the same");
+  ok("an unreadable document or an unexpected answer: nothing fires and nothing crashes — absence reads as nothing to report");
 }
 
 // ---- 6. THE WIRING, READ FROM THE SOURCE (the house pattern, tests/nudge.js) --------------------
@@ -478,44 +482,45 @@ const dialProject = (over = {}) =>
   assert.ok(/\/repo\/RFCs\/RFC-9\.md:4/.test(out[0].text), "…and the violation's path:line pointer");
   assert.ok(/from the harness, not the human/.test(out[0].text), "…and introduces itself");
   assert.equal(CALLS.length, 1);
-  assert.ok(/\/judges\?project=sv$/.test(CALLS[0]), "the door is asked per PROJECT — the sweep question, a GET dial (c12)");
-  ok("a standing registry violation becomes one steering message off the project door");
+  assert.deepEqual(CALLS[0], { ask: "project", project: "sv" },
+    "the judges are asked per PROJECT — the sweep question, in this process, nothing pushed (c12)");
+  ok("a standing registry violation becomes one steering message off the project sweep");
 }
 {
   // THE FREQUENCY CEILING: once per project per cooldown window — never per tick, never per session.
   assert.deepEqual(await dialProject({ now: NOW + 5 * 60000 }), []);
   assert.deepEqual(await dialProject({ now: NOW + 5 * 60000, session: "session:sv:2" }), []);
-  assert.equal(CALLS.length, 1, "five minutes of ticks and a second session bought ZERO new dials");
+  assert.equal(CALLS.length, 1, "five minutes of ticks and a second session bought ZERO new sweeps");
   nudges.__resetFired();
   assert.equal((await dialProject({ now: NOW + 31 * 60000 })).length, 1, "past the window, the project is asked again");
   assert.equal(CALLS.length, 2);
-  ok("the door is dialled once per project per cooldown window — the tick multiplies nothing (c11)");
+  ok("the registry is swept once per project per cooldown window — the tick multiplies nothing (c11)");
 }
 {
-  // ARMED OR NOT EVEN DIALLED: no sweep-clock hub nudge on and in scope → no fetch at all.
-  seedRecord(); // the seed's only sweep entries are shell-local — nothing for the door
+  // ARMED OR NOT EVEN ASKED: no sweep-clock DOCUMENT nudge on and in scope → no walk at all.
+  seedRecord(); // the seed's only sweep entries are run-state — nothing for the document judges
   nudges.__resetSweep();
   CALLS.length = 0;
   assert.deepEqual(await dialProject(), []);
-  assert.equal(CALLS.length, 0, "shell-local sweep nudges never arm the project dial");
+  assert.equal(CALLS.length, 0, "run-state sweep nudges never arm the document sweep");
   sweepRecord();
   const l = JSON.parse(fs.readFileSync(RECORD, "utf8"));
   l[3].on = false;
   writeRecord(l);
   nudges.__resetSweep();
   assert.deepEqual(await dialProject(), []);
-  assert.equal(CALLS.length, 0, "switched off, the moment passes without a dial (c41)");
+  assert.equal(CALLS.length, 0, "switched off, the moment passes without a sweep (c41)");
   l[3].on = true;
   l[3].scope = "bu";
   writeRecord(l);
   nudges.__resetSweep();
   assert.deepEqual(await dialProject(), []);
   assert.equal(CALLS.length, 0, "out of scope, the project is not even asked (c2)");
-  ok("with nothing armed for the sweep, the hub is not even dialled");
+  ok("with nothing armed for the sweep, the registry is not even walked");
 }
 {
-  // DEAF TO THE WRONG NAMES: write-clock nudges wait for their clock; shell-local names are judged
-  // here, never delivered off a hub answer; unrecorded names are OFF; junk rows are skipped.
+  // DEAF TO THE WRONG NAMES: write-clock nudges wait for their clock; run-state names are judged by
+  // judgeRuns, never off a document answer; unrecorded names are OFF; junk rows are skipped.
   sweepRecord();
   nudges.__resetFired();
   nudges.__resetSweep();
@@ -530,24 +535,21 @@ const dialProject = (over = {}) =>
   const out = await dialProject();
   assert.equal(out.length, 1);
   assert.equal(out[0].nudge, "met-without-note");
-  ok("the sweep delivers sweep-clock hub nudges alone — write-clock, shell-local, unrecorded and junk all pass through it");
+  ok("the sweep delivers sweep-clock document nudges alone — write-clock, run-state, unrecorded and junk all pass through it");
 }
 {
-  // DEGRADATION IS LAW HERE TOO — and a down hub is retried next window, never hammered per tick.
-  for (const mode of ["down", "404", "bad-json"]) {
-    nudges.__resetSweep();
-    nudges.__resetFired();
-    FAIL = mode;
-    assert.deepEqual(await dialProject(), [], `a ${mode} hub means nothing to report`);
-  }
+  // DEGRADATION IS LAW HERE TOO — and a failed walk still spends the window, never per tick.
+  nudges.__resetSweep();
+  nudges.__resetFired();
+  FAIL = "throw";
+  assert.deepEqual(await dialProject(), [], "a registry that cannot be walked means nothing to report");
   CALLS.length = 0;
-  FAIL = "down";
   assert.deepEqual(await dialProject({ now: NOW + 60 * 60000 }), []);
   assert.equal(CALLS.length, 1);
   assert.deepEqual(await dialProject({ now: NOW + 61 * 60000 }), []);
-  assert.equal(CALLS.length, 1, "the failed dial still spent the window — a down hub is not hammered every tick");
+  assert.equal(CALLS.length, 1, "the failed walk still spent the window — it is not retried every tick");
   FAIL = null;
-  ok("down, older, or junk-answering: the sweep reads absence as nothing to report, and retries on the window");
+  ok("a walk that throws reads as nothing to report, and is retried on the window, never per tick");
 }
 {
   // THE CAP, AND THE ROTATION THAT KEEPS IT HONEST: a registry carrying years of debt steers three
@@ -699,7 +701,7 @@ const readQueueFile = () => JSON.parse(fs.readFileSync(QUEUE, "utf8"));
   assert.ok(eq && /isRegisteredDocumentWrite\(p\)/.test(eq[0]), "…and the enqueue rides the SAME one");
   for (const [p, is] of [["/a/doc.md", true], ["/a/doc.markdown", true], ["/a/DOC.MD", true], ["/a/x.js", false], ["/a/doc.mdx", false], ["", false]])
     assert.equal(nudges.isRegisteredDocumentWrite(p), is, `gate(${p || "(empty)"}) should be ${is}`);
-  ok("the judges dial and the audit enqueue fire on one shared gate — they cannot drift apart");
+  ok("the judges ask and the audit enqueue fire on one shared gate — they cannot drift apart");
 }
 {
   // THE WIRING: the enqueue rides the dial's own seam in sessions.cjs — and nowhere else.
@@ -709,7 +711,7 @@ const readQueueFile = () => JSON.parse(fs.readFileSync(QUEUE, "utf8"));
     "the enqueue rides the judges dial's own seam — one moment, one gate, no second wiring to drift");
   assert.ok(!/enqueueAudit/.test(src.replace(m[0], "")),
     "…and NOWHERE else: the dial seam is the only place a write becomes an audit entry");
-  ok("the wiring: the same file.changed that dials the judges enqueues for the manager (c24)");
+  ok("the wiring: the same file.changed that asks the judges enqueues for the manager (c24)");
 }
 
-console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the dial asks, the hub is never a pusher`);
+console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);

@@ -5,9 +5,10 @@
 //
 // AND THE WRITE-TIME CLOCK — RFC-078 §2.3. The shell already sees `file.changed` per session;
 // when the path looks like a registered document (markdown under the session's own worktree) this
-// module dials the hub's judges door and gates what came back: on, in scope, write-clock, outside
-// its debounce window. What survives the gates is a steering message for THE SESSION THAT WROTE
-// IT — sessions.cjs delivers it on the same input-queue ride the run-chaser uses.
+// module asks the DOCUMENT JUDGES (markdown/judges.cjs, in this process) and gates what came back:
+// on, in scope, write-clock, outside its debounce window. What survives the gates is a steering
+// message for THE SESSION THAT WROTE IT — sessions.cjs delivers it on the same input-queue ride
+// the run-chaser uses.
 //
 // AND THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3. The standing judges ride the chaser's own idle
 // tick (sessions.cjs), under the chaser's cooldownMin:
@@ -17,20 +18,20 @@
 //     change, a status write, an attachment, a whiteboard edit all move it; being nudged does not
 //     (worklist.markNudged preserves `updatedAt` for exactly this reason). `afterDays` is the
 //     entry's one numeric knob, editable in the record like any other field.
-//   - `judgeProject` — the project-wide judges door, dialled once per CONNECTED project
-//     (~/.autobot/projects.json) per cooldown window, for registry-wide violations no single
-//     write triggers. Delivery is capped per sweep (SWEEP_MAX_STEERS) so a first pass over years
-//     of historical debt steers instead of burying; the rest are re-derived next window, because
-//     violations are never stored.
+//   - `judgeProject` — the DOCUMENT judges over one CONNECTED project's whole registry
+//     (~/.autobot/projects.json), swept once per project per cooldown window, for registry-wide
+//     violations no single write triggers. Delivery is capped per sweep (SWEEP_MAX_STEERS) so a
+//     first pass over years of historical debt steers instead of burying; the rest are re-derived
+//     next window, because violations are never stored.
 //
-// THE BOUNDARY (§1, the cost paragraph that arbitrated the design): the hub judges, because the
-// parsed state already lives there; the shell asks, because the sessions live here. THIS FILE
-// NEVER LEARNS WHAT A BLOCK IS — a violation arrives named, pointed, and already judged. The hub
-// is only ever DIALLED: no listener, no push channel, no connection opened toward the shell (c12).
-//
-// DEGRADATION IS LAW. A hub that is down, older (no judges route — 404), or answering a shape
-// this shell has never heard of means NOTHING fires and nothing crashes: an absent answer reads
-// as nothing to report, exactly the skew rule tests/hub-skew.js holds the renderers to.
+// THE BOUNDARY (§1): THE JUDGING AND THE SESSIONS ARE BOTH THIS PROCESS'S, and the split inside it
+// is by SUBJECT — document judges are pure functions over the parse (markdown/judges.cjs), while
+// this file owns the record, the gates, the clocks and the run-state judges. Nothing crosses a
+// wire: the first cut dialled the hub's `GET /judges`, on the premise that the parsed state lived
+// there, and it does not — the shell owns `~/.autobot/documents.json` and its parse writes the
+// derived state. Asking an app this process HOSTS for state this process produced is the dependency
+// inverted, and the proof it was wrong is the ladder that crossing needed. The harness runs with
+// SystemView closed; the hub may rely on the shell, never the reverse.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -40,9 +41,26 @@ const path = require("path");
 const FILE = () =>
   process.env.AUTOBOT_NUDGES_FILE || path.join(os.homedir(), ".autobot", "nudges.json");
 
-// ONE DERIVATION OF THE HUB'S ADDRESS — systemview.cjs owns it ("pointed at, never copied").
-// Required lazily so a test driving the gates alone never pays for the SDK that file loads.
-const HUB = () => require("./systemview.cjs").HUB();
+// THE DOCUMENT JUDGES — markdown/judges.cjs, pure functions over the parse this process already
+// runs. Required lazily so a suite driving only the record's gates never pays for the parser.
+// Overridable for tests, which is how a suite declares a document's violations without writing a
+// file: the seam is the JUDGE, not a faked transport, so what a test asserts is the gating.
+let JUDGES = null;
+const __setJudges = (j) => {
+  JUDGES = j || null;
+};
+const judges = () => JUDGES || require("../markdown/judges.cjs");
+
+// Judge one document, by the path a `file.changed` carried. Silent on anything unreadable — a
+// document that cannot be parsed has nothing to report, never a throw into a clock.
+async function judgeDocument(p, { project = "" } = {}) {
+  try {
+    const out = await judges().forFile(p, { path: p, project });
+    return Array.isArray(out) ? out : [];
+  } catch {
+    return [];
+  }
+}
 
 // THE SEED — RFC-078 §2.1 verbatim, written on first read so a fresh machine has the record the
 // moment anything asks. The chaser's entry carries identity, on/off and scope ONLY (c4): its
@@ -69,7 +87,7 @@ const SEED = Object.freeze([
   // THE SHELL-LOCAL STANDING JUDGE — RFC-078 §2.3, slice 3.3. `afterDays` is its one numeric knob:
   // how many days a sourced, still-open run may sit with no movement (no item change, no status
   // write — no write of any kind except the chaser's own nudge stamp) before it is a standing
-  // violation. Judged in the shell (judgeRuns) because run state lives here, never by the hub.
+  // violation. Judged by judgeRuns because its subject is run state, not a document's blocks.
   Object.freeze({
     name: "run-untouched-for-days",
     on: true,
@@ -81,9 +99,9 @@ const SEED = Object.freeze([
   }),
 ]);
 
-// JUDGED IN THE SHELL, NEVER DELIVERED OFF A HUB ANSWER. The hub knows documents; these two know
-// runs and sessions. A hub answer claiming one of these names is skipped — whichever half judged
-// a violation is the half that delivers it, or one violation arrives twice.
+// RUN-STATE JUDGES, NEVER DOCUMENT JUDGES. The document judges know blocks; these two know runs
+// and sessions. A document-judge answer claiming one of these names is skipped — whichever judge
+// found a violation is the one that delivers it, or one violation arrives twice.
 const SHELL_LOCAL = new Set(["run-chaser", "run-untouched-for-days"]);
 
 // THE BUILT-IN LINES — what arrives while `message` stays empty (c1). The chaser composes its own
@@ -159,7 +177,7 @@ function entries() {
 const entryOf = (name, list) => (list || entries()).find((e) => e.name === name) || null;
 
 // THE GATE, in its exact precedence:
-//   1. no entry in the record → OFF — the record is the authority, not the hub's opinion;
+//   1. no entry in the record → OFF — the record is the authority, not any judge's opinion;
 //   2. the switch → `on` must be literally true (c41: off means the moment passes in silence);
 //   3. the scope — "global" hits everyone; a list of agent slots hits those slots alone (c34);
 //      any other string is a project code and hits that project's sessions alone (c2).
@@ -209,25 +227,21 @@ const __resetFired = () => lastFired.clear();
 // disagree about what a document is, and nothing would say so.
 const isRegisteredDocumentWrite = (p) => /\.(md|markdown)$/i.test(String(p || ""));
 
-// ── THE WRITE-TIME DIAL ─────────────────────────────────────────────────────────────────────────
+// ── THE WRITE-TIME CLOCK ────────────────────────────────────────────────────────────────────────
 // `file.changed` landed in a session; is there anything to steer it with? Returns the gated
 // steering messages — the caller (sessions.cjs) owns the delivery. Every failure path returns [].
-async function judgeWrite({ path: p = "", project = "", slot = "", session = "", now = Date.now(), hub = "" } = {}) {
-  // Only a markdown file can be a registered document — anything else never costs a dial.
+//
+// JUDGED IN THIS PROCESS, over the parse this process already runs (markdown/judges.cjs). Nothing
+// crosses a wire, so there is no transport to degrade — an unreadable file is the only absence, and
+// it reads as nothing to report.
+async function judgeWrite({ path: p = "", project = "", slot = "", session = "", now = Date.now() } = {}) {
+  // Only a markdown file can be a registered document — anything else never costs a parse.
   if (!isRegisteredDocumentWrite(p)) return [];
   const list = entries();
-  // No write-clock nudge is on and in scope for this session → the hub is not even dialled.
+  // No write-clock nudge is on and in scope for this session → the file is not even read.
   const armed = list.some((e) => e.clock === "write" && enabledFor(e.name, { project, slot }, list));
   if (!armed) return [];
-  let violations;
-  try {
-    const res = await fetch(`${hub || HUB()}/judges?path=${encodeURIComponent(p)}`);
-    if (!res || !res.ok) return []; // down, or an older hub with no judges route — nothing to report
-    const body = await res.json();
-    violations = Array.isArray(body) ? body : body && Array.isArray(body.violations) ? body.violations : [];
-  } catch {
-    return []; // a hub that cannot answer is a hub with nothing to report
-  }
+  const violations = await judgeDocument(p, { project });
   const out = [];
   for (const v of violations) {
     if (!v || typeof v !== "object") continue;
@@ -417,33 +431,31 @@ const SWEEP_MAX_STEERS = 3;
 // sessions, so dialling on every tick would multiply one question by sessions × ticks. Nothing is
 // gained by asking more often than the chaser's cooldownMin, because delivery itself is capped at
 // that window per nudge × document × session — an answer that cannot be delivered is an answer
-// nobody needed yet. The stamp is written BEFORE the fetch so a hub that is down is retried next
-// window, never hammered every tick.
-const lastDialled = new Map(); // project → ts of the last dial
-const __resetSweep = () => lastDialled.clear();
-async function judgeProject({ project = "", slot = "", session = "", now = Date.now(), cooldownMin = 30, hub = "" } = {}) {
+// nobody needed yet. The stamp is written BEFORE the walk so a registry that cannot be read is
+// retried next window, never re-walked every tick.
+const lastSwept = new Map(); // project → ts of the last sweep
+const __resetSweep = () => lastSwept.clear();
+async function judgeProject({ project = "", slot = "", session = "", now = Date.now(), cooldownMin = 30 } = {}) {
   if (!project) return [];
   const list = entries();
-  // No sweep-clock, hub-backed nudge is on and in scope → the hub is not even dialled. Shell-local
-  // names never arm the dial: their judging lives here, the door has nothing to say about them.
+  // No sweep-clock DOCUMENT nudge is on and in scope → the registry is not even walked. Shell-local
+  // names never arm this pass: their judging is runs and sessions, which document judges never see.
   const armed = list.some(
     (e) => e.clock === "sweep" && !SHELL_LOCAL.has(e.name) && enabledFor(e.name, { project, slot }, list),
   );
   if (!armed) return [];
-  const last = Number(lastDialled.get(project)) || 0;
+  const last = Number(lastSwept.get(project)) || 0;
   if (last && now - last < Math.max(1, Number(cooldownMin) || 30) * 60000) return [];
-  lastDialled.set(project, now);
+  lastSwept.set(project, now);
   let violations;
   try {
-    const res = await fetch(`${hub || HUB()}/judges?project=${encodeURIComponent(project)}`);
-    if (!res || !res.ok) return []; // down, or an older hub with no judges route — nothing to report
-    const body = await res.json();
-    violations = Array.isArray(body) ? body : body && Array.isArray(body.violations) ? body.violations : [];
+    const out = await judges().forProject(project);
+    violations = Array.isArray(out) ? out : [];
   } catch {
-    return []; // a hub that cannot answer is a hub with nothing to report
+    return []; // a registry that cannot be walked has nothing to report
   }
-  // LEAST-RECENTLY-STEERED FIRST, never the hub's order. With more standing violations than the
-  // cap, the hub's first three would re-deliver every window (their cooldown is the same length as
+  // LEAST-RECENTLY-STEERED FIRST, never the registry's order. With more standing violations than
+  // the cap, the first three would re-deliver every window (their cooldown is the same length as
   // the dial window) and the rest would starve forever; ranking by last-fired rotates the whole
   // debt through the cap, so "the rest arrive in later windows" is true rather than hopeful.
   const lastOf = (v) =>
@@ -481,7 +493,7 @@ async function judgeProject({ project = "", slot = "", session = "", now = Date.
 
 module.exports = {
   FILE, SEED, BUILT_IN, SHELL_LOCAL, SWEEP_MAX_STEERS, entries, enabledFor, messageOf,
-  inDebounce, firedWithin, markFired, __resetFired, judgeWrite,
+  inDebounce, firedWithin, markFired, __resetFired, judgeWrite, judgeDocument, __setJudges,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
   QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
   isRegisteredDocumentWrite,

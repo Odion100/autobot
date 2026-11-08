@@ -26,6 +26,7 @@
     "dev:nowatch": "node electron/dev.js --no-watch",
     "smoke:worklist": "node tests/worklist.js",
     "smoke:nudge": "node tests/nudge.js",
+    "smoke:judges": "node tests/judges.js",
     "smoke:nudges": "node tests/nudges.js",
     "smoke:compaction": "node tests/compaction.js",
     "smoke:lanes": "node tests/lanes.js",
