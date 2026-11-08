@@ -176,5 +176,38 @@ const names = (vs) => vs.map((v) => v.nudge).sort();
   ok("the judges' names match the record's — a name drift would make a judge undeliverable");
 }
 
+// ---- 7 · A DOCUMENT VIOLATION NEVER BECOMES A GAP (c33) ----------------------------------------
+{
+  // THE BOUND IS A NEGATIVE, WHICH IS WHY IT NEEDS A GUARD RATHER THAN A READING. Nobody tries the
+  // thing they were told is impossible, so "it never files a gap" is the kind of claim that is true
+  // the day it is written and quietly stops being true the first time somebody adds an escalation
+  // path "for the serious ones". The reason the bound exists: a gap is a message to ANOTHER repo's
+  // owner, and a document violation has no other repo in it — the document is right there and so is
+  // the agent who wrote it, so a gap would route a local fix through a stranger's queue.
+  //
+  // Code drift DOES become a gap (c30), and that is the manager's own judgment in the work-audit
+  // job, never derived here. So the assertion is about THIS path: everything the judges derive, and
+  // everything the record delivers, lands on the document and on its writer.
+  const judgeSrc = fs.readFileSync(new URL("../electron/markdown/judges.cjs", import.meta.url), "utf8");
+  const nudgeSrc = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  for (const [name, src] of [["judges.cjs", judgeSrc], ["nudges.cjs", nudgeSrc]])
+    assert.ok(!/gap/i.test(src.replace(/\/\/[^\n]*/g, "")),
+      `${name} mentions gap NOWHERE in its code — a document violation cannot escalate out of the document`);
+
+  // AND THE VIOLATION ITSELF CARRIES NOTHING A GAP COULD BE BUILT FROM: four fields, all of them
+  // addresses INTO the document. No repo, no owner, no severity — nothing that names another party.
+  const doc = path.join(scratch, "c33.md");
+  fs.writeFileSync(doc, '::::claim[a behavioural claim with only a cmd behind it]{id=g1}\n:::cmd\necho hi\n:::\n::::\n');
+  const found = await judges.forFile(doc, { path: "c33.md", project: "fx" });
+  assert.equal(found.length, 1, "the violating document is reported once");
+  assert.deepEqual(Object.keys(found[0]).sort(), ["detail", "line", "nudge", "path", "project"],
+    "a violation is five fields — nudge, path, project, line, detail");
+  assert.ok(found[0].detail.startsWith("g1 "),
+    "…and detail opens with the CLAIM's own id, so even the prose points back into the document");
+  assert.ok(!/repo|owner|severity|escalat/i.test(JSON.stringify(found[0])),
+    "nothing in a violation names another party — there is no second address to send it to");
+  ok("a document violation never becomes a gap: no gap path in either module, and the violation carries nothing to address one with (c33)");
+}
+
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch {}
 console.log(`\n  ${asserts} assertions across ${pass} checks — the judges read the parse, in this process`);
