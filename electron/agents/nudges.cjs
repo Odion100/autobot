@@ -194,7 +194,29 @@ function entries() {
     return SEED.map((e) => ({ ...e }));
   }
   if (!Array.isArray(parsed)) return SEED.map((e) => ({ ...e }));
-  return parsed.map(normalizeEntry).filter(Boolean);
+  const read = parsed.map(normalizeEntry).filter(Boolean);
+
+  // A RECORD THAT EXISTS STILL GAINS A NEW SEED ROW. "The record seeds itself on first read" was
+  // implemented as "seeds itself when there is no file", so every nudge added to SEED after a
+  // record was written was DEAD ON ARRIVAL for that record — enabledFor opens `if (!e) return
+  // false`, so the nudge was off by omission, undiscoverable, and no surface said so. Measured
+  // 2026-11-09 on his own file: three rows, open-corrections absent, so every correction in the
+  // queue was addressed and silent while the suite stayed green — the suite's scratch file does
+  // not exist on first read and therefore always gets the whole SEED.
+  //
+  // UNION, NEVER RECONCILE. A row that is here keeps every field exactly as it is — his switches,
+  // his scopes, his words, his order. Only a name the record has never carried is appended, with
+  // the seed's own defaults. That is safe because nothing deletes a row: writeEntry updates in
+  // place or appends, and switching a nudge off writes `on: false` rather than removing it, so an
+  // absent name means "never seen" and never "deliberately gone".
+  const known = new Set(read.map((e) => e.name));
+  const missing = SEED.filter((e) => !known.has(e.name)).map((e) => ({ ...e }));
+  if (!missing.length) return read;
+  const grown = [...read, ...missing];
+  try {
+    fs.writeFileSync(f, `${JSON.stringify(grown, null, 2)}\n`);
+  } catch {}
+  return grown;
 }
 
 const entryOf = (name, list) => (list || entries()).find((e) => e.name === name) || null;

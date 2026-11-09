@@ -144,6 +144,44 @@ const VIOLATION = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9
   ok("a corrupt record is read as the seed without destroying what he half-edited");
 }
 {
+  // A RECORD THAT ALREADY EXISTS STILL GAINS A NEW SEED ROW. Measured on his live file 2026-11-09:
+  // it carried three rows written before this RFC, open-corrections was absent, and `enabledFor`
+  // opens `if (!e) return false` — so every correction in the queue was addressed and PERMANENTLY
+  // SILENT, with no surface saying so. The suite could never catch it: a scratch record does not
+  // exist on first read, so it always got the whole SEED. The gap is between "seeds itself on
+  // first read" as §2.1 wrote it and "seeds itself when there is no file" as it was built.
+  const older = [
+    { name: "run-chaser", on: true, scope: "global", severity: "steer", message: "mine", clock: "sweep", cooldownMin: 90 },
+    { name: "behavioural-claim-cmd-only", on: false, scope: ["bu"], severity: "steer", message: "his words", clock: "write", debounceMin: 42 },
+  ];
+  fs.writeFileSync(RECORD, `${JSON.stringify(older, null, 2)}\n`);
+  const grown = nudges.entries();
+  assert.ok(row(grown, "open-corrections"), "a name the record never carried is added on read");
+  assert.ok(row(grown, "run-untouched-for-days"), "…every missing seed name, not just the newest");
+  assert.equal(grown.length, 4, "and nothing is duplicated");
+
+  // HIS ROWS ARE UNTOUCHED — the union may not reconcile. A row that is present keeps every field
+  // exactly as he left it, including a switch that is OFF and a scope that is not global; the
+  // alternative is a "fix" that silently re-arms what he turned off.
+  const chaser = row(grown, "run-chaser");
+  assert.equal(chaser.message, "mine", "his words survive the union");
+  const judge = row(grown, "behavioural-claim-cmd-only");
+  assert.equal(judge.debounceMin, 42, "…and his knob, where the nudge has one to keep");
+  assert.equal(judge.on, false, "a nudge he switched OFF stays off — the union never re-arms one");
+  assert.deepEqual(judge.scope, ["bu"], "…and keeps his scope");
+  assert.equal(grown[0].name, "run-chaser", "his order is kept; the new rows are appended");
+
+  // AND IT IS PERSISTED, so the next reader sees the same thing rather than re-deriving it.
+  const onDisk = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  assert.equal(onDisk.length, 4, "the grown record is written back once, not held in memory");
+  assert.equal(row(onDisk, "behavioural-claim-cmd-only").on, false, "…with his switch still off on disk");
+
+  // THE CONSEQUENCE THE WHOLE THING IS FOR: the nudge is reachable again.
+  assert.equal(nudges.enabledFor("open-corrections", { project: "sv", slot: "sv" }, grown), true,
+    "the corrections nudge is enabled once its row exists — off by omission is what this fixes");
+  ok("an EXISTING record gains a seed row it has never carried, his own rows untouched (§2.1)");
+}
+{
   writeRecord([{ name: "behavioural-claim-cmd-only", on: "yes", scope: 42, severity: "shout", message: 7, clock: "lunar" }]);
   const [e] = nudges.entries();
   assert.equal(e.on, true);
@@ -511,8 +549,16 @@ const judgeRuns = (runs, over = {}) =>
   row(list, UNTOUCHED).scope = "bu";
   writeRecord(list);
   assert.deepEqual(judgeRuns([mkRun()]), [], "scoped to another project, this one hears nothing (c2)");
+  // THE RECORD'S ABSENCE, AND WHAT IT MEANS NOW. `enabledFor` still opens `if (!e) return false`,
+  // so an unknown name is off and the record stays the authority — asserted here against a name
+  // the seed does not carry, because that is the only absence still reachable. A SEED name deleted
+  // from the file comes BACK on the next read (the union above), by design: that state was never
+  // something any door could produce, and leaving it honoured is what killed the corrections
+  // nudge. The way to silence a seeded nudge is its switch, which the line above already proves.
+  assert.equal(nudges.enabledFor("a-nudge-the-seed-never-carried", { project: "sv", slot: "sv" }), false,
+    "no entry in the record means OFF — the record is the authority");
   writeRecord([list[0], list[1]]);
-  assert.deepEqual(judgeRuns([mkRun()]), [], "no entry in the record means OFF — the record is the authority");
+  assert.ok(row(nudges.entries(), UNTOUCHED), "…and deleting a SEEDED row does not switch it off — it returns");
   seedRecord();
   const edited = JSON.parse(fs.readFileSync(RECORD, "utf8"));
   row(edited, UNTOUCHED).clock = "write";
