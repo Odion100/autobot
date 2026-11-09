@@ -76,6 +76,7 @@ const JUDGE_STUB = {
 };
 
 const nudges = require("../electron/agents/nudges.cjs");
+const corrections = require("../electron/agents/corrections.cjs");
 nudges.__setJudges(JUDGE_STUB);
 
 // THE SIGN-OFF COUNTS ASSERTIONS — every call through this proxy is one checked fact, so the
@@ -1072,6 +1073,79 @@ const reset = () => fs.writeFileSync(QUEUE, "[]");
   const m = /function mutateQueue\([\s\S]*?\n\}/.exec(src);
   assert.ok(m && /const fresh = readAuditQueue\(\)/.test(m[0]), "and mutateQueue re-reads immediately before handing the mutator the list");
   ok("every write re-reads and re-applies — a door that opened before another writer does not erase it (c44)");
+}
+
+// ---- 15. THE BOUND, AND THE DOOR'S WIRING — RFC-078 §2.8, slices 3.9/3.10 ----------------------
+// §2.2 already ruled that a derived violation is never queued: it is re-derived at every dial, so
+// it vanishes the moment the work is fixed and there is nothing to store. What that protects is
+// not tidiness — it is ONE VIOLATION ARRIVING ONCE. A derived violation that also became a
+// correction would reach its agent twice, by two routes, with no relation between the copies.
+{
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const bare = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  for (const fn of ["judgeWrite", "judgeDocument", "judgeRuns", "judgeProject"]) {
+    const body = new RegExp(`function ${fn}\\([\\s\\S]*?\\n\\}`).exec(bare);
+    assert.ok(body, `${fn} is in the module`);
+    assert.ok(!/submitCorrection/.test(body[0]),
+      `${fn} never submits a correction — a derived violation reaches its agent once, as a steer (c48)`);
+  }
+  // AND THE DOOR DOES NOT DERIVE EITHER, which is the same bound from the other side: nothing in
+  // the corrections face asks a judge for anything, so a correction is always something somebody
+  // judged and never something a dial produced.
+  const door = fs.readFileSync(new URL("../electron/agents/corrections.cjs", import.meta.url), "utf8");
+  // CALLS, not the word — "a finding you judged" is prose in the tool's own description and is
+  // exactly the distinction this bound is about: a correction is something somebody judged, never
+  // something a dial derived.
+  for (const judge of ["judgeWrite", "judgeDocument", "judgeRuns", "judgeProject", "forFile", "forProject"])
+    assert.ok(!new RegExp(`${judge}\\s*\\(`).test(door), `the corrections door never calls ${judge}`);
+  ok("no derivation path submits a correction and no correction path derives — one violation, one route (c48)");
+}
+{
+  // THE REFUSAL IS SAID. A door that refuses and returns is a door whose refusal an agent can drop
+  // on the floor: the call failed, nothing was written, and the only trace is a return value
+  // nobody re-reads. Same shape and same reason as the dropped steer.
+  reset();
+  const said = [];
+  const tools = corrections.toolsFor({ slot: "manager", projectCode: "sv", onRefused: (r) => said.push(r) });
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  assert.deepEqual(Object.keys(byName).sort(), ["clear", "drop", "mine", "submit"], "four verbs, named");
+
+  const bad = await byName.submit.handler({ text: "something", for: "" }, {});
+  assert.ok(/refused/.test(bad.content[0].text), "the refusal comes back to the calling turn");
+  assert.equal(said.length, 1, "…AND it was said into the session");
+  assert.equal(said[0].verb, "submit");
+  assert.ok(said[0].reason.length > 10, "with the reason, in words");
+
+  const good = await byName.submit.handler({ for: "bu", text: "the note does not support the mark", target: "a practice" }, {});
+  const id = JSON.parse(good.content[0].text).id;
+  assert.ok(id, "a good submit comes back with the correction's address");
+  assert.equal(said.length, 1, "and nothing was said — only refusals are");
+
+  const selfClear = corrections.toolsFor({ slot: "bu", projectCode: "bu", onRefused: (r) => said.push(r) })
+    .find((t) => t.name === "clear");
+  const no = await selfClear.handler({ id }, {});
+  assert.ok(/refused/.test(no.content[0].text), "the owner clearing its own is refused at the door too");
+  assert.equal(said.length, 2, "…and that refusal was said as well");
+
+  const mine = await corrections.toolsFor({ slot: "bu" }).find((t) => t.name === "mine").handler({}, {});
+  assert.ok(/does not support/.test(mine.content[0].text), "bu reads its own correction back");
+  const none = await corrections.toolsFor({ slot: "nobody" }).find((t) => t.name === "mine").handler({}, {});
+  assert.ok(/nothing is owed/.test(none.content[0].text), "an agent owing nothing is told so in words, not with an empty list");
+  ok("every refusal reaches the agent's chat as well as its turn; an empty owing says so in words");
+}
+{
+  // THE WIRING, read from source the way this file reads every other seam — the server is built,
+  // it is handed to the session, and its refusal hook emits into the feed and the life log.
+  const host = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
+  assert.ok(/require\("\.\/corrections\.cjs"\)/.test(host), "the host requires the door");
+  assert.ok(/corrections\.serverFor\(\{/.test(host), "…builds its server");
+  assert.ok(/\[corrections\.SERVER\]: correctionsServer/.test(host), "…and hands it to the session like every other one");
+  const hook = /onRefused: \(\{ verb, reason \}\) => \{[\s\S]*?\n    \},/.exec(host);
+  assert.ok(hook, "the refusal hook is wired");
+  assert.ok(/emit\(s, \{ kind: "correction\.refused"/.test(hook[0]), "…emitting into this session's feed");
+  assert.ok(/logLife\(s,/.test(hook[0]), "…and writing the life-log line beside it");
+  assert.ok(/mcp__\(context\|corrections\|/.test(host), "and its tools are recognised as harness tools");
+  ok("the corrections door is wired into the session, and its refusals ride the feed the dropped steer rides");
 }
 
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);

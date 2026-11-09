@@ -30,6 +30,7 @@ const HISTORY_LIMIT = 2000;
 const { buildUpdate } = require("../apps/documentUpdate.cjs");
 const documents = require("../markdown/registry.cjs");
 const docFires = require("../markdown/fires.cjs");
+const corrections = require("./corrections.cjs");
 const docWrite = require("../markdown/write.cjs");
 const PROJECTS_FILE = () => path.join(require("os").homedir(), ".autobot", "projects.json");
 const { jobRunOf, onRunOpened, onRunClosed } = require("./runSlots.cjs");
@@ -2145,7 +2146,7 @@ const EVENTS = hooks.EVENTS;
 
 // `worklist` was missing here, so `get`'s result clipped at 400 chars — the list survived and
 // the whiteboard under it was amputated, invisibly. His catch, watching the logs for it.
-const HARNESS_MCP = /^mcp__(context|discovery|systemlynx|systemview|worklist)__/;
+const HARNESS_MCP = /^mcp__(context|corrections|discovery|systemlynx|systemview|worklist)__/;
 const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6000 : 400);
 
 // Lifecycle breadcrumbs — when a session dies on its own, this file says why.
@@ -2819,6 +2820,20 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // has no slot to inherit from or write to.
   const contextServer = context.serverFor({ projectCode, slot: agent ? agent.id : null });
 
+  // CORRECTIONS — RFC-078 §2.8. The audit queue's agent face: submit one, clear one, read your
+  // own, drop a checked entry. The RULES are nudges.cjs's and stay there; what the host adds is
+  // the one thing that module cannot do, which is SAY a refusal out loud. nudges.cjs has no
+  // session to speak into; this does. Same shape and same reason as the dropped steer below —
+  // a door that refuses and returns is a door whose refusal an agent can drop on the floor.
+  const correctionsServer = corrections.serverFor({
+    projectCode,
+    slot: agent ? agent.id : null,
+    onRefused: ({ verb, reason }) => {
+      emit(s, { kind: "correction.refused", verb, reason });
+      logLife(s, `correction ${verb} refused: ${reason}`);
+    },
+  });
+
   // SYSTEMVIEW — the agent face of the hub (RFC-056): tests, probe-grade calls, logs, stats, the
   // TV, the window-driving verbs — as tools with THIS session's identity, replacing the CLI door.
   const systemviewServer = systemview.serverFor({
@@ -2925,6 +2940,7 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         [services.SERVER]: servicesServer,
         [context.SERVER]: contextServer,
         [systemview.SERVER]: systemviewServer,
+        [corrections.SERVER]: correctionsServer,
       },
       canUseTool: (tool, input) =>
         new Promise((resolve) => {
