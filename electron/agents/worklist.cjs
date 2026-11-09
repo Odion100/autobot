@@ -759,9 +759,10 @@ function markNudged(owner, { ts = 0 } = {}) {
     lastAt: Number(ts) > 0 ? Number(ts) : Date.now(),
   };
   // THE STAMP IS NOT MOVEMENT. `updatedAt` means "when did somebody move this" (save()'s own
-  // words), and the chaser stamping it on every nudge made a chased run read permanently fresh —
-  // which would have silenced RFC-078's run-untouched-for-days judge on exactly the runs it exists
-  // to name ("nudged 3 times, no movement" reading as movement). The clock is carried through.
+  // words), so the chaser stamping it on every nudge would make a chased run read permanently
+  // fresh — "nudged 3 times, no movement" recorded as movement, which is the one reading that
+  // would hide a run going nowhere from anything that watches for it. The clock is carried
+  // through.
   save(o, { nudges, ...(movedAt ? { updatedAt: movedAt } : {}) });
   return nudges;
 }

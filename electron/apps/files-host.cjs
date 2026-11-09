@@ -10,7 +10,6 @@ const files = require("./files.cjs");
 const sessions = require("../agents/sessions.cjs");
 const definitions = require("../agents/definitions.cjs");
 const nudge = require("../agents/nudge.cjs");
-const nudges = require("../agents/nudges.cjs");
 const compaction = require("../agents/compaction.cjs");
 
 const PROJECTS_FILE = path.join(os.homedir(), ".autobot", "projects.json");
@@ -229,40 +228,6 @@ function register(getWin) {
     picks: typeof sessions.nudgePicks === "function" ? sessions.nudgePicks() : {},
   }));
   ipcMain.handle("nudge:settings-write", (_e, patch = {}) => nudge.writeSettings(patch));
-
-  // THE NUDGE RECORD (RFC-078 §2.1, drawn by §2.5's band panel) — the LIST of nudges, which is a
-  // different file from the chaser's own knobs above: `nudges.json` is identity, on/off, scope,
-  // severity, wording and clock per nudge, while `nudge.json` holds the chaser's idle/cooldown
-  // numbers. Both doors exist for the same one-home reason — the harness reads these on every clock
-  // tick, so a copy the window owned would be a setting that changes nothing.
-  //
-  // `builtIn` rides along because a row has to show what WOULD arrive while its message is empty;
-  // without it the panel would either render a blank where the real line goes or keep a second copy
-  // of the wording. `shellLocal` tells the panel which rows are judged over run state rather than
-  // documents, which is what decides whether a debounce field means anything on that row.
-  ipcMain.handle("nudges:record", () => ({
-    ok: true,
-    entries: nudges.entries(),
-    builtIn: nudges.BUILT_IN,
-    shellLocal: [...nudges.SHELL_LOCAL],
-  }));
-  // ONE ENTRY, ONE PATCH — merged by name and normalized by the same reader the machinery uses, so
-  // the panel cannot write a record the machinery would not have read.
-  ipcMain.handle("nudges:record-write", (_e, { name = "", patch = {} } = {}) => nudges.writeEntry(name, patch));
-
-  // THE AUDIT QUEUE — RFC-078 §2.8, slice 3.13. He has never been able to look at this: until now
-  // exactly one file in the shell or the window mentioned the queue, and it was the one that writes
-  // it, so every claim about the audit loop running was something he had to take on trust.
-  //
-  // `ok` IS THE WHOLE POINT OF THE SHAPE. readAuditQueue is tolerant by design — a missing file,
-  // an unparseable one and a genuinely empty queue all come back as the same empty list — so a
-  // surface reading only the list cannot tell "nothing is outstanding" from "I could not read it",
-  // and would say the reassuring one. The handler reads the file itself and reports which it was,
-  // so the empty state can say words a failed read could not have produced (c60).
-  // ONE DEFINITION, in nudges.cjs beside the queue it reads (see queueAnswer there for why
-  // `present` and `readable` are separate facts). A handler that held this logic would be logic
-  // no spec could reach, and c60 is precisely about not saying the reassuring thing.
-  ipcMain.handle("corrections:queue", () => nudges.queueAnswer());
 
   // AUTO-COMPACTION — the release valve's settings door, same contract as the nudge's: defaults
   // returned whether or not a file exists, writes merge one field at a time, and the harness owns

@@ -33,23 +33,6 @@ const GRANTS = {
   // shell that HAD the door. A capability missing from this table is absent, not denied — which is
   // exactly why forgetting it is silent.
   nudge: { nudge: "*" },
-  // The nudge RECORD — the list of judges (RFC-078), and its OWN word rather than riding `nudge`
-  // above. Two files, two subjects: `nudge` is the chaser's knobs, this is which nudges exist,
-  // where each applies, what each says and which clock runs it. It is also the broader power — an
-  // entry switched off here silences a judge for every agent in scope — so bundling it under the
-  // older name would have handed that out to anything already granted `nudge`, silently.
-  //
-  // THE THIRD TIME THIS LINE WAS THE BUG. The lane that built the door, then the valve's author,
-  // then RFC-078's: each added a namespace to the preload and not to this table, and the gate
-  // (correctly) dropped it for everyone — so the panel rendered "no nudge-record door yet, restart
-  // it" against a shell that had the door and would never have been fixed by a restart. A
-  // capability missing from this table is ABSENT, not denied, which is exactly why forgetting it
-  // is silent. Adding a namespace to svPreload.cjs is HALF the work; the other half is here and in
-  // each app's own capabilities list.
-  nudges: { nudges: "*" },
-  // RFC-078 §2.8 — the audit queue, read-only. A namespace needs the word HERE and in the app's
-  // own capabilities list in registry.cjs; tests/app-contract.js fails the build if either is missed.
-  corrections: { corrections: "*" },
   // The release valve's settings — same lesson as the line above: a capability missing from this
   // table is ABSENT, not denied, so forgetting it renders "no door" against a shell that has one.
   compaction: { compaction: "*" },
