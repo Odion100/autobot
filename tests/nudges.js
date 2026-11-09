@@ -1259,4 +1259,47 @@ const owedSteer = (out) => out.find((o) => o.nudge === "open-corrections");
   ok("a correction steer re-derives whether the agent still owes — not whether the document still violates");
 }
 
+// ---- 17. THE TWO BOUNDARIES — RFC-078 §2.8, c61 and c62 ----------------------------------------
+{
+  // THE SHELL STILL NEVER LEARNS WHAT A BLOCK IS (§1's boundary, c61). enqueueAudit gates on "a
+  // write to a registered document" and nothing inside the file. Corrections put claim addresses
+  // INTO the file the shell writes, and this amendment is the first thing to put structured
+  // content anywhere near that line — so the append has to stay incurious about it.
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const eq = /function enqueueAudit\([\s\S]*?\n\}/.exec(src);
+  assert.ok(eq, "enqueueAudit is in the module");
+  for (const word of ["target", "corrections", "\\.for\\b", "\\.text\\b"])
+    assert.ok(!new RegExp(word).test(eq[0]), `the append never reads a correction's ${word.replace(/\\[bB.]/g, "")}`);
+  // And it demonstrably does not: an entry appended beside a correction leaves it untouched.
+  reset();
+  nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/RFC-9.md", by: "manager", for: "bu", target: "RFCs/RFC-9.md#c1", text: "words", now: 1 });
+  nudges.enqueueAudit({ path: "/repo/RFCs/OTHER.md", project: "sv", now: 20 * 60000 });
+  const [held] = nudges.readAuditQueue().filter((e) => e.corrections);
+  assert.equal(held.corrections[0].target, "RFCs/RFC-9.md#c1", "a correction's target survives the shell appending beside it, unread");
+  ok("the shell appends an entry without ever reading a correction's target — §1's boundary holds (c61)");
+}
+{
+  // THE QUEUE IS NOT A SECOND STORE OF DOCUMENT STATE (c62). The work-audit job is emphatic that a
+  // finding lands on the document and never in a side file, "because the document is the state";
+  // on its face, writing findings into a JSON file is exactly that. The resolution is that the two
+  // hold DIFFERENT FACTS — the claim carries the finding, the queue carries the obligation — and
+  // what makes it true rather than a sentence is that nothing in this path can write a document.
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const door = fs.readFileSync(new URL("../electron/agents/corrections.cjs", import.meta.url), "utf8");
+  for (const [where, text] of [["the queue module", src], ["the corrections door", door]])
+    for (const writer of ["writeAttr", "markBlock", "announceDocument", "writeFile"])
+      assert.ok(!new RegExp(`${writer}\\s*\\(`).test(text), `${where} never calls ${writer} — it cannot write a document's state`);
+
+  // AND A CORRECTION CARRIES NO CLAIM STATE. The normalizer is the whole vocabulary: id, at, by,
+  // for, target, text. A `state` or `met` on it would be the document's answer living here too.
+  reset();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", text: "x", now: 1, state: "unmet", met: true });
+  const c = nudges.readAuditQueue()[0].corrections[0];
+  assert.deepEqual(Object.keys(c).sort(), ["at", "by", "for", "id", "target", "text"],
+    "a correction is who, whom, about what and in what words — never a claim's state");
+  assert.equal(c.state, undefined, "a state passed in is not carried");
+  assert.equal(c.met, undefined, "and neither is a verdict");
+  ok("the queue holds who owes what and never a document's state — two facts, two homes (c62)");
+}
+
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);
