@@ -933,4 +933,145 @@ const readQueueFile = () => JSON.parse(fs.readFileSync(QUEUE, "utf8"));
   ok("junk corrections are dropped row by row; id, for and text are what make one addressable");
 }
 
+// ---- 14. THE DOORS — RFC-078 §2.8, slices 3.9 and 3.10 -----------------------------------------
+// Submitting, clearing, reading and removing are VERBS now, not an agent editing JSON under a job
+// document's instructions. The difference is that a verb can refuse, and a rule that can refuse is
+// a mechanism rather than a hope — which is what moved four of this section's claims.
+const reset = () => fs.writeFileSync(QUEUE, "[]");
+{
+  reset();
+  for (const [bad, word] of [
+    [{ for: "sv", text: "t" }, "project"],
+    [{ project: "sv", text: "t" }, "owes"],
+    [{ project: "sv", for: "sv" }, "words"],
+  ]) {
+    const r = nudges.submitCorrection(bad);
+    assert.equal(r.ok, false, `submit without a ${word} is refused`);
+    assert.ok(typeof r.reason === "string" && r.reason.length > 10, "…and the refusal is a sentence somebody can read, never a false");
+  }
+  assert.deepEqual(nudges.readAuditQueue(), [], "and NOTHING was written by any of the three");
+  ok("a submit missing its project, its owner or its words is refused in a sentence, and writes nothing (c42)");
+}
+{
+  // NO DOCUMENT WRITE BEHIND IT — the correction about a practice, a repo, an agent's conduct.
+  reset();
+  const r = nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", target: "the worklist chapter", text: "no chapter exists", now: 1000 });
+  assert.equal(r.ok, true);
+  assert.equal(r.joined, false, "it created its own entry rather than joining one");
+  const q = nudges.readAuditQueue();
+  assert.equal(q.length, 1);
+  assert.equal(q[0].path, "", "the entry has no path — nothing wrote a document");
+  assert.equal(q[0].corrections[0].target, "the worklist chapter");
+  assert.equal(q[0].corrections[0].for, "sv");
+  ok("a correction with no document behind it creates its own entry and survives the read (c46)");
+}
+{
+  // JOINING — the write dial refuses a document enqueued inside its window, so the entry a
+  // correction wants may already be there and may be the only one it ever gets.
+  reset();
+  nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 4000 });
+  const r = nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/RFC-9.md", by: "manager", for: "bu", text: "the spec no longer pays for the sentence", now: 5000 });
+  assert.equal(r.ok, true);
+  assert.equal(r.joined, true);
+  const q = nudges.readAuditQueue();
+  assert.equal(q.length, 1, "it joined the standing entry rather than adding a second (c47)");
+  assert.equal(q[0].at, 4000, "…and the entry keeps its own stamp — joining is not re-enqueuing");
+  assert.equal(q[0].corrections.length, 1);
+  const two = nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/RFC-9.md", by: "manager", for: "bu", text: "and the account omits the hole", now: 5000 });
+  assert.equal(two.ok, true);
+  const ids = nudges.readAuditQueue()[0].corrections.map((c) => c.id);
+  assert.equal(ids.length, 2, "a second correction joins the same entry");
+  assert.equal(new Set(ids).size, 2, "…with its own address, even submitted in the same millisecond (c45)");
+  ok("a correction joins the entry already standing for its document, each with its own id");
+}
+{
+  // THE READ, from the other side of the same file — and it is a READ (c58).
+  reset();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", text: "yours", now: 1 });
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "mine", now: 2 });
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", text: "yours too", now: 3 });
+  const mine = nudges.correctionsFor("bu");
+  assert.equal(mine.length, 2, "two of the three are addressed to bu");
+  assert.deepEqual(mine.map((c) => c.text), ["yours", "yours too"]);
+  assert.ok(mine.every((c) => c.project === "sv"), "each carries the entry's project back with it");
+  assert.deepEqual(nudges.correctionsFor("nobody"), [], "an agent with none gets none");
+  assert.deepEqual(nudges.correctionsFor(""), [], "and a nameless ask gets nothing rather than everything");
+  const before = fs.readFileSync(QUEUE, "utf8");
+  nudges.correctionsFor("bu"); nudges.correctionsFor("sv");
+  assert.equal(fs.readFileSync(QUEUE, "utf8"), before, "reading changed the file not one byte (c58)");
+  ok("an agent gets the corrections addressed to it and no others, and looking never writes (c50, c58)");
+}
+{
+  // CLEARING IS NOT THE OWNER'S — the principle, as a refusal rather than a rule in a document.
+  reset();
+  const made = nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", text: "fix the thing", now: 1 });
+  const id = made.correction.id;
+  const self = nudges.clearCorrection({ id, by: "bu" });
+  assert.equal(self.ok, false, "the agent it is for cannot clear it (c48)");
+  assert.ok(self.reason.includes("bu"), "…and the refusal names who owes it");
+  assert.equal(nudges.correctionsFor("bu").length, 1, "and the correction is still standing");
+  assert.equal(nudges.clearCorrection({ id: "nope", by: "manager" }).ok, false, "an id nothing matches is refused");
+  assert.equal(nudges.clearCorrection({ id, by: "" }).ok, false, "clearing unsigned is refused");
+  const done = nudges.clearCorrection({ id, by: "manager" });
+  assert.equal(done.ok, true, "somebody who is not the owner clears it");
+  assert.deepEqual(nudges.correctionsFor("bu"), [], "it is gone from the queue (c52)");
+  // AND THE PATHLESS ENTRY GOES WITH IT. It existed only to carry that correction — no document
+  // behind it, nothing for a drain to read — so with the last one cleared there is nothing left
+  // for it to be. An entry with a path would stay and wait for its drain; this one is finished.
+  assert.deepEqual(nudges.readAuditQueue(), [], "the entry that existed only to carry it is gone too");
+
+  // A PATHED ENTRY SURVIVES ITS LAST CORRECTION and drops the field rather than keeping an empty
+  // list — it still has a document the drain has not checked.
+  reset();
+  nudges.enqueueAudit({ path: "/repo/RFCs/RFC-7.md", project: "sv", now: 10 });
+  const onDoc = nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/RFC-7.md", by: "manager", for: "bu", text: "x", now: 11 });
+  assert.equal(nudges.clearCorrection({ id: onDoc.correction.id, by: "manager" }).ok, true);
+  assert.deepEqual(nudges.readAuditQueue(), [{ project: "sv", path: "/repo/RFCs/RFC-7.md", at: 10 }],
+    "the entry is back to exactly the shape the shell writes — no empty corrections array left behind");
+  ok("a correction is cleared by somebody other than its owner; the entry keeps only what it still has reason to be (c48, c52)");
+}
+{
+  // CORRECTED IS OUT — the inversion. Checked is no longer enough.
+  reset();
+  nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 4000 });
+  const held = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-9.md", at: 4000 });
+  assert.equal(held.ok, true, "with nothing owed, the entry leaves exactly as the drain takes it today (c50)");
+  assert.deepEqual(nudges.readAuditQueue(), []);
+
+  nudges.enqueueAudit({ path: "/repo/RFCs/RFC-8.md", project: "sv", now: 6000 });
+  const made = nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/RFC-8.md", by: "manager", for: "bu", text: "not supported by the work", now: 6500 });
+  const refused = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-8.md", at: 6000 });
+  assert.equal(refused.ok, false, "an entry holding an open correction REFUSES to leave (c49)");
+  assert.ok(/open correction/.test(refused.reason), "…and says why, in words");
+  assert.equal(nudges.readAuditQueue().length, 1, "and it is still standing");
+  assert.equal(nudges.removeEntry({ project: "sv", path: "/nope.md", at: 1 }).ok, false, "an entry nothing matches is refused");
+
+  nudges.clearCorrection({ id: made.correction.id, by: "manager" });
+  assert.equal(nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-8.md", at: 6000 }).ok, true,
+    "cleared, the entry is free to leave (c52)");
+  assert.deepEqual(nudges.readAuditQueue(), [], "the queue finally empties — on repair, not on attention");
+  ok("an entry holding a correction refuses to leave; cleared, it goes — the queue measures repair (c49, c50, c52)");
+}
+{
+  // THE RE-READ (c44). A door must compute its write against what is on disk NOW, not against a
+  // list read earlier — the whole-file replace is last-writer-wins, and corrections give this file
+  // as many writers as there are agents. Simulated by writing underneath a stale snapshot.
+  reset();
+  const stale = nudges.readAuditQueue();                       // a snapshot, taken early
+  assert.deepEqual(stale, []);
+  nudges.enqueueAudit({ path: "/repo/RFCs/OTHER.md", project: "bu", now: 100 }); // somebody else writes
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", text: "mine", now: 200 });
+  const q = nudges.readAuditQueue();
+  assert.equal(q.length, 2, "the other writer's entry SURVIVED a door that opened before it existed");
+  assert.ok(q.some((e) => e.path === "/repo/RFCs/OTHER.md"), "…by name");
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  for (const fn of ["submitCorrection", "clearCorrection", "removeEntry", "enqueueAudit"]) {
+    const body = new RegExp(`function ${fn}\\([\\s\\S]*?\\n\\}`).exec(src);
+    assert.ok(body && /mutateQueue\(/.test(body[0]), `${fn} writes through mutateQueue — never writeAuditQueue on a stale list`);
+  }
+  const m = /function mutateQueue\([\s\S]*?\n\}/.exec(src);
+  assert.ok(m && /const fresh = readAuditQueue\(\)/.test(m[0]), "and mutateQueue re-reads immediately before handing the mutator the list");
+  ok("every write re-reads and re-applies — a door that opened before another writer does not erase it (c44)");
+}
+
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);

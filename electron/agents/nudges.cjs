@@ -456,6 +456,128 @@ function writeAuditQueue(list) {
   }
 }
 
+// EVERY WRITE RE-READS — RFC-078 §2.8, c44. The old shape was read, modify the list you read, write
+// it all back; the tmp-then-rename under it buys a READER a whole file and buys a second WRITER
+// nothing at all, because two writers that both read the same queue and both rename is
+// last-writer-wins and the first one's correction is gone with no error. The queue had one writer
+// when that was written; corrections give it as many writers as there are agents.
+//
+// So no door here computes from a list it read earlier: `mutate` reads immediately before the
+// write and hands the mutator what is on disk NOW. The window is not zero — nothing short of a
+// lock makes it zero — but it is the width of this function rather than the width of an agent's
+// turn, which is the difference between rare and routine.
+function mutateQueue(fn) {
+  const fresh = readAuditQueue();
+  const next = fn(fresh);
+  if (next === null || next === undefined) return null; // the mutator declined; nothing is written
+  return writeAuditQueue(next) ? next : null;
+}
+
+// A refusal is a SENTENCE, not a false. Every door here hands back { ok, reason } because the
+// caller's job is to say it out loud: sessions.cjs emits it into the asking session's own feed,
+// the way a dropped steer already does — "a thing that vanishes silently is indistinguishable
+// from a thing that never happened."
+const refuse = (reason) => ({ ok: false, reason });
+
+// ids are short, sortable and unique within a queue — the address clearCorrection works by.
+function correctionId(now, taken) {
+  const base = Number(now || 0).toString(36);
+  let id = base;
+  for (let n = 1; taken.has(id); n++) id = `${base}-${n}`;
+  return id;
+}
+
+// SUBMIT — RFC-078 §2.8, slices 3.9/3.10. The feature the section exists for. Joins the entry
+// already standing for this document (the write dial refuses a document enqueued inside its
+// window, so the entry a correction wants may be the only one it will get), and creates one where
+// no document write produced anything at all.
+function submitCorrection({ project = "", path: p = "", by = "", for: owes = "", target = "", text = "", now = Date.now() } = {}) {
+  if (!String(project).trim()) return refuse("a correction needs a project to belong to");
+  if (!String(owes).trim()) return refuse("a correction has to name the agent who owes it — `for` is the whole point of the field");
+  if (!String(text).trim()) return refuse("a correction with no words is nothing to act on");
+
+  let written = null;
+  const applied = mutateQueue((queue) => {
+    const taken = new Set(queue.flatMap((e) => (e.corrections || []).map((c) => c.id)));
+    const correction = {
+      id: correctionId(now, taken),
+      at: Number(now) || 0,
+      by: String(by || ""),
+      for: String(owes).trim(),
+      target: String(target || ""),
+      text: String(text).trim(),
+    };
+    written = correction;
+    const doc = String(p || "");
+    const i = doc ? queue.findIndex((e) => e.path === doc && e.project === project) : -1;
+    if (i >= 0) {
+      const e = queue[i];
+      const next = [...queue];
+      next[i] = { ...e, corrections: [...(e.corrections || []), correction] };
+      return next;
+    }
+    return [...queue, { project: String(project), path: doc, at: Number(now) || 0, corrections: [correction] }];
+  });
+  if (!applied) return refuse("the queue could not be written");
+  return { ok: true, correction: written, joined: !!String(p || "") };
+}
+
+// CLEAR — and it refuses the agent the correction is FOR. An agent cannot clear its own
+// correction; that is the same principle every other judgment in this system rests on, and it is
+// here rather than in a job document precisely so it is a refusal and not a rule somebody honours.
+function clearCorrection({ id = "", by = "" } = {}) {
+  const wanted = String(id).trim();
+  if (!wanted) return refuse("clearing needs the correction's id — nothing else addresses one");
+  if (!String(by).trim()) return refuse("clearing is signed work: it needs the name of whoever is clearing it");
+
+  let found = null;
+  const applied = mutateQueue((queue) => {
+    for (const e of queue) found = (e.corrections || []).find((c) => c.id === wanted) || found;
+    if (!found) return null;
+    if (found.for === String(by).trim()) return null; // the refusal below says which it was
+    return queue.map((e) => {
+      if (!e.corrections || !e.corrections.some((c) => c.id === wanted)) return e;
+      const rest = e.corrections.filter((c) => c.id !== wanted);
+      const { corrections, ...bare } = e;
+      return rest.length ? { ...bare, corrections: rest } : bare;
+    });
+  });
+  if (!found) return refuse(`no correction here has the id ${wanted}`);
+  if (found.for === String(by).trim())
+    return refuse(`a correction is not cleared by the agent it is for — ${found.for} owes this one, so somebody else closes it`);
+  if (!applied) return refuse("the queue could not be written");
+  return { ok: true, cleared: found };
+}
+
+// READ — the other side of the same file. A pure read: it never writes, so the two doors above can
+// depend on a correction still being there after anybody looks at it.
+function correctionsFor(slot) {
+  const who = String(slot || "").trim();
+  if (!who) return [];
+  return readAuditQueue().flatMap((e) =>
+    (e.corrections || [])
+      .filter((c) => c.for === who)
+      .map((c) => ({ ...c, project: e.project, path: e.path }))
+  );
+}
+
+// REMOVE — the drain's door, and the inversion this amendment is for. An entry holding an open
+// correction STAYS: the queue stops measuring recent attention and starts measuring outstanding
+// repair. An entry holding none leaves exactly as it does today, so a clean pass still empties.
+function removeEntry({ project = "", path: p = "", at = 0 } = {}) {
+  const match = (e) => e.project === String(project) && e.path === String(p || "") && e.at === (Number(at) || 0);
+  const standing = readAuditQueue().find(match);
+  if (!standing) return refuse("no entry here matches that project, path and stamp");
+  if (standing.corrections && standing.corrections.length)
+    return refuse(
+      `this entry holds ${standing.corrections.length} open correction${standing.corrections.length > 1 ? "s" : ""} — ` +
+        "clear them and it leaves on its own; checked is no longer out"
+    );
+  const applied = mutateQueue((queue) => queue.filter((e) => !match(e)));
+  if (!applied) return refuse("the queue could not be written");
+  return { ok: true, removed: standing };
+}
+
 // The append — called from the same seam as the judges dial (sessions.cjs maybeSteerWrite, on
 // `file.changed`). Returns the entry it wrote, or null when the gate or the window said no.
 function enqueueAudit({ path: p = "", project = "", now = Date.now(), debounceMin = AUDIT_DEBOUNCE_MIN } = {}) {
@@ -466,7 +588,9 @@ function enqueueAudit({ path: p = "", project = "", now = Date.now(), debounceMi
   const windowMs = Math.max(0, Number(debounceMin) || 0) * 60000;
   if (windowMs && queue.some((e) => e.path === doc && now - e.at < windowMs)) return null;
   const entry = { project: String(project), path: doc, at: now };
-  if (!writeAuditQueue([...queue, entry])) return null;
+  // THROUGH THE SAME RE-READING WRITE as every door above (c44) — the debounce decision is made on
+  // the list read a line ago, and the append lands on whatever is on disk at write time.
+  if (!mutateQueue((fresh) => [...fresh, entry])) return null;
   return entry;
 }
 
@@ -625,5 +749,6 @@ module.exports = {
   writeEntry, writeRecord,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
   QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
+  submitCorrection, clearCorrection, correctionsFor, removeEntry,
   isRegisteredDocumentWrite, confirmSteer,
 };
