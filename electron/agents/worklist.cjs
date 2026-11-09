@@ -48,9 +48,11 @@ const TOOL_STATUS = "status";
 const TOOL_ATTACH_NAME = `mcp__${SERVER}__${TOOL_ATTACH}`;
 const TOOL_BOARD_NAME = `mcp__${SERVER}__${TOOL_BOARD}`;
 const TOOL_STATUS_NAME = `mcp__${SERVER}__${TOOL_STATUS}`;
+const TOOL_ASSIGN = "assign";
+const TOOL_ASSIGN_NAME = `mcp__${SERVER}__${TOOL_ASSIGN}`;
 // All names, for the allow-list: pinning `tools` without the reader leaves an
 // agent able to write a plan it can never read back.
-const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS_NAME];
+const TOOL_NAMES = [TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS_NAME, TOOL_ASSIGN_NAME];
 
 // ONE ACTIVE ITEM, enforced rather than requested (their §3 left it to me).
 // "What is it doing right now" has to be unambiguous or the rendering is a guess;
@@ -231,7 +233,12 @@ function markLaneRepo(id, repo) {
 // Applying ONE window to both emptied his jobs and lanes tabs: 93 job/lane sources were left with
 // closed-run residue in the chore stamps and no record behind it. His correction, and it is the
 // whole rule: "I never meant the job lanes… I was only talking about what is the list."
-const WORK_SOURCE = /^(job|lane):/;
+// WHICH RUNS ARE KEPT THE LONG WINDOW. `keepWorkHours` (14 days) against `keepHours` (12 hours),
+// and the line is whether the run has an ARTIFACT somebody may come back to. A job and a lane do.
+// So does a CORRECTION: it is work another agent owes, and the agent that owes it may not sit down
+// again until tomorrow — at the short window a correction submitted in the evening is swept before
+// anybody reads it, which is a bug indistinguishable from nobody submitting any.
+const WORK_SOURCE = /^(job|lane|correction):/;
 const KEEP_FALLBACK_H = 12;
 const KEEP_WORK_FALLBACK_H = 24 * 14;
 function windows() {
@@ -866,7 +873,7 @@ function all() {
 // these for the SDK, and a test can hold the handler and CALL it. That matters here more than usual
 // — `markBroughtIn` shipped defined, exported and tested with no door on it at all, called by
 // nothing but its own test, so zero receipts ever existed. A door is only proven by being opened.
-function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null, onTouch = null) {
+function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null, onTouch = null, identity = {}) {
   const { tool } = require("@anthropic-ai/claude-agent-sdk");
   return [
       tool(
@@ -922,6 +929,87 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
         // alwaysLoad: without it the tool sits behind ToolSearch and the model has
         // to go looking for it — which is exactly the search that came back empty
         // when we measured. A worklist nobody finds is not a worklist.
+        { alwaysLoad: true }
+      ),
+      // ── ASSIGN — WRITE ANOTHER AGENT'S LIST, WHICH IS THE VERB BEHIND A CORRECTION ─────────
+      //
+      // ITS OWN VERB RATHER THAN A PARAMETER ON `set`, and the reason is three bugs measured in one
+      // night: a door that does two different acts depending on one argument hides which one it
+      // did (`joined: !!path`, a drop that swallowed `gone`, a mark tool that said "marked met"
+      // either way). `set` is also the most-called verb here and its description already carries
+      // the source vocabulary; teaching every agent "and you can write someone else's list" to
+      // serve one role is the wrong trade.
+      //
+      // ON THIS SERVER rather than its own, which is the half that is easy to get wrong: a new MCP
+      // server has to join THREE separate membership lists — the result-budget regex here, the
+      // feed's colour map and the profile's badge list — and each one fails silently in a different
+      // disguise. Beside `set` it costs none of that.
+      //
+      // THE AUTHORITY IS ONE NAME IN THE CHASER'S SETTINGS (his design): `manager` in
+      // `~/.autobot/nudge.json`, set in the same panel he opens to control the nudging. Not a field
+      // on every definition and not the profile's per-agent tool lever, because gating it that way
+      // means unchecking a tool on every agent that must not have it — "most of the tools are
+      // already assigned to everybody". EMPTY MEANS REFUSED, never "anyone".
+      tool(
+        TOOL_ASSIGN,
+        "Assign work to ANOTHER agent — the verb behind a correction. It opens a RUN owned by the " +
+          "agent that owes the work, so it is chased like any other run and survives the session " +
+          "you submit it from: the chase matches the SLOT, not the session, so they meet it next " +
+          "time they sit down. It closes the way every run closes — every item done, or explicitly " +
+          "abandoned with an account attached. You cannot assign unless you are the agent named as " +
+          "manager in the worklist settings, and the refusal says so.",
+        {
+          for: z
+            .string()
+            .describe("the agent that owes this work — its slot, e.g. systemview-test. A run nobody owns reaches nobody"),
+          items: z
+            .array(
+              z.object({
+                id: z.string().optional().describe("stable id; keep it the same across calls"),
+                text: z.string().describe("what they have to do, in a few words"),
+                state: z.enum(["pending", "active", "done"]),
+              })
+            )
+            .describe("what the work is, as steps they will work through — the whole list, in order"),
+          source: z
+            .string()
+            .optional()
+            .describe(
+              'what KIND of work this is; defaults to `correction:<you>`. A `correction:` source is ' +
+                "kept the long retention window and is counted by the chaser, so leave it alone " +
+                "unless you mean something else"
+            ),
+        },
+        async ({ for: owes, items, source }) => {
+          const me = String(identity.slot || "");
+          const refuse = (reason) => {
+            try { if (identity.onRefused) identity.onRefused({ verb: TOOL_ASSIGN, reason }); } catch {}
+            return { content: [{ type: "text", text: `refused — ${reason}` }] };
+          };
+          let manager = "";
+          try { manager = String(require("./nudge.cjs").readSettings().manager || ""); } catch {}
+          if (!manager)
+            return refuse("no agent is named as manager in the worklist settings, so nobody may assign work — that field is his to set");
+          if (!me || me !== manager)
+            return refuse(`assigning work is the manager's, and that is ${manager} — not ${me || "an unnamed session"}`);
+          const target = String(owes || "").trim();
+          if (!target) return refuse("a run has to name the agent that owes it — `for` is the whole point of the field");
+          if (target === me) return refuse("assigning to yourself is `set`, not `assign` — this verb exists to reach another agent");
+          const list = normalize(items);
+          if (!list.length) return refuse("a run with no steps is nothing to act on");
+          const src = sourceOf(source) || `correction:${me}`;
+          // THE SESSION IS THE OWING AGENT'S PLACE, three segments because every reader parses it
+          // that way (the board and the lane rows both do). The chase compares the FIRST segment,
+          // so this run is picked up by whichever session of that slot next sits idle.
+          const id = newRunId();
+          writeRun(id, `session:${target}:assigned`, list, src);
+          return {
+            content: [{
+              type: "text",
+              text: `assigned to ${target} — ${list.length} step${list.length === 1 ? "" : "s"}, source ${src}, run ${id}. It is chased until they finish it or abandon it with an account.`,
+            }],
+          };
+        },
         { alwaysLoad: true }
       ),
       tool(
@@ -1099,4 +1187,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_NAMES };
+module.exports = { attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_ASSIGN, TOOL_ASSIGN_NAME, TOOL_NAMES };

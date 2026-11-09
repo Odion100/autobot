@@ -788,6 +788,97 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
     : bad("a lane source does not confirm its registration");
 }
 
+// ---- ASSIGN — writing ANOTHER agent's list, the verb behind a correction -------------------
+// ASSERTED THROUGH THE DOOR, NOT THE MODULE, and that is the whole lesson of 2026-11-09: three
+// sentences were false at the MCP door while their module assertion was green, because the door
+// composed a narrower answer than the verb returned. So these hold the real handler out of
+// `toolsFor` and read what an agent would actually be told.
+{
+  const nudge = require("../electron/agents/nudge.cjs");
+  const doorFor = (slot) => {
+    const said = [];
+    const tools = worklist.toolsFor(
+      () => {}, () => [], null, () => "", null, null, null,
+      { slot, onRefused: ({ verb, reason }) => said.push(`${verb}: ${reason}`) }
+    );
+    const t = tools.find((x) => x.name === worklist.TOOL_ASSIGN);
+    return { said, call: (a) => t.handler(a, {}) };
+  };
+  const text = (r) => String(((r.content || [])[0] || {}).text || "");
+  const runsFor = (slot) => worklist.all().filter((r) => worklist.placeOf(r.session) === slot);
+
+  // EMPTY AUTHORITY MEANS REFUSED, never "anyone" — the one outcome the field exists to prevent.
+  nudge.writeSettings({ manager: "" });
+  let d = doorFor("manager");
+  let r = await d.call({ for: "bu", items: [{ text: "fix it", state: "pending" }] });
+  assert.match(text(r), /no agent is named as manager/, "with nobody named, even a would-be manager is refused");
+  assert.equal(runsFor("bu").length, 0, "…and nothing was written");
+  assert.equal(d.said.length, 1, "…and the refusal was SAID, not only returned");
+  ok("an empty manager field refuses everybody — a blank authority is not a permissive one");
+
+  // THE NAMED AGENT AND NOBODY ELSE.
+  nudge.writeSettings({ manager: "manager" });
+  d = doorFor("systemview-test");
+  r = await d.call({ for: "bu", items: [{ text: "fix it", state: "pending" }] });
+  assert.match(text(r), /that is manager/, "an agent that is not the manager is refused BY NAME");
+  assert.equal(runsFor("bu").length, 0, "…and wrote nothing");
+  ok("assigning is the named manager's, and the refusal says whose it is");
+
+  // THE MANAGER'S OWN CALL LANDS, and the run belongs to the agent that OWES it.
+  d = doorFor("manager");
+  r = await d.call({ for: "bu", items: [{ text: "add the missing spec", state: "pending" }] });
+  assert.match(text(r), /assigned to bu/, "the answer says who it went to");
+  const mine = runsFor("bu");
+  assert.equal(mine.length, 1, "one run, owned by the agent that owes it");
+  assert.equal(mine[0].items[0].text, "add the missing spec");
+  assert.equal(mine[0].source, "correction:manager", "the source names the kind of work and who sent it");
+  assert.equal(d.said.length, 0, "a call that lands says no refusal");
+  ok("the manager's assign opens a run owned by the agent that owes it, sourced correction:<manager>");
+
+  // IT SURVIVES THE SESSION IT WAS SUBMITTED FROM, which is what makes it a correction rather
+  // than a message: the chase matches the SLOT, so any later session of that agent is chased.
+  assert.equal(worklist.placeOf(mine[0].session), "bu", "the run's place is the owing agent");
+  assert.equal(nudge.sameAgent(mine[0].session, "session:bu:some-later-session"), true,
+    "a different session of the same agent is the same agent to the chase");
+  assert.equal(nudge.sameAgent(mine[0].session, "session:manager:1"), false, "and another agent is not");
+  ok("an assigned run is chased in the owing agent's NEXT session, not lost with the one that sent it");
+
+  // THE CHASER COUNTS IT — the whole of his control over how it nudges.
+  assert.equal(nudge.sourceCounts("correction:manager", nudge.DEFAULTS.sources), true,
+    "correction: is in the sources the chaser counts");
+  assert.equal(nudge.sourceCounts("correction:manager", ["job:", "skill:"]), false,
+    "…and taking it out of that list is how he switches it off");
+  ok("the chaser counts a correction because `correction:` is in its sources, and nothing else was needed");
+
+  // RETENTION: work, not a receipt — and it only bites on a CLOSED run, which is why the run is
+  // finished first. The first version of this check pruned an OPEN run and could never fail: a run
+  // that still has pending items is never swept at either window, so the assertion passed with
+  // `correction:` taken straight out of WORK_SOURCE. A guard that cannot fail reads as coverage.
+  const assigned = runsFor("bu")[0];
+  worklist.writeRun(
+    assigned.owner.replace(/^run:/, ""),
+    assigned.session,
+    assigned.items.map((i) => ({ ...i, state: "done" })),
+    assigned.source
+  );
+  assert.equal(runsFor("bu").length, 1, "still one run, now closed");
+  worklist.pruneRuns(Date.now() + 13 * 3600000);
+  assert.equal(runsFor("bu").length, 1, "thirteen hours past closing — beyond the 12h list window — a correction is still there");
+  worklist.pruneRuns(Date.now() + 15 * 24 * 3600000);
+  assert.equal(runsFor("bu").length, 0, "…and fifteen days on it is gone, like any other work run");
+  ok("a CLOSED correction is kept the work window, not the list window — one submitted in the evening survives the night");
+
+  // THE REFUSALS THAT ARE NOT ABOUT AUTHORITY.
+  r = await d.call({ for: "", items: [{ text: "x", state: "pending" }] });
+  assert.match(text(r), /name the agent that owes it/, "a run nobody owns is refused");
+  r = await d.call({ for: "manager", items: [{ text: "x", state: "pending" }] });
+  assert.match(text(r), /assigning to yourself is `set`/, "assigning to yourself is refused, and told which verb to use");
+  r = await d.call({ for: "bu", items: [] });
+  assert.match(text(r), /no steps is nothing to act on/, "an empty list is refused");
+  assert.equal(runsFor("bu").length, 0, "none of the three wrote anything — the only run there was swept above, by design");
+  ok("no owner, yourself, and an empty list are each refused with the reason — and none of them writes");
+}
+
 fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} assertions held — the agent worklist\n`);
 process.exit(0);

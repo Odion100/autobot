@@ -52,7 +52,24 @@ const DEFAULTS = Object.freeze({
   // finish the thing it is being nudged about, which makes the nudge actively harmful.
   ctxCeilingPct: 70,
   // WHICH SOURCES COUNT — prefixes, matched literally. His: "job and skill nudge."
-  sources: ["job:", "skill:"],
+  //
+  // `correction:` is here because a correction IS work somebody owes, and the whole of his control
+  // over how it nudges is this list — same idle window, same cooldown, same ceiling, same switch.
+  // No per-source knobs (his simplification, 2026-11-09: "I can just make it work on what it works
+  // now, basically how the settings are now").
+  sources: ["job:", "skill:", "correction:"],
+  // WHO MAY ASSIGN WORK TO ANOTHER AGENT — one slot name, and empty means nobody.
+  //
+  // THE AUTHORITY IS A NAME HERE RATHER THAN A FIELD ON EVERY DEFINITION, and that is his design:
+  // the profile's lever is allow/deny per agent, so gating `assign` that way would mean unchecking
+  // a tool on every agent that must not have it — "most of the tools are already assigned to
+  // everybody". One name in the settings he already opens to control the nudging is the same
+  // control with none of that work, and it sits beside the thing it governs.
+  //
+  // EMPTY IS THE DEFAULT AND IT MEANS REFUSED, not "anyone". A blank authority that admitted
+  // everybody would hand every agent the power to write another agent's list, which is the one
+  // outcome this field exists to prevent.
+  manager: "",
   // HOW LONG A CLOSED RUN IS KEPT — AND IT IS TWO NUMBERS, because they are two kinds of thing.
   //
   // His ask was about the LISTS: "how quickly the worklist gets deleted should be added to the
@@ -95,6 +112,10 @@ function normalizeSettings(raw) {
     // An EMPTY list is not the same as an absent one: [] means nothing qualifies, which is a way
     // to turn this off that survives somebody flipping `on` back.
     sources: sources ? sources : DEFAULTS.sources.slice(),
+    // A SLOT NAME, OR NOTHING. Trimmed, and anything that is not a string becomes empty rather
+    // than being coerced — `manager: true` admitting a caller named "true" is the kind of accident
+    // a whitelist exists to stop.
+    manager: typeof r.manager === "string" ? r.manager.trim() : "",
     // FLOOR OF 1 HOUR, not 0. "Delete closed runs instantly" reads like a tidiness setting and is
     // really a way to lose the record of work that just finished, before anybody has read it — and
     // it is unrecoverable, unlike every other value here.

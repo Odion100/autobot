@@ -2652,6 +2652,18 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     // run he watched me declare abandoned "doesn't show any abandoned"). Same seam as
     // whiteboard.updated: write, then say so.
     emit(s, { kind: "run.updated", id, source, what });
+  }, {
+    // WHO IS CALLING, closed over here and never taken from tool arguments — the same rule the
+    // context server's slot follows. `assign` compares this against the manager named in the
+    // settings, so a model inventing a name cannot assign anything.
+    slot: agent ? agent.id : s.projectCode,
+    // A REFUSAL IS SAID, NOT RETURNED AND FORGOTTEN (his: "you should probably propagate the
+    // message back to the agent's chat, just like we do with some things that have failed"). The
+    // verb hands the reason over; this is the only half with a session to speak into.
+    onRefused: ({ verb, reason }) => {
+      emit(s, { kind: "worklist.refused", verb, reason });
+      logLife(s, `worklist ${verb} refused: ${reason}`);
+    },
   });
 
   // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
