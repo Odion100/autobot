@@ -259,19 +259,10 @@ function register(getWin) {
   // surface reading only the list cannot tell "nothing is outstanding" from "I could not read it",
   // and would say the reassuring one. The handler reads the file itself and reports which it was,
   // so the empty state can say words a failed read could not have produced (c60).
-  ipcMain.handle("corrections:queue", () => {
-    const file = nudges.QUEUE_FILE();
-    let readable = true;
-    let present = true;
-    try {
-      const raw = fs.readFileSync(file, "utf8");
-      JSON.parse(raw);
-    } catch (e) {
-      present = !(e && e.code === "ENOENT");
-      readable = !present; // a file that is not there is not a file that failed to parse
-    }
-    return { ok: true, file, present, readable, entries: nudges.readAuditQueue() };
-  });
+  // ONE DEFINITION, in nudges.cjs beside the queue it reads (see queueAnswer there for why
+  // `present` and `readable` are separate facts). A handler that held this logic would be logic
+  // no spec could reach, and c60 is precisely about not saying the reassuring thing.
+  ipcMain.handle("corrections:queue", () => nudges.queueAnswer());
 
   // AUTO-COMPACTION — the release valve's settings door, same contract as the nudge's: defaults
   // returned whether or not a file exists, writes merge one field at a time, and the harness owns

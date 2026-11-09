@@ -634,16 +634,61 @@ function correctionsFor(slot) {
   );
 }
 
+// THE SURFACE'S ANSWER — RFC-078 §2.8, c60. Here rather than inline in the IPC handler for one
+// reason: `present` and `readable` are the whole of that claim, and logic that lives inside
+// ipcMain.handle is logic no spec can reach. A blind pass found exactly that — the pane's suite
+// fabricated {present, readable} fixtures, so the handler could have been changed to always say
+// readable and the surface would have said the reassuring thing over an unreadable queue, green.
+//
+// THE DISTINCTION IS THE POINT. readAuditQueue is tolerant: missing, unparseable and genuinely
+// empty all come back as the same empty list. A reader that only has the list cannot tell them
+// apart and will say the comforting one. So this reads the file itself and reports WHICH.
+function queueAnswer({ read = null } = {}) {
+  const file = QUEUE_FILE();
+  const readFile = typeof read === "function" ? read : (f) => fs.readFileSync(f, "utf8");
+  let present = true;
+  let readable = true;
+  try {
+    JSON.parse(readFile(file));
+  } catch (e) {
+    present = !(e && e.code === "ENOENT");
+    // `readable` means WHAT WAS THERE PARSED. A file that is not there has no bytes to fail, so it
+    // reports absent and NOT unreadable — two different facts rather than one failure said twice,
+    // which is the entire reason both fields exist: a surface that cannot tell them apart says the
+    // comforting one.
+    readable = !present;
+  }
+  return { ok: true, file, present, readable, entries: readAuditQueue() };
+}
+
 // REMOVE — the drain's door, and the inversion this amendment is for. An entry holding an open
 // correction STAYS: the queue stops measuring recent attention and starts measuring outstanding
 // repair. An entry holding none leaves exactly as it does today, so a clean pass still empties.
-function removeEntry({ project = "", path: p = "", at = 0 } = {}) {
+function removeEntry({ project = "", path: p = "", at = 0, exists = null } = {}) {
   const match = (e) => e.project === String(project) && e.path === String(p || "") && e.at === (Number(at) || 0);
   const standing = readAuditQueue().find(match);
   if (!standing) return refuse("no entry here matches that project, path and stamp");
-  if (standing.corrections && standing.corrections.length)
+
+  // THE 3AM RULE OUTRANKS THE HOLD — RFC-078 §2.8, and this escape is the thing that makes the
+  // hold survivable. An entry whose DOCUMENT IS GONE can never be audited and its corrections can
+  // never be answered: holding it would produce exactly the silt the rule was written against, an
+  // immortal row nobody can act on. So a gone document takes its corrections with it, and the
+  // answer says what it carried so the drain's account can name them.
+  //
+  // ONLY where there was a document to begin with. A pathless entry is a correction about a
+  // practice, a repo or an agent's conduct — there is nothing on disk for its existence to be a
+  // fact about, so this escape cannot reach it and the hold is absolute there.
+  const onDisk = typeof exists === "function" ? exists : (f) => fs.existsSync(f);
+  const held = (standing.corrections || []).length;
+  if (standing.path && !onDisk(standing.path)) {
+    const applied = mutateQueue((queue) => queue.filter((e) => !match(e)));
+    if (!applied) return refuse("the queue could not be written");
+    return { ok: true, removed: standing, gone: true, carried: held };
+  }
+
+  if (held)
     return refuse(
-      `this entry holds ${standing.corrections.length} open correction${standing.corrections.length > 1 ? "s" : ""} — ` +
+      `this entry holds ${held} open correction${held > 1 ? "s" : ""} — ` +
         "clear them and it leaves on its own; checked is no longer out"
     );
   const applied = mutateQueue((queue) => queue.filter((e) => !match(e)));
@@ -822,6 +867,6 @@ module.exports = {
   writeEntry, writeRecord,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
   QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
-  submitCorrection, clearCorrection, correctionsFor, removeEntry, OPEN_CORRECTIONS,
+  submitCorrection, clearCorrection, correctionsFor, removeEntry, OPEN_CORRECTIONS, queueAnswer,
   isRegisteredDocumentWrite, confirmSteer,
 };

@@ -1015,7 +1015,7 @@ const reset = () => fs.writeFileSync(QUEUE, "[]");
   const before = fs.readFileSync(QUEUE, "utf8");
   nudges.correctionsFor("bu"); nudges.correctionsFor("sv");
   assert.equal(fs.readFileSync(QUEUE, "utf8"), before, "reading changed the file not one byte (c58)");
-  ok("an agent gets the corrections addressed to it and no others, and looking never writes (c50, c58)");
+  ok("an agent gets the corrections addressed to it and no others, and looking never writes (c54, c58)");
 }
 {
   // CLEARING IS NOT THE OWNER'S — the principle, as a refusal rather than a rule in a document.
@@ -1044,29 +1044,63 @@ const reset = () => fs.writeFileSync(QUEUE, "[]");
   assert.equal(nudges.clearCorrection({ id: onDoc.correction.id, by: "manager" }).ok, true);
   assert.deepEqual(nudges.readAuditQueue(), [{ project: "sv", path: "/repo/RFCs/RFC-7.md", at: 10 }],
     "the entry is back to exactly the shape the shell writes — no empty corrections array left behind");
-  ok("a correction is cleared by somebody other than its owner; the entry keeps only what it still has reason to be (c48, c52)");
+  ok("a correction is cleared by somebody other than its owner; the entry keeps only what it still has reason to be (c51, c52)");
 }
 {
   // CORRECTED IS OUT — the inversion. Checked is no longer enough.
   reset();
+  // THESE PATHS ARE FICTIONAL, so the gone-document escape below would fire on every one of them.
+  // `here` is what says "the document is still on disk" — the ordinary case this block is about.
+  const here = () => true;
   nudges.enqueueAudit({ path: "/repo/RFCs/RFC-9.md", project: "sv", now: 4000 });
-  const held = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-9.md", at: 4000 });
+  const held = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-9.md", at: 4000, exists: here });
   assert.equal(held.ok, true, "with nothing owed, the entry leaves exactly as the drain takes it today (c50)");
   assert.deepEqual(nudges.readAuditQueue(), []);
 
   nudges.enqueueAudit({ path: "/repo/RFCs/RFC-8.md", project: "sv", now: 6000 });
   const made = nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/RFC-8.md", by: "manager", for: "bu", text: "not supported by the work", now: 6500 });
-  const refused = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-8.md", at: 6000 });
+  const refused = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-8.md", at: 6000, exists: here });
   assert.equal(refused.ok, false, "an entry holding an open correction REFUSES to leave (c49)");
   assert.ok(/open correction/.test(refused.reason), "…and says why, in words");
+  assert.ok(/\b1 open correction\b/.test(refused.reason), "…and the refusal carries the COUNT, not just the phrase");
   assert.equal(nudges.readAuditQueue().length, 1, "and it is still standing");
-  assert.equal(nudges.removeEntry({ project: "sv", path: "/nope.md", at: 1 }).ok, false, "an entry nothing matches is refused");
+  assert.equal(nudges.removeEntry({ project: "sv", path: "/nope.md", at: 1, exists: here }).ok, false, "an entry nothing matches is refused");
 
   nudges.clearCorrection({ id: made.correction.id, by: "manager" });
-  assert.equal(nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-8.md", at: 6000 }).ok, true,
+  assert.equal(nudges.removeEntry({ project: "sv", path: "/repo/RFCs/RFC-8.md", at: 6000, exists: here }).ok, true,
     "cleared, the entry is free to leave (c52)");
   assert.deepEqual(nudges.readAuditQueue(), [], "the queue finally empties — on repair, not on attention");
   ok("an entry holding a correction refuses to leave; cleared, it goes — the queue measures repair (c49, c50, c52)");
+}
+{
+  // THE 3AM RULE OUTRANKS THE HOLD — §2.8's own bound, which was prose and nothing else until a
+  // blind pass asked what happens to a correction on a document that no longer exists. Holding it
+  // forever is exactly the silt the rule was written against: an immortal row nobody can act on,
+  // because the document can never be re-audited and the correction can never be answered.
+  reset();
+  const here = () => true;
+  const gone = () => false;
+  nudges.enqueueAudit({ path: "/repo/RFCs/DELETED.md", project: "sv", now: 100 });
+  const made = nudges.submitCorrection({ project: "sv", path: "/repo/RFCs/DELETED.md", by: "manager", for: "bu", text: "unanswerable now", now: 150 });
+  assert.equal(nudges.removeEntry({ project: "sv", path: "/repo/RFCs/DELETED.md", at: 100, exists: here }).ok, false,
+    "while the document is there, the hold stands");
+  const swept = nudges.removeEntry({ project: "sv", path: "/repo/RFCs/DELETED.md", at: 100, exists: gone });
+  assert.equal(swept.ok, true, "with the document gone, the entry leaves WITH its corrections");
+  assert.equal(swept.gone, true, "…and says that is why");
+  assert.equal(swept.carried, 1, "…and says what it took with it, so the pass account can name them");
+  assert.deepEqual(nudges.readAuditQueue(), [], "no immortal row");
+
+  // AND IT CANNOT REACH A PATHLESS ENTRY. A correction about a practice has nothing on disk for
+  // its existence to be a fact about, so the hold there is absolute — otherwise every submitted
+  // correction with no document behind it would be swept the moment anybody drained the queue.
+  reset();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", target: "the handbook", text: "still owed", now: 200 });
+  const entry = nudges.readAuditQueue()[0];
+  const tried = nudges.removeEntry({ project: "sv", path: "", at: entry.at, exists: gone });
+  assert.equal(tried.ok, false, "a pathless entry is never swept by the gone-document escape");
+  assert.ok(/open correction/.test(tried.reason), "…it refuses for the ordinary reason");
+  assert.equal(nudges.readAuditQueue().length, 1, "and it stands");
+  ok("a gone document takes its corrections with it and says so; a pathless entry never can (§2.8's 3am bound)");
 }
 {
   // THE RE-READ (c44). A door must compute its write against what is on disk NOW, not against a
@@ -1300,6 +1334,154 @@ const owedSteer = (out) => out.find((o) => o.nudge === "open-corrections");
   assert.equal(c.state, undefined, "a state passed in is not carried");
   assert.equal(c.met, undefined, "and neither is a verdict");
   ok("the queue holds who owes what and never a document's state — two facts, two homes (c62)");
+}
+
+// ---- 18. WHAT THE FIRST WALK'S BLIND PASS FOUND MISSING — RFC-078 §2.8 -------------------------
+// Every check here exists because a second opinion over the twenty-one marks named a clause the
+// evidence did not actually pay for. They are grouped rather than scattered so the reason they
+// exist stays legible.
+{
+  // c45's LOAD-BEARING CLAUSE: "clearing one never takes another with it." Every clearCorrection
+  // in this file until now cleared from an entry holding exactly one correction, so the isolation
+  // the sentence promises was asserted nowhere — the code would have passed, which is not the same
+  // as the claim being checked.
+  reset();
+  const a = nudges.submitCorrection({ project: "sv", path: "/x.md", by: "manager", for: "bu", text: "first", now: 1 });
+  const b = nudges.submitCorrection({ project: "sv", path: "/x.md", by: "manager", for: "bu", text: "second", now: 1 });
+  const c = nudges.submitCorrection({ project: "sv", path: "/x.md", by: "manager", for: "sv", text: "third", now: 1 });
+  assert.equal(new Set([a, b, c].map((r) => r.correction.id)).size, 3, "three on one entry, three addresses");
+  assert.equal(nudges.clearCorrection({ id: b.correction.id, by: "manager" }).ok, true);
+  const left = nudges.readAuditQueue()[0].corrections;
+  assert.equal(left.length, 2, "clearing one took exactly one");
+  assert.deepEqual(left.map((x) => x.text).sort(), ["first", "third"], "…and the other two are untouched, by name");
+  assert.ok(left.every((x) => x.id !== b.correction.id), "the cleared one is the one that went");
+  ok("several corrections on one entry are independently addressable — clearing one leaves the others (c45)");
+}
+{
+  // c49's THIRD CLAUSE: "the refusal reaches the agent's chat." The door test covered submit and
+  // clear; `drop` was routed through the same helper and checked by nothing, which is the
+  // one-verb-generally failure. Every refusing verb is now exercised THROUGH the door.
+  reset();
+  const said = [];
+  const tools = corrections.toolsFor({ slot: "manager", projectCode: "sv", onRefused: (r) => said.push(r) });
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  // A REAL FILE, because the door reaches the real filesystem: a fictional path is a GONE document
+  // and the 3am escape would sweep the entry rather than hold it. That the escape fires here at all
+  // is the §2.8 bound working — this block is about the ordinary case, so it needs a document.
+  const held = path.join(scratch, "HELD.md");
+  fs.writeFileSync(held, "# held\n");
+  nudges.enqueueAudit({ path: held, project: "sv", now: 500 });
+  await byName.submit.handler({ for: "bu", text: "held", path: held }, {});
+  const no = await byName.drop.handler({ path: held, at: 500 }, {});
+  assert.ok(/refused/.test(no.content[0].text), "drop is refused while a correction stands");
+  assert.deepEqual(said.map((x) => x.verb), ["drop"], "…and THAT refusal reached the session, named by its own verb (c49)");
+  assert.ok(/open correction/.test(said[0].reason), "with the reason, in words");
+  // AND THE UNIVERSAL, which no single verb's claim can carry: every verb that can refuse routes
+  // its refusal through the same hook. A fifth verb added without it breaks nothing visible, so
+  // the guard is structural.
+  const door = fs.readFileSync(new URL("../electron/agents/corrections.cjs", import.meta.url), "utf8");
+  const refusing = [...door.matchAll(/return r\.ok \? [\s\S]*?: refused\("(\w+)", r\)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(refusing, ["clear", "drop", "submit"], "every verb that can refuse hands its refusal to the hook — all three, by name");
+  ok("every refusing verb says so in the session, drop included — the universal, not one verb generally (c42, c49, c51)");
+}
+{
+  // c48's BOUND, derived rather than hardcoded. The first version looped over four judge names
+  // written out by hand, so a FIFTH judge that submitted a correction would have left it green.
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const derivation = [...src.matchAll(/(?:async )?function (judge\w+)\(/g)].map((m) => m[1]);
+  assert.ok(derivation.length >= 4, `every judge* function in the module is checked — found ${derivation.join(", ")}`);
+  for (const fn of derivation) {
+    const body = new RegExp(`(?:async )?function ${fn}\\([\\s\\S]*?\\n\\}`).exec(src);
+    assert.ok(body && !/submitCorrection/.test(body[0]), `${fn} never submits a correction (c48)`);
+  }
+  ok(`no derivation path submits a correction — every judge* in the module, found by reading rather than by a list (c48)`);
+}
+{
+  // c62's GUARD WAS VACUOUS on one of its four names: `writeFile\s*\(` matches nothing anywhere in
+  // autobot, while nudges.cjs calls fs.writeFileSync three times for the queue itself. A guard that
+  // cannot fail is worse than no guard, because it reads as coverage. The honest structural
+  // statement is that neither file can reach the markdown writer AT ALL.
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  const door = fs.readFileSync(new URL("../electron/agents/corrections.cjs", import.meta.url), "utf8");
+  for (const [where, text] of [["the queue module", src], ["the corrections door", door]]) {
+    for (const writer of ["writeAttr", "markBlock", "announceDocument"])
+      assert.ok(!new RegExp(`${writer}\\s*\\(`).test(text), `${where} never calls ${writer}`);
+    assert.ok(!/require\(["'][^"']*markdown\/write/.test(text), `${where} cannot even REACH the document writer`);
+  }
+  // And the queue's own fs writes go to the queue and nowhere else.
+  const writes = [...src.matchAll(/fs\.writeFileSync\(([^,]+),/g)].map((m) => m[1].trim());
+  assert.ok(writes.length > 0, "the module does write files — this is not a vacuous check");
+  assert.ok(writes.every((t) => /tmp|f\b|file/i.test(t)), `every fs write targets the record or the queue: ${writes.join(" | ")}`);
+  ok("neither the queue nor its door can write a document — asserted by reach, not by a name that matches nothing (c62)");
+}
+{
+  // MISSING: THE DEBOUNCE, the third of the three things §2.8 says have to be true about the
+  // nudge, and the unstated condition that made c53's sentence read broader than the mechanism.
+  // Every corrections block above resets the stamp before dialling; this one deliberately does not.
+  seedRecord(); reset(); nudges.__resetFired();
+  ANSWER = { ok: true, violations: [] };
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "fix it", now: 10 });
+  const first = (await dial()).find((o) => o.nudge === "open-corrections");
+  assert.ok(first, "the first write carries it");
+  assert.ok(await nudges.confirmSteer(first, { session: "session:sv:1" }), "and delivery stamps the window");
+  const second = (await dial()).find((o) => o.nudge === "open-corrections");
+  assert.equal(second, undefined, "a second write to the same document inside the window is SILENT — one message per burst");
+  const elsewhere = (await dial({ path: "/repo/RFCs/OTHER.md" })).find((o) => o.nudge === "open-corrections");
+  assert.ok(elsewhere, "…and the window is per document, so a different one still carries it");
+  const otherSession = (await dial({ session: "session:sv:2" })).find((o) => o.nudge === "open-corrections");
+  assert.ok(otherSession, "…and per session, so another session has its own");
+  ok("the correction nudge is throttled per nudge × document × session like every other — a burst earns one message");
+}
+{
+  // MISSING: the nudge is EXCLUDED from arming the document judges, by name, and that exclusion
+  // protects c41 — "switched off, the hub is not even dialled". One edit to a .some() predicate
+  // voids it silently, so it is asserted rather than left to a comment.
+  seedRecord(); reset(); nudges.__resetFired();
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  row(list, "behavioural-claim-cmd-only").on = false;
+  writeRecord(list);
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "owed", now: 10 });
+  CALLS.length = 0;
+  nudges.__resetFired();
+  const out = await dial();
+  assert.equal(CALLS.length, 0, "with every write-clock JUDGE off, the document is not parsed — even though a correction is owed (c41)");
+  assert.ok(out.find((o) => o.nudge === "open-corrections"), "…and the correction steer still fires, because it never needed the document");
+  ok("the corrections nudge rides the write clock's moment without arming its parse — c41's guarantee survives");
+}
+{
+  // MISSING: the identity a correction is submitted under is the CALLER's, not an argument. If an
+  // agent could set `by`, "somebody other than the owner clears it" would mean nothing.
+  reset();
+  const mine = corrections.toolsFor({ slot: "manager", projectCode: "sv" }).find((t) => t.name === "submit");
+  await mine.handler({ for: "bu", text: "signed by the door", by: "somebody-else", author: "nor-this" }, {});
+  const [c] = nudges.correctionsFor("bu");
+  assert.equal(c.by, "manager", "the door stamps the caller's own slot — `by` is not an argument it accepts");
+  const door = fs.readFileSync(new URL("../electron/agents/corrections.cjs", import.meta.url), "utf8");
+  assert.ok(/by: me,/.test(door), "…and it is wired that way, not merely ignored");
+  ok("a correction is signed by whoever submitted it — no agent can forge another's name on one");
+}
+{
+  // c60's ALTITUDE. The pane's suite fabricates {present, readable} fixtures, so the fact those
+  // two are DISTINCT was asserted nowhere on the shell side: the handler could have been changed
+  // to always say readable and the window would have said the reassuring thing, green.
+  reset();
+  const ok3 = nudges.queueAnswer({ read: () => "[]" });
+  assert.equal(ok3.present, true); assert.equal(ok3.readable, true);
+  // `readable` means WHAT WAS THERE PARSED. A file that is not there has no bytes to fail, so it
+  // is absent and not unreadable — two different facts rather than one failure said twice, which
+  // is the whole reason both fields exist.
+  const missing = nudges.queueAnswer({ read: () => { const e = new Error("nope"); e.code = "ENOENT"; throw e; } });
+  assert.equal(missing.present, false, "a file that is not there reports absent");
+  assert.equal(missing.readable, true, "…and is NOT also called unreadable — nothing was there to fail to parse");
+  const junk = nudges.queueAnswer({ read: () => "{ this is not json" });
+  assert.equal(junk.present, true, "a file that exists reports present");
+  assert.equal(junk.readable, false, "…and unreadable, which is the case the careful wording exists for");
+  assert.notDeepEqual([junk.present, junk.readable], [missing.present, missing.readable],
+    "the two failures are DISTINGUISHABLE — the whole point, since both yield zero rows");
+  const host = fs.readFileSync(new URL("../electron/apps/files-host.cjs", import.meta.url), "utf8");
+  assert.ok(/corrections:queue", \(\) => nudges\.queueAnswer\(\)/.test(host),
+    "and the window's handler is that function, not a second copy of its logic");
+  ok("absent, unreadable and empty are three different answers from the shell, and the window's door is this one (c60)");
 }
 
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);
