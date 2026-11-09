@@ -70,6 +70,12 @@ const FULL = {
   // where each applies, what it says and which clock runs it. `write` takes one entry's name and a
   // patch of changed fields, never the whole list, so two surfaces editing different rows cannot
   // overwrite each other.
+  // THE AUDIT QUEUE — RFC-078 §2.8. Read-only from the window on purpose: submitting and clearing
+  // are judgments with an author, and they go through the agent door where the caller has a name.
+  // A press that could clear a correction would be a clear signed by nobody.
+  corrections: {
+    queue: () => ipcRenderer.invoke("corrections:queue"),
+  },
   nudges: {
     read: () => ipcRenderer.invoke("nudges:record"),
     write: (name, patch) => ipcRenderer.invoke("nudges:record-write", { name, patch }),

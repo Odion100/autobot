@@ -250,6 +250,29 @@ function register(getWin) {
   // the panel cannot write a record the machinery would not have read.
   ipcMain.handle("nudges:record-write", (_e, { name = "", patch = {} } = {}) => nudges.writeEntry(name, patch));
 
+  // THE AUDIT QUEUE — RFC-078 §2.8, slice 3.13. He has never been able to look at this: until now
+  // exactly one file in the shell or the window mentioned the queue, and it was the one that writes
+  // it, so every claim about the audit loop running was something he had to take on trust.
+  //
+  // `ok` IS THE WHOLE POINT OF THE SHAPE. readAuditQueue is tolerant by design — a missing file,
+  // an unparseable one and a genuinely empty queue all come back as the same empty list — so a
+  // surface reading only the list cannot tell "nothing is outstanding" from "I could not read it",
+  // and would say the reassuring one. The handler reads the file itself and reports which it was,
+  // so the empty state can say words a failed read could not have produced (c60).
+  ipcMain.handle("corrections:queue", () => {
+    const file = nudges.QUEUE_FILE();
+    let readable = true;
+    let present = true;
+    try {
+      const raw = fs.readFileSync(file, "utf8");
+      JSON.parse(raw);
+    } catch (e) {
+      present = !(e && e.code === "ENOENT");
+      readable = !present; // a file that is not there is not a file that failed to parse
+    }
+    return { ok: true, file, present, readable, entries: nudges.readAuditQueue() };
+  });
+
   // AUTO-COMPACTION — the release valve's settings door, same contract as the nudge's: defaults
   // returned whether or not a file exists, writes merge one field at a time, and the harness owns
   // the values because the harness is what reads them on every usage tick.

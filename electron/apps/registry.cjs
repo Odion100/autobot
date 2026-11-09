@@ -55,6 +55,7 @@ const BUILTINS = [
       // the shell was four hours newer than both, and the pane still said "no nudge-record door
       // yet, restart it" because this word was missing. A restart could never have fixed it.
       "nudges",
+      "corrections",
       // The release valve's knobs ride the same cog. THIS line is the one both the nudge's lane and
       // the valve's author forgot: GRANTS maps the capability to namespaces, but an app only gets
       // what its OWN list here asks for — the table alone grants nothing, and the cog renders "no

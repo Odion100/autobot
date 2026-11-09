@@ -72,6 +72,27 @@ const t = (name, cond) => { cond ? pass++ : fail++; console.log(`  ${cond ? "ok 
     `every mapped namespace is one the preload actually builds — dangling: ${dangling.join(", ") || "none"}`,
     dangling.length === 0,
   );
+
+  // AND THE THIRD TABLE, which the two checks above do not reach. A namespace needs the word in
+  // GRANTS *and* in an app's own `capabilities:` list before build() will hand it over — proved by
+  // construction: with "corrections" removed from SystemView's list the namespace is simply not in
+  // the object the window receives. So a bridge can be written, mapped, and granted to nobody, and
+  // both checks above stay green while the window gets an undefined.
+  //
+  // Measured 2026-11-09: that is exactly what happened to this very check. It was written to close
+  // this class after three occurrences and it only ever compared the preload against GRANTS, so the
+  // fourth occurrence would have shipped past it.
+  const listed = new Set();
+  for (const app of Object.values(require("../electron/apps/registry.cjs").APPS || {}))
+    for (const c of app && app.capabilities ? app.capabilities : []) {
+      const map = GRANTS[c] || GRANTS[String(c).split(":")[0]];
+      for (const ns of Object.keys(map || {})) listed.add(ns);
+    }
+  const grantedToNobody = [...reachable].filter((n) => !listed.has(n));
+  t(
+    `every mapped namespace is listed by at least one app — granted to nobody: ${grantedToNobody.join(", ") || "none"}`,
+    grantedToNobody.length === 0,
+  );
 }
 
 console.log("\nthe capability map — absent, not denied");

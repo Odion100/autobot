@@ -88,6 +88,19 @@ const SEED = Object.freeze([
   // how many days a sourced, still-open run may sit with no movement (no item change, no status
   // write — no write of any kind except the chaser's own nudge stamp) before it is a standing
   // violation. Judged by judgeRuns because its subject is run state, not a document's blocks.
+  // THE CORRECTIONS NUDGE — RFC-078 §2.8, slice 3.12. Not a judge: nothing here is derived from a
+  // document. It fires while the writing agent has an open correction standing against it in the
+  // audit queue, which is what makes the queue a queue — "the queue is gonna evoke the agents" —
+  // and it is a setting like every other one, so off is silence and a scope is honoured.
+  Object.freeze({
+    name: "open-corrections",
+    on: true,
+    scope: "global",
+    severity: "steer",
+    message: "",
+    clock: "write",
+    debounceMin: 60,
+  }),
   Object.freeze({
     name: "run-untouched-for-days",
     on: true,
@@ -104,6 +117,10 @@ const SEED = Object.freeze([
 // found a violation is the one that delivers it, or one violation arrives twice.
 const SHELL_LOCAL = new Set(["run-chaser", "run-untouched-for-days"]);
 
+// Named once — judgeWrite composes it and confirmSteer re-derives it, and a second spelling is how
+// the two halves of one nudge stop being one nudge.
+const OPEN_CORRECTIONS = "open-corrections";
+
 // THE BUILT-IN LINES — what arrives while `message` stays empty (c1). The chaser composes its own
 // words in nudge.cjs, so its built-in here is deliberately none.
 const BUILT_IN = Object.freeze({
@@ -113,6 +130,12 @@ const BUILT_IN = Object.freeze({
   // one breath that follows them, his to replace by editing the entry's message (c1).
   "run-untouched-for-days":
     "read `worklist get`, then either drive the run to done or end it honestly — a status starting \"abandoned\" with the account attached. Sitting still is the one thing a sourced run may not do.",
+  // WITHOUT THIS LINE THE NUDGE WOULD NEVER FIRE AND NOTHING WOULD SAY SO: messageOf returns ""
+  // for a name with no authored message and no built-in, and judgeWrite then drops the steer
+  // outright — "nothing to say is not a delivery". A row in the record with no words here is a
+  // nudge that is on, in scope, undebounced, and silent.
+  "open-corrections":
+    "read `mcp__corrections__mine` — somebody audited your work and wrote down what to fix. It stays in the queue until a party that is not you has seen the fix, so answering it is how it goes away.",
 });
 
 const seedByName = (name) => SEED.find((e) => e.name === name) || null;
@@ -238,11 +261,16 @@ async function judgeWrite({ path: p = "", project = "", slot = "", session = "",
   // Only a markdown file can be a registered document — anything else never costs a parse.
   if (!isRegisteredDocumentWrite(p)) return [];
   const list = entries();
-  // No write-clock nudge is on and in scope for this session → the file is not even read.
-  const armed = list.some((e) => e.clock === "write" && enabledFor(e.name, { project, slot }, list));
-  if (!armed) return [];
-  const violations = await judgeDocument(p, { project });
   const out = [];
+
+  // NO WRITE-CLOCK JUDGE IS ON AND IN SCOPE → THE FILE IS NOT EVEN READ (c41). `open-corrections`
+  // is explicitly not counted here: it rides this clock for its MOMENT and derives nothing from
+  // the document, so letting it arm the dial would parse a file for a nudge that never looks at
+  // one — and would quietly break the guarantee that switching the judges off costs nothing.
+  const armed = list.some(
+    (e) => e.clock === "write" && e.name !== OPEN_CORRECTIONS && enabledFor(e.name, { project, slot }, list)
+  );
+  const violations = armed ? await judgeDocument(p, { project }) : [];
   for (const v of violations) {
     if (!v || typeof v !== "object") continue;
     const name = String(v.nudge || "").trim();
@@ -273,6 +301,40 @@ async function judgeWrite({ path: p = "", project = "", slot = "", session = "",
         (detail ? ` — ${detail}` : ""),
     });
   }
+
+  // AND WHAT THIS AGENT OWES — RFC-078 §2.8, slice 3.12. Nothing about the document just written;
+  // the write is only the MOMENT. This clock reaches the session that wrote and no other, which
+  // was exactly wrong for delivering somebody else's finding and is exactly right here: the agent
+  // being told what it owes IS the session in the room. So delivery rides the agent's own next
+  // piece of work rather than a schedule — an agent that writes no registered document is not
+  // steered, and `mcp__corrections__mine` is how it finds out instead.
+  const owed = correctionsFor(slot || project);
+  if (owed.length && enabledFor(OPEN_CORRECTIONS, { project, slot }, list)) {
+    const doc = String(p);
+    if (!inDebounce(OPEN_CORRECTIONS, { doc, session, now }, list)) {
+      const message = messageOf(OPEN_CORRECTIONS, list);
+      if (message) {
+        const first = owed[0];
+        out.push({
+          nudge: OPEN_CORRECTIONS,
+          path: doc,
+          abs: p,
+          project,
+          // THE SLOT RIDES WITH IT, because confirmSteer re-derives "does this agent still owe
+          // anything" and the session key is not the agent's name. Without it the re-derivation
+          // asks about the project code and an agent whose slot differs is never confirmed.
+          slot: slot || project,
+          owed: owed.length,
+          text:
+            `⚖️ Steering nudge — from the harness, not the human. You have ` +
+            `${owed.length} open correction${owed.length > 1 ? "s" : ""} in the audit queue: ${message}` +
+            `\n\n→ ${first.by ? `${first.by}: ` : ""}${first.text}` +
+            (first.target ? `\n→ about ${first.target}` : "") +
+            (owed.length > 1 ? `\n→ and ${owed.length - 1} more` : ""),
+        });
+      }
+    }
+  }
   return out;
 }
 
@@ -301,6 +363,17 @@ async function confirmSteer(st, { session = "", now = Date.now() } = {}) {
   const doc = String(st.path || st.abs);
   const list = entries();
   if (inDebounce(name, { doc, session, now }, list)) return false;
+
+  // A CORRECTION STEER RE-DERIVES WHAT IT IS ABOUT, which is not a document violation — asking the
+  // judges about it would find nothing and drop it every single time. What it re-reads is whether
+  // the agent still owes anything: a correction cleared between derivation and delivery must not
+  // be announced, for the same reason a fixed violation must not be.
+  if (name === OPEN_CORRECTIONS) {
+    if (!correctionsFor(st.slot || st.project || "").length) return false;
+    markFired(name, { doc, session, now });
+    return true;
+  }
+
   let violations;
   try {
     // THE JUDGES DIRECTLY, not judgeDocument — that wrapper returns [] on a throw, which would
@@ -749,6 +822,6 @@ module.exports = {
   writeEntry, writeRecord,
   judgeRuns, connectedProjects, judgeProject, __resetSweep,
   QUEUE_FILE, AUDIT_DEBOUNCE_MIN, readAuditQueue, writeAuditQueue, enqueueAudit,
-  submitCorrection, clearCorrection, correctionsFor, removeEntry,
+  submitCorrection, clearCorrection, correctionsFor, removeEntry, OPEN_CORRECTIONS,
   isRegisteredDocumentWrite, confirmSteer,
 };

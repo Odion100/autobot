@@ -47,6 +47,9 @@ const GRANTS = {
   // is silent. Adding a namespace to svPreload.cjs is HALF the work; the other half is here and in
   // each app's own capabilities list.
   nudges: { nudges: "*" },
+  // RFC-078 §2.8 — the audit queue, read-only. A namespace needs the word HERE and in the app's
+  // own capabilities list in registry.cjs; tests/app-contract.js fails the build if either is missed.
+  corrections: { corrections: "*" },
   // The release valve's settings — same lesson as the line above: a capability missing from this
   // table is ABSENT, not denied, so forgetting it renders "no door" against a shell that has one.
   compaction: { compaction: "*" },

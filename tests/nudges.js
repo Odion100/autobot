@@ -97,34 +97,49 @@ const writeRecord = (list) => fs.writeFileSync(RECORD, `${JSON.stringify(list, n
 const SESSION = { project: "sv", slot: "sv", session: "session:sv:1" };
 const dial = (over = {}) =>
   nudges.judgeWrite({ path: "/repo/RFCs/RFC-9.md", ...SESSION, now: 1000000, ...over });
+// BY NAME, NEVER BY POSITION — the record grew a fourth seed row (open-corrections) and every
+// `list[2]` in this file silently started talking about a different nudge. An index is a reference
+// that goes wrong without going red.
+const row = (list, name) => list[list.findIndex((e) => e.name === name)];
+const UNTOUCHED = "run-untouched-for-days";
+
 const VIOLATION = { nudge: "behavioural-claim-cmd-only", path: "/repo/RFCs/RFC-9.md", line: 12, project: "sv", detail: "c3 holds a :::cmd and no spec" };
 
 // ---- 1. THE SEED ------------------------------------------------------------------------------
 {
   assert.ok(!fs.existsSync(RECORD), "scratch starts with no record");
   const list = nudges.entries();
-  assert.equal(list.length, 3);
+  assert.equal(list.length, 4);
   assert.equal(list[0].name, "run-chaser");
   assert.equal(list[1].name, "behavioural-claim-cmd-only");
-  assert.equal(list[2].name, "run-untouched-for-days");
+  assert.equal(list[2].name, "open-corrections");
+  assert.equal(list[3].name, "run-untouched-for-days");
   assert.ok(fs.existsSync(RECORD), "the first read wrote the seed to disk");
   const onDisk = JSON.parse(fs.readFileSync(RECORD, "utf8"));
   assert.deepEqual(Object.keys(onDisk[0]).sort(), ["clock", "message", "name", "on", "scope", "severity"],
     "the chaser's entry is identity, on/off and scope — none of its nudge.json knobs ride along (c4)");
   assert.equal(onDisk[1].debounceMin, 10);
   assert.equal(onDisk[1].clock, "write");
+  // THE CORRECTIONS ENTRY — RFC-078 §2.8, slice 3.12. Write clock like the judge above it, its own
+  // window, and a message his to write; the BUILT_IN line is what arrives while it stays empty,
+  // and without one the nudge would be on, in scope and permanently silent.
+  assert.deepEqual(Object.keys(row(onDisk, "open-corrections")).sort(), ["clock", "debounceMin", "message", "name", "on", "scope", "severity"],
+    "open-corrections carries exactly the record fields plus its window");
+  assert.equal(row(onDisk, "open-corrections").clock, "write");
+  assert.equal(row(onDisk, "open-corrections").message, "", "seeded wordless — his to write");
+  assert.ok(nudges.BUILT_IN["open-corrections"], "…and it HAS a built-in line, or it could never fire (c57)");
   // THE STANDING JUDGE'S ENTRY — sweep clock, one numeric knob (afterDays), message his to edit.
-  assert.deepEqual(Object.keys(onDisk[2]).sort(), ["afterDays", "clock", "message", "name", "on", "scope", "severity"],
+  assert.deepEqual(Object.keys(row(onDisk, UNTOUCHED)).sort(), ["afterDays", "clock", "message", "name", "on", "scope", "severity"],
     "run-untouched-for-days carries exactly the record fields plus its one knob");
-  assert.equal(onDisk[2].clock, "sweep");
-  assert.equal(onDisk[2].afterDays, 7);
-  assert.equal(onDisk[2].message, "");
-  ok("an absent record seeds itself with the §2.1 entries plus the standing judge, knobs in their place");
+  assert.equal(row(onDisk, UNTOUCHED).clock, "sweep");
+  assert.equal(row(onDisk, UNTOUCHED).afterDays, 7);
+  assert.equal(row(onDisk, UNTOUCHED).message, "");
+  ok("an absent record seeds itself with the §2.1 entries, the corrections nudge and the standing judge, knobs in their place");
 }
 {
   fs.writeFileSync(RECORD, "{ this is not json");
   const list = nudges.entries();
-  assert.equal(list.length, 3, "an unreadable record answers as the seed in memory");
+  assert.equal(list.length, 4, "an unreadable record answers as the seed in memory");
   assert.equal(fs.readFileSync(RECORD, "utf8"), "{ this is not json", "…and the broken file is NOT overwritten");
   ok("a corrupt record is read as the seed without destroying what he half-edited");
 }
@@ -474,33 +489,33 @@ const judgeRuns = (runs, over = {}) =>
 {
   // THE KNOB: afterDays is the entry's, editable like any field, junk falling back to the seed's 7.
   const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
-  list[2].afterDays = 30;
+  row(list, UNTOUCHED).afterDays = 30;
   writeRecord(list);
   nudges.__resetFired();
   assert.deepEqual(judgeRuns([mkRun()]), [], "8 days is quiet under a 30-day knob");
   assert.equal(judgeRuns([mkRun({ updatedAt: NOW - 31 * DAY })]).length, 1, "31 days is not");
-  list[2].afterDays = "soon";
+  row(list, UNTOUCHED).afterDays = "soon";
   writeRecord(list);
-  assert.equal(nudges.entries()[2].afterDays, 7, "a junk knob falls back to the seed's 7, never to nothing");
+  assert.equal(row(nudges.entries(), UNTOUCHED).afterDays, 7, "a junk knob falls back to the seed's 7, never to nothing");
   ok("afterDays is his knob — honored when sane, seeded when junk");
 }
 {
   // THE GATES, SAME LAW AS EVERY NUDGE: switch (c41), scope (c2), the record's absence, the clock.
   seedRecord();
   const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
-  list[2].on = false;
+  row(list, UNTOUCHED).on = false;
   writeRecord(list);
   nudges.__resetFired();
   assert.deepEqual(judgeRuns([mkRun()]), [], "switched off, the moment passes in silence (c41)");
-  list[2].on = true;
-  list[2].scope = "bu";
+  row(list, UNTOUCHED).on = true;
+  row(list, UNTOUCHED).scope = "bu";
   writeRecord(list);
   assert.deepEqual(judgeRuns([mkRun()]), [], "scoped to another project, this one hears nothing (c2)");
   writeRecord([list[0], list[1]]);
   assert.deepEqual(judgeRuns([mkRun()]), [], "no entry in the record means OFF — the record is the authority");
   seedRecord();
   const edited = JSON.parse(fs.readFileSync(RECORD, "utf8"));
-  edited[2].clock = "write";
+  row(edited, UNTOUCHED).clock = "write";
   writeRecord(edited);
   assert.deepEqual(judgeRuns([mkRun()]), [], "moved onto the write clock, the sweep leaves it alone — its own clock, symmetrically");
   ok("the standing judge obeys the record's switch, scope, presence and clock like every nudge");
@@ -521,7 +536,7 @@ const judgeRuns = (runs, over = {}) =>
 {
   // HIS WORDS WIN HERE TOO (c1) — the header keeps the facts his message cannot know.
   const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
-  list[2].message = "park it or finish it";
+  row(list, UNTOUCHED).message = "park it or finish it";
   writeRecord(list);
   nudges.__resetFired();
   const [st] = judgeRuns([mkRun()]);
@@ -578,13 +593,13 @@ const dialProject = (over = {}) =>
   assert.equal(CALLS.length, 0, "run-state sweep nudges never arm the document sweep");
   sweepRecord();
   const l = JSON.parse(fs.readFileSync(RECORD, "utf8"));
-  l[3].on = false;
+  row(l, "met-without-note").on = false;
   writeRecord(l);
   nudges.__resetSweep();
   assert.deepEqual(await dialProject(), []);
   assert.equal(CALLS.length, 0, "switched off, the moment passes without a sweep (c41)");
-  l[3].on = true;
-  l[3].scope = "bu";
+  row(l, "met-without-note").on = true;
+  row(l, "met-without-note").scope = "bu";
   writeRecord(l);
   nudges.__resetSweep();
   assert.deepEqual(await dialProject(), []);
@@ -1146,6 +1161,102 @@ const reset = () => fs.writeFileSync(QUEUE, "[]");
   assert.ok(/logLife\(s,/.test(hook[0]), "…and writing the life-log line beside it");
   assert.ok(/mcp__\(context\|corrections\|/.test(host), "and its tools are recognised as harness tools");
   ok("the corrections door is wired into the session, and its refusals ride the feed the dropped steer rides");
+}
+
+// ---- 16. THE QUEUE FIRES — RFC-078 §2.8, slice 3.12 --------------------------------------------
+// What makes it a queue and not a list. The correction rides the write-time clock §2.3 already
+// runs: a session writes a registered document, the clock steers that session, and if that
+// session's agent owes anything the steer carries it. The clock reaches the session that WROTE and
+// no other — exactly wrong for delivering somebody else's finding, exactly right for telling an
+// agent what it owes, because that agent IS the session in the room.
+const owedSteer = (out) => out.find((o) => o.nudge === "open-corrections");
+{
+  seedRecord(); reset(); nudges.__resetFired();
+  ANSWER = { ok: true, violations: [] };
+  assert.equal(owedSteer(await dial()), undefined, "an agent owing nothing is not steered");
+
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", target: "the handbook", text: "no worklist chapter exists", now: 10 });
+  nudges.__resetFired();
+  const st = owedSteer(await dial());
+  assert.ok(st, "with one correction open, the agent's own next document write carries it (c53)");
+  assert.ok(/1 open correction\b/.test(st.text), "the steer says how many");
+  assert.ok(/no worklist chapter exists/.test(st.text), "…and the correction's own words");
+  assert.ok(/about the handbook/.test(st.text), "…and what it is about");
+  assert.ok(/manager/.test(st.text), "…and who wrote it");
+  assert.equal(st.slot, "sv", "it carries the slot, because delivery re-derives whether THIS agent still owes");
+  ok("an agent with an open correction is steered about it on its own next write (c53)");
+}
+{
+  // SOMEBODY ELSE'S CORRECTION IS NOT YOURS. The filter is `for`, not the project the entry sits in.
+  seedRecord(); reset(); nudges.__resetFired();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "bu", text: "theirs", now: 10 });
+  assert.equal(owedSteer(await dial()), undefined, "a correction addressed to another agent never steers this one");
+  ok("the steer is addressed by `for` — an agent is never told about work it does not owe");
+}
+{
+  // SWITCHED OFF, THE MOMENT PASSES IN SILENCE (c55) — the record is the authority, as for every
+  // other nudge in this document. This is the obedience half, and it is the one a previous pass
+  // over this RFC claimed control of and never claimed obedience to.
+  seedRecord(); reset(); nudges.__resetFired();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "fix it", now: 10 });
+  assert.ok(owedSteer(await dial()), "armed, it fires");
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  row(list, "open-corrections").on = false;
+  writeRecord(list);
+  nudges.__resetFired();
+  assert.equal(owedSteer(await dial()), undefined, "switched off, the moment passes in silence (c55)");
+  ok("the correction nudge obeys its own switch — off is silence, not a quieter message (c55)");
+}
+{
+  // SCOPE IS HONOURED (c56): named slots hear it, everyone else does not.
+  seedRecord(); reset(); nudges.__resetFired();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "fix it", now: 10 });
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  row(list, "open-corrections").scope = ["bu", "agentci"];
+  writeRecord(list);
+  nudges.__resetFired();
+  assert.equal(owedSteer(await dial()), undefined, "an agent outside the scope is never steered about one (c56)");
+  row(list, "open-corrections").scope = ["bu", "sv"];
+  writeRecord(list);
+  nudges.__resetFired();
+  assert.ok(owedSteer(await dial()), "…and a slot inside it is");
+  ok("the correction nudge honours a slot-list scope like every other nudge (c56)");
+}
+{
+  // IT HAS WORDS OF ITS OWN (c57). messageOf returns "" for a name with no authored message and no
+  // built-in line, and the clock then drops the steer outright — "nothing to say is not a
+  // delivery". A nudge shipped without a built-in line is on, in scope, undebounced and silent,
+  // which is a failure mode with no symptom anywhere.
+  seedRecord(); reset(); nudges.__resetFired();
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "fix it", now: 10 });
+  const seeded = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  assert.equal(row(seeded, "open-corrections").message, "", "the record seeds it WORDLESS — his to write");
+  assert.ok(nudges.messageOf("open-corrections", nudges.entries()).length > 20,
+    "…and it still has something to say, from BUILT_IN (c57)");
+  assert.ok(owedSteer(await dial()), "so it fires with no authored message at all");
+  const list = JSON.parse(fs.readFileSync(RECORD, "utf8"));
+  row(list, "open-corrections").message = "go and read your corrections";
+  writeRecord(list);
+  nudges.__resetFired();
+  assert.ok(/go and read your corrections/.test(owedSteer(await dial()).text), "his words win while written (c1)");
+  ok("the correction nudge is never silent for having nothing to say — the built-in line is why (c57)");
+}
+{
+  // DELIVERY RE-DERIVES WHAT IT IS ABOUT, which is not a document violation. Asking the judges
+  // about this nudge would find nothing and drop it every time; what it re-reads is whether the
+  // agent still owes anything, so a correction cleared between derivation and delivery is not
+  // announced — the same honesty the fixed-violation drop was built for.
+  seedRecord(); reset(); nudges.__resetFired();
+  const made = nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "fix it", now: 10 });
+  const st = owedSteer(await dial());
+  assert.ok(st, "derived");
+  nudges.clearCorrection({ id: made.correction.id, by: "manager" });
+  assert.equal(await nudges.confirmSteer(st, { session: "session:sv:1" }), false,
+    "cleared before the turn came round, it is DROPPED rather than announced");
+  nudges.submitCorrection({ project: "sv", by: "manager", for: "sv", text: "and another", now: 20 });
+  nudges.__resetFired();
+  assert.equal(await nudges.confirmSteer(st, { session: "session:sv:1" }), true, "still owed, it is delivered");
+  ok("a correction steer re-derives whether the agent still owes — not whether the document still violates");
 }
 
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);
