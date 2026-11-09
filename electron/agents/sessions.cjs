@@ -2664,6 +2664,15 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       emit(s, { kind: "worklist.refused", verb, reason });
       logLife(s, `worklist ${verb} refused: ${reason}`);
     },
+    // AND AN ASSIGNMENT IS ANNOUNCED INTO THE PLACE IT LANDED, for the same reason a refusal is
+    // spoken: the sender's session is the only one that learns anything from the write, and the
+    // agent that now owes the work is somewhere else entirely. Measured 2026-11-09 — without this
+    // the run sat on disk and the owing agent's band read "0 corrections" until an unrelated event
+    // in that session happened to tick the re-read.
+    onAssigned: ({ slot, source, runId }) => {
+      const told = announceAssigned(slot, { source, runId });
+      logLife(s, `assigned ${source} to ${slot} (run ${runId}) — ${told} session(s) told`);
+    },
   });
 
   // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
@@ -2974,6 +2983,27 @@ const deleteLaneRun = (_key, id) => worklist.deleteRun(id);
 // The precedent is eight lines up: wipeWhiteboard emits `whiteboard.updated` so every watcher clears
 // together, whoever erased it. Lanes get the same treatment. Keyed by PROJECT because that is how a
 // lane row is keyed — the lanes an earlier life of this chat spawned still belong on its strip.
+// A CORRECTION HAS TO ARRIVE, NOT WAIT TO BE FOUND — and without this it waited. RFC-078 §2.8's
+// whole claim is that work handed to another agent reaches it; measured 2026-11-09 with a real
+// assign from the manager, the two runs were on disk, `stripRuns` returned them FIRST, and the
+// owing agent's band read "0 corrections". The window re-reads the run files on a tick from ITS
+// OWN session's events (laneTicks), and a run written by somebody else produces none — so the row
+// appeared only when something unrelated happened to happen.
+//
+// SAME SHAPE AS `lane.removed` ABOVE, for the same reason: a fact that arrived from outside the
+// session has to be announced into it. Targeted at the OWING agent's sessions by slot, because
+// that is who the run belongs to — the sender already knows, and every other project's drawer
+// would be drawing a row about work that is not theirs.
+function announceAssigned(slot, { source = "", runId = "" } = {}) {
+  let told = 0;
+  for (const s of sessions.values()) {
+    if (s.projectCode !== slot) continue;
+    emit(s, { kind: "run.assigned", source: String(source || ""), runId: String(runId || "") });
+    told++;
+  }
+  return told;
+}
+
 function announceLaneRemoved(projectCode, branch) {
   let told = 0;
   for (const s of sessions.values()) {
@@ -3341,7 +3371,7 @@ module.exports = {
   repoHolding, // test seam: a lane's branch may live in a COUPLED repo, not the session's own folder
   purgeAgent, agentRuns,
   setThinking, thinkingOf, // the thinking knob — RFC-073's cousin: how much of the reasoning reaches the window
-  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, stripRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
+  open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, stripRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, announceAssigned, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,
   // ONE READER FOR THE RUN STORE. host.cjs and files-host.cjs each opened this
   // file by path; with the name changing, a missed caller reads an empty object

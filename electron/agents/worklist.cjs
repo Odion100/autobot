@@ -153,13 +153,17 @@ function save(owner, patch) {
     // because the chaser's stamp is bookkeeping and not movement: RFC-078's standing judge
     // (run-untouched-for-days) reads this field as "when did somebody move this", which is what
     // the comment above always promised it meant. Every ordinary write still stamps now.
-    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, nudges: cur.nudges, ...patch, updatedAt: Number(patch && patch.updatedAt) > 0 ? Number(patch.updatedAt) : Date.now() };
+    const next = { owner, items: cur.items || [], source: cur.source, whiteboard: cur.whiteboard, session: cur.session, broughtIn: cur.broughtIn, status: cur.status, repo: cur.repo, selfDirected: cur.selfDirected, attachments: cur.attachments, nudges: cur.nudges, brief: cur.brief, ...patch, updatedAt: Number(patch && patch.updatedAt) > 0 ? Number(patch.updatedAt) : Date.now() };
     if (!next.source) delete next.source;
     if (!next.whiteboard) delete next.whiteboard;
     if (!next.session) delete next.session;
     if (!next.broughtIn) delete next.broughtIn;
     if (!next.status) delete next.status;
     if (!next.repo) delete next.repo;
+    // ABSENT, NEVER EMPTY — the row's tell is whether a brief EXISTS, so "" would draw a quote
+    // mark over nothing. It is also a passenger above: the owing agent ticking an item is a write
+    // that knows nothing about the sender's statement, and would otherwise erase it.
+    if (!next.brief) delete next.brief;
     // FALSE IS ABSENT, ON PURPOSE. Every run record already on disk is commissioned work, so
     // "no key" and "false" must be the same answer — which is what makes this need no migration.
     if (!next.selfDirected) delete next.selfDirected;
@@ -429,7 +433,14 @@ function openRunFor(session, source) {
 // THE CALLER IS THE HOST, NEVER THE AGENT. sessions.cjs reads it off the session's current-turn
 // origin; there is no tool parameter that reaches this, by construction — surfaces read state,
 // they never testify, and a field an agent sets about its own provenance is testimony.
-function writeRun(id, session, items, source, { selfDirected } = {}) {
+// THE BRIEF — his design, 2026-11-09: "they need to be able to submit more words than" a list of
+// steps. A worklist item is one clause of work; a correction also has to carry WHY — what was
+// violated, where, and what the sender saw — and that will not fit in a step without turning the
+// step into a paragraph nobody can check off. So the record gains ONE prose field beside the
+// items, written at the open and never by the owing agent: it is the sender's statement, not a
+// status. Anything longer than a paragraph is a document, and attach({kind:"report"}) already
+// points a run at one — this field is deliberately not a place to put a report.
+function writeRun(id, session, items, source, { selfDirected, brief } = {}) {
   const owner = runOwner(id);
   let born = true;
   let hadAbandoned = false;
@@ -438,10 +449,12 @@ function writeRun(id, session, items, source, { selfDirected } = {}) {
   // the nudging — so a run that moves again is no longer abandoned, and keeping the word would let
   // one old declaration excuse every future stall. Cleared alongside the nudge count, same reason.
   try { hadAbandoned = !born && /abandon/i.test(String(((readFile(owner) || {}).status || {}).text || "")); } catch {}
+  const briefText = String(brief == null ? "" : brief).trim().slice(0, 2000);
   save(owner, {
     items,
     source: source || undefined,
     session,
+    ...(briefText ? { brief: briefText } : {}),
     nudges: null, // movement resets it — see write()
     ...(hadAbandoned ? { status: null } : {}),
     ...(born ? { selfDirected: selfDirected === true } : {}),
@@ -514,7 +527,16 @@ function stripRuns(projectCode) {
     if (r.owner.startsWith(pre)) return true;
     if (!r.owner.startsWith("run:") || !r.session.startsWith(pre)) return false;
     const src = String(r.source || "");
-    return src.startsWith("lane:") || src.startsWith("job:") || src.startsWith("skill:");
+    // A CORRECTION IS A ROW HERE OR IT IS NOWHERE. This filter is a membership list, and the
+    // thing a new run kind forgets: the tab counts rows the strip returns, so an assigned run
+    // missing from here draws a tab that can only ever be empty — and the correction would have
+    // lived only as long as the owing session kept re-writing it from a live event.
+    return (
+      src.startsWith("lane:") ||
+      src.startsWith("job:") ||
+      src.startsWith("skill:") ||
+      src.startsWith("correction:")
+    );
   });
 }
 
@@ -828,6 +850,10 @@ function all() {
         updatedAt: r.updatedAt || 0,
         items,
         whiteboard: String(r.whiteboard || ""),
+        // THE SENDER'S PROSE, on the row because the band draws from here. Empty string rather
+        // than undefined for the same reason the receipt is null: "no brief" has to be a value the
+        // renderer can test, not a missing key.
+        brief: String(r.brief || ""),
         // THE RECEIPT RIDES THE ROW, or the window cannot see it: `laneRuns` filters this list, and
         // the lane strip is drawn from what comes back here. null, never undefined — "no receipt" is
         // an answer the row renders, not a key it has to guess about.
@@ -979,8 +1005,17 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
                 "kept the long retention window and is counted by the chaser, so leave it alone " +
                 "unless you mean something else"
             ),
+          brief: z
+            .string()
+            .optional()
+            .describe(
+              "the WHY, in prose — what you found, where, and what you saw, for work whose steps " +
+                "cannot carry their own reason. It is shown above the steps and it is yours, not " +
+                "theirs: nothing they do edits it. Longer than a paragraph is a document — file it " +
+                "and attach that report to the run instead of pouring it in here"
+            ),
         },
-        async ({ for: owes, items, source }) => {
+        async ({ for: owes, items, source, brief }) => {
           const me = String(identity.slot || "");
           const refuse = (reason) => {
             try { if (identity.onRefused) identity.onRefused({ verb: TOOL_ASSIGN, reason }); } catch {}
@@ -1002,11 +1037,23 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
           // that way (the board and the lane rows both do). The chase compares the FIRST segment,
           // so this run is picked up by whichever session of that slot next sits idle.
           const id = newRunId();
-          writeRun(id, `session:${target}:assigned`, list, src);
+          // THE ANSWER CARRIES THE SIZE, not a boolean — the manager caught this from the caller’s
+          // side, 2026-11-09: “and a brief” reads identically whether the prose landed whole or was
+          // silently capped, so the one failure a cap can cause is the one failure the caller
+          // cannot see. It is the same shape as a subscribed note quietly passing its delivery
+          // ceiling, which is a fault this system has already paid for once.
+          const note = String(brief || "").trim();
+          writeRun(id, `session:${target}:assigned`, list, src, { brief: note });
+          // THE WRITE IS NOT THE ARRIVAL. The owing agent's window re-reads the run files on a tick
+          // from its OWN session's events, so a run written from here produced nothing it could
+          // notice: measured 2026-11-09 with a real assign from the manager, both runs were on disk
+          // and the owing agent's band read "0 corrections". The host announces it into that
+          // agent's sessions, the same way a removed lane is announced to every watcher.
+          try { if (identity.onAssigned) identity.onAssigned({ slot: target, source: src, runId: id }); } catch {}
           return {
             content: [{
               type: "text",
-              text: `assigned to ${target} — ${list.length} step${list.length === 1 ? "" : "s"}, source ${src}, run ${id}. It is chased until they finish it or abandon it with an account.`,
+              text: `assigned to ${target} — ${list.length} step${list.length === 1 ? "" : "s"}${note ? ` and a brief (${Math.min(note.length, 2000)}c)` : " and no brief"}, source ${src}, run ${id}. It is chased until they finish it or abandon it with an account.`,
             }],
           };
         },

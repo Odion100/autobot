@@ -797,12 +797,21 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   const nudge = require("../electron/agents/nudge.cjs");
   const doorFor = (slot) => {
     const said = [];
+    // AND WHAT IT ANNOUNCED. The write is not the arrival: the owing agent's window re-reads the
+    // run files on a tick from its own session's events, so an assign that announces nothing
+    // leaves the row waiting for something unrelated to happen. Collected here so the handler's
+    // half of that is asserted rather than assumed from the shell's side.
+    const told = [];
     const tools = worklist.toolsFor(
       () => {}, () => [], null, () => "", null, null, null,
-      { slot, onRefused: ({ verb, reason }) => said.push(`${verb}: ${reason}`) }
+      {
+        slot,
+        onRefused: ({ verb, reason }) => said.push(`${verb}: ${reason}`),
+        onAssigned: (a) => told.push(a),
+      }
     );
     const t = tools.find((x) => x.name === worklist.TOOL_ASSIGN);
-    return { said, call: (a) => t.handler(a, {}) };
+    return { said, told, call: (a) => t.handler(a, {}) };
   };
   const text = (r) => String(((r.content || [])[0] || {}).text || "");
   const runsFor = (slot) => worklist.all().filter((r) => worklist.placeOf(r.session) === slot);
@@ -877,6 +886,92 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   assert.match(text(r), /no steps is nothing to act on/, "an empty list is refused");
   assert.equal(runsFor("bu").length, 0, "none of the three wrote anything — the only run there was swept above, by design");
   ok("no owner, yourself, and an empty list are each refused with the reason — and none of them writes");
+
+  // THE BRIEF — his design, 2026-11-09: a correction has to be able to carry "more words than" a
+  // list of steps. Asserted on the RECORD, because that is where it has to survive: a brief that
+  // lives only in the answer the manager got is a brief the owing agent never sees.
+  r = await d.call({
+    for: "bu",
+    items: [{ text: "embed the spec", state: "pending" }],
+    brief: "c16 reads met and its fold is empty — the mark cites a run that was never saved.",
+  });
+  // THE SIZE, NOT A BOOLEAN. "and a brief" reads the same whether the prose landed whole or was
+  // capped at the write — so the caller could not see the one failure the cap can cause.
+  assert.match(text(r), /and a brief \(80c\)/, "the answer says how much prose landed, so a capped one is visible at the door");
+  let withBrief = runsFor("bu")[0];
+  assert.match(withBrief.brief, /^c16 reads met/, "the brief is ON the record, beside the items");
+  assert.equal(withBrief.items.length, 1, "…and it did not become an item — an item is work, a brief is not");
+  ok("a brief rides the record beside the steps, and the door confirms one arrived");
+
+  // AND IT IS THE SENDER'S VOICE, NOT THE OWNER'S — so the owing agent moving the list cannot
+  // edit it away. Without this, writeRun's save would drop the field on the first item ticked.
+  worklist.writeRun(
+    withBrief.owner.replace(/^run:/, ""),
+    withBrief.session,
+    withBrief.items.map((i) => ({ ...i, state: "done" })),
+    withBrief.source
+  );
+  assert.match((runsFor("bu")[0] || {}).brief || "", /^c16 reads met/,
+    "the owing agent finishing every step leaves the brief exactly where the sender put it");
+  ok("working the list never rewrites the brief — it is the sender's statement, not a status");
+
+  // NO BRIEF IS AN ABSENT FIELD, never an empty string: the row's tell is "is there one", and ""
+  // would draw a quote mark over nothing.
+  worklist.pruneRuns(Date.now() + 15 * 24 * 3600000);
+  r = await d.call({ for: "bu", items: [{ text: "no prose needed", state: "pending" }] });
+  assert.match(text(r), /and no brief/, "the answer says so when none came");
+  // TWO SHAPES, ON PURPOSE, and the test has to know which it is reading. On DISK the key is
+  // absent — nothing writes a field it has no value for. On the ROW the window reads it is "",
+  // because the renderer tests a value and a missing key would make every row's tell undefined.
+  const noneRow = runsFor("bu")[0];
+  assert.equal("brief" in JSON.parse(fs.readFileSync(noneRow.file, "utf8")), false,
+    "the record carries no brief key at all");
+  assert.equal(noneRow.brief, "", "…and the row the band draws from says so with a value, not a hole");
+  ok("a correction with no brief leaves the key off the record and an empty string on the row");
+
+  // CAPPED, and the cap is on the RECORD rather than trusted to the caller. A report is the right
+  // home for anything longer; this just refuses to become one.
+  r = await d.call({ for: "bu", items: [{ text: "x", state: "pending" }], brief: "z".repeat(5000) });
+  // BY RUN ID, NOT BY INDEX. The earlier run in this block is still OPEN and an open run is never
+  // swept at any window — which is the whole point of that rule — so pruning cannot clear the way
+  // for an index to mean "the one I just wrote". Reading [0] passed by luck until the order moved.
+  const capId = (text(r).match(/run (\S+?)\./) || [])[1];
+  const capped = runsFor("bu").find((x) => x.owner === `run:${capId}`);
+  assert.ok(capped, "found the run the answer named");
+  assert.equal(capped.brief.length, 2000, "two thousand characters and no more");
+  assert.match(text(r), /and a brief \(2000c\)/,
+    "…and the answer says 2000, not 5000 — the caller sees the truncation at the call site");
+  ok("the brief is capped where it is written — prose that wants a document has to be one");
+
+  // THE STRIP IS A MEMBERSHIP LIST, and a run kind missing from it draws a tab that can only ever
+  // be empty. Found 2026-11-09 while wiring the brief: stripRuns filtered to lane/job/skill, so an
+  // assigned run never reached the window from disk at all — it would have lived only as long as
+  // the owing session kept re-writing it from a live event.
+  const strip = worklist.stripRuns("bu").filter((x) => String(x.source || "").startsWith("correction:"));
+  assert.equal(strip.length, runsFor("bu").length, "the owing agent's strip returns EVERY correction run on disk, not a subset");
+  assert.ok(strip.length > 0, "…and there is at least one to return, or this proves nothing");
+  assert.equal(worklist.stripRuns("manager").filter((x) => String(x.source || "").startsWith("correction:")).length, 0,
+    "…and it is NOT in the sender's strip — the row belongs to whoever owes the work");
+  ok("an assigned run reaches the owing agent's band from disk, and only the owing agent's");
+
+  // AND IT IS ANNOUNCED INTO THE PLACE IT LANDED. Measured 2026-11-09 with a real assign from the
+  // manager: both runs on disk, stripRuns returning them FIRST, and the owing agent's band reading
+  // "0 corrections" — because every other thing that re-reads the run files rides an event the
+  // session itself caused, and this one comes from outside it.
+  const announced = d.told[d.told.length - 1];
+  assert.ok(announced, "the handler announced the write");
+  assert.equal(announced.slot, "bu", "…to the OWING agent, not the sender");
+  assert.equal(announced.source, "correction:manager", "…carrying the source, so the band knows which tab moved");
+  assert.match(String(announced.runId || ""), /^r/, "…and the run it opened");
+  ok("an assign announces itself into the owing agent's sessions — the write is not the arrival");
+
+  // A REFUSAL ANNOUNCES NOTHING. Nothing landed, so telling a drawer to re-read would be a tick
+  // about work that does not exist.
+  const before = d.told.length;
+  await d.call({ for: "", items: [{ text: "x", state: "pending" }] });
+  await d.call({ for: "bu", items: [] });
+  assert.equal(d.told.length, before, "two refusals, no announcements");
+  ok("a refused assign announces nothing — only a write that happened is told");
 }
 
 fs.rmSync(scratch, { recursive: true, force: true });
