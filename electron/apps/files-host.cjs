@@ -226,6 +226,13 @@ function register(getWin) {
     // so a countdown is a promise the shell is actually going to keep (his: "I saw two things
     // counting down at the same time… but you only got one nudge"). Older windows ignore it.
     picks: typeof sessions.nudgePicks === "function" ? sessions.nudgePicks() : {},
+    // THE KINDS OF RUN TRAVEL WITH THE SETTINGS, so the window stops keeping a second list of
+    // them. His ask, 2026-11-09: a kind should be able to arrive with its own tab and its own
+    // switch — and the window had its own hardcoded copies of both (bandTabs BAND_KINDS,
+    // nudgeSettings SOURCE_CHOICES), which is two more places for a new kind to go missing on top
+    // of the five already counted in runKinds.cjs. Rides this door rather than a new bridge: the
+    // panel that draws the switches already calls it, and an older window simply ignores the field.
+    kinds: require("../agents/runKinds.cjs").KINDS,
   }));
   ipcMain.handle("nudge:settings-write", (_e, patch = {}) => nudge.writeSettings(patch));
 

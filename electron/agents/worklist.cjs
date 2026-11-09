@@ -237,12 +237,10 @@ function markLaneRepo(id, repo) {
 // Applying ONE window to both emptied his jobs and lanes tabs: 93 job/lane sources were left with
 // closed-run residue in the chore stamps and no record behind it. His correction, and it is the
 // whole rule: "I never meant the job lanes… I was only talking about what is the list."
-// WHICH RUNS ARE KEPT THE LONG WINDOW. `keepWorkHours` (14 days) against `keepHours` (12 hours),
-// and the line is whether the run has an ARTIFACT somebody may come back to. A job and a lane do.
-// So does a CORRECTION: it is work another agent owes, and the agent that owes it may not sit down
-// again until tomorrow — at the short window a correction submitted in the evening is swept before
-// anybody reads it, which is a bug indistinguishable from nobody submitting any.
-const WORK_SOURCE = /^(job|lane|correction):/;
+const { KINDS, kindOf, PREFIXES, OWN_PREFIXES } = require("./runKinds.cjs");
+
+// Kept for readers that want the old predicate shape; it derives, so it cannot disagree.
+const WORK_SOURCE = { test: (s) => !!(kindOf(s) || {}).work };
 const KEEP_FALLBACK_H = 12;
 const KEEP_WORK_FALLBACK_H = 24 * 14;
 function windows() {
@@ -531,12 +529,10 @@ function stripRuns(projectCode) {
     // thing a new run kind forgets: the tab counts rows the strip returns, so an assigned run
     // missing from here draws a tab that can only ever be empty — and the correction would have
     // lived only as long as the owing session kept re-writing it from a live event.
-    return (
-      src.startsWith("lane:") ||
-      src.startsWith("job:") ||
-      src.startsWith("skill:") ||
-      src.startsWith("correction:")
-    );
+    // DERIVED FROM THE KINDS, so a new one draws a row the moment it is declared. This filter
+    // was a typed list and it is exactly where `correction:` went missing — the tab counted rows
+    // this returned, so the kind reached the window and could only ever draw an empty tab.
+    return !!kindOf(src);
   });
 }
 
@@ -1234,4 +1230,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_ASSIGN, TOOL_ASSIGN_NAME, TOOL_NAMES };
+module.exports = { KINDS, kindOf, PREFIXES, OWN_PREFIXES, attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_ASSIGN, TOOL_ASSIGN_NAME, TOOL_NAMES };

@@ -766,19 +766,24 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
 
 // ─── WHAT THE WRITE SAYS BACK ABOUT ITS OWN SOURCE ────────────────────────────────────────────
 // The row above is ABSENT for an unknown source, which is correct and was also silent: nothing
-// told the agent that the list it just wrote is held by nothing. `assignment:run-the-proofs` sat
+// told the agent that the list it just wrote is held by nothing. `made-up-kind:run-the-proofs` sat
 // four-of-thirteen and un-nudged from 29 Oct because of exactly that, so the reminder is pinned
 // here beside the assertion about the missing row — the two halves of one honest answer.
 {
   const sessions = require("../electron/agents/sessions.cjs");
   const SKILLS = [{ name: "assignment" }];
+  // THE UNKNOWN-PREFIX FIXTURE IS NOT `assignment:` ANY MORE. It was, because that was the real
+  // 29-Oct incident — a run sourced `assignment:run-the-proofs` that nothing held. His ask made
+  // `assignment:` a KIND, so the fixture became a known prefix and this assertion started proving
+  // the opposite of what it says. The incident is still the reason the sentence exists; the example
+  // has to be a prefix nothing reads, or the guard is testing the registry rather than the door.
   const JOBS = [{ id: "proactive-development", name: "Proactive development" }];
   const note = (src) => sessions.sourceNote(src, { skills: SKILLS, jobs: JOBS });
 
-  /not a prefix this system reads/.test(note("assignment:run-the-proofs"))
+  /not a prefix this system reads/.test(note("made-up-kind:run-the-proofs"))
     ? ok("an unknown PREFIX is named as unreadable, rather than passing in silence")
     : bad("an unknown prefix still writes a run with nothing said about it");
-  /never nudged/.test(note("assignment:run-the-proofs"))
+  /never nudged/.test(note("made-up-kind:run-the-proofs"))
     ? ok("...and it says what that costs: no row, never nudged")
     : bad("the reminder does not say what an unreadable source costs");
   !/not a prefix this system reads/.test(note("skill:assignment")) && note("skill:assignment") === ""
@@ -817,7 +822,7 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
     : bad("the note claims chasing regardless of the setting: " + off);
 
   // THE SILENT CASE STILL SPEAKS, and it now names four prefixes rather than three.
-  const unknown = withSources("assignment:run-the-proofs", ["job:", "skill:", "correction:"]);
+  const unknown = withSources("made-up-kind:run-the-proofs", ["job:", "skill:", "correction:"]);
   /not a prefix this system reads/.test(unknown) && /correction:/.test(unknown)
     ? ok("an unknown prefix is still named, and the sentence lists every prefix that IS read")
     : bad("the unknown-prefix note is stale: " + unknown);

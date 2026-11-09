@@ -938,19 +938,33 @@ function sourceNote(src, { skills = [], jobs = [], sources = [] } = {}) {
   // CHASED IS A FACT ABOUT HIS SETTINGS, read the same way the chaser reads it (literal prefix
   // match, nudge.cjs sourceCounts) rather than re-implemented.
   const chased = (Array.isArray(sources) ? sources : []).some((p) => p && s.startsWith(String(p)));
-  if (/^correction:/.test(s))
-    return (
-      `a correction owed by this agent, sent by ${s.slice(11) || "another agent"} — it has a row in ` +
-      `the corrections tab and ${chased ? "is chased like a job or a skill" : "is NOT chased, because corrections are switched off in his worklist settings"}. ` +
-      `It closes the way every run closes: every item done, or abandoned with an account attached.`
-    );
   const m = /^(skill|job):(.+)$/.exec(s);
-  if (!m)
+  if (!m) {
+    const { KINDS, OWN_PREFIXES, kindOf } = require("./runKinds.cjs");
+    // A KIND THIS SYSTEM READS gets a positive line even when nothing above knows its name — which
+    // is the whole point of deriving: a kind added to the registry is told it is held on the day it
+    // is added, rather than on the day somebody remembers to edit this sentence.
+    const k = kindOf(s);
+    if (k) {
+      // THE SUFFIX IS THE THING NAMED — a job id, a skill name, a branch, or for a kind an
+      // agent cannot source itself, WHO SENT IT. That last one is the only fact the source carries
+      // that the items do not, so it is said rather than dropped into a generic sentence.
+      const named = s.slice(k.prefix.length).trim();
+      const who = !k.own && named ? ` sent by ${named}` : named ? ` (${named})` : "";
+      return (
+        `${k.label.replace(/s$/, "")} run${who} — it has a row in the ${k.label} tab and ` +
+        `${chased ? "is chased like a job or a skill" : `is NOT chased, because ${k.label} are switched off in his worklist settings`}. ` +
+        `It closes the way every run closes: every item done, or abandoned with an account attached.`
+      );
+    }
+    // AND THE LIST IN THE REFUSAL IS DERIVED TOO, so it cannot name three prefixes on a day there
+    // are five. Only the ones an agent may source its OWN run with are offered.
     return (
-      `note: "${s}" is not a prefix this system reads (skill: job: lane: correction:), so this run ` +
+      `note: "${s}" is not a prefix this system reads (${KINDS.map((x) => x.prefix).join(" ")}), so this run ` +
       `draws no row in his strip${chased ? "" : " and is never nudged"}. Fine for a scratch list; if it is work ` +
-      `anybody should be held to, write it again under skill:<name>, job:<id> or lane:<branch>.`
+      `anybody should be held to, write it again under one of ${OWN_PREFIXES.join(" ")}.`
     );
+  }
   if (m[1] === "skill") {
     const known = skills.some((sk) => sk && sk.name === m[2]);
     return known ? "" : `note: no skill named "${m[2]}" exists — fine if this is a namespace of your own.`;

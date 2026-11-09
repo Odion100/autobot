@@ -30,6 +30,10 @@ const worklist = require("../electron/agents/worklist.cjs");
 
 let pass = 0;
 const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
+// AND ITS OPPOSITE. Same latent hole tests/worklist.js had until today: assertions written
+// `cond ? ok(...) : bad(...)` with no `bad` in scope have a ReferenceError on their failure path,
+// so the first one to go false reports "bad is not defined" at a line number instead of what broke.
+const bad = (n) => { console.error(`\n  FAILED  ${n}\n`); process.exitCode = 1; throw new Error(n); };
 
 const CFG = nudge.normalizeSettings(null);
 const run = (over = {}) => ({
@@ -50,8 +54,18 @@ assert.equal(pick({ source: "" }), null);
 assert.equal(nudge.sourceCounts("", CFG.sources), false);
 ok("the session's own plan is excluded by construction — it carries no source at all");
 
-assert.equal(pick({ source: "lane:lane/a-thing" }), null);
-ok("a source outside the configured list is ignored — a lane is not a procedure that stalled");
+// A LANE IS CHASED NOW, AND THAT IS A CHANGED DEFAULT rather than a changed rule. The sources are
+// derived from the run-kind registry (runKinds.cjs) so a kind arrives WITH its switch, and that
+// swept `lane:` into the default list — where his own settings had already put it, and where his
+// ask of 2026-11-09 wants it: "make sure that the subagents nudge". What did NOT change is that the
+// list is his: take a prefix out and the chaser stops counting it, which is the assertion below.
+assert.ok(pick({ source: "lane:lane/a-thing" }), "a lane is chased on the derived default");
+assert.equal(
+  pick({ source: "lane:lane/a-thing" }, { settings: { ...CFG, sources: ["job:", "skill:"] } }),
+  null,
+  "…and taking lanes out of the configured list is how he stops it",
+);
+ok("a lane is chased by default and switched off by his own list — the switch is the rule, not the kind");
 
 // ---- 2. ONLY GENUINELY UNFINISHED ---------------------------------------------------------------
 assert.equal(pick({ done: 5, total: 5 }), null);
@@ -80,13 +94,18 @@ ok("the cooldown holds, and releases");
   ok("the cycle wraps instead of stopping, and only the final notice names the abandonment door");
 }
 
-// THE ONLY EXCUSE IS THE DECLARED ONE (RFC-078 §2.4, systemview): the status STARTS with
-// "abandoned" AND the run carries at least one attachment. Either half alone is not an ending —
-// the word without the record is testimony, the record without the word is a handover nobody
-// ended. The attachment is ANY kind, not only a report — the press fixed that wording (c14), and
-// the first wiring's `kind === "report"` left a run abandoned with its branch attached nudging
-// forever. And the word is a DECLARATION, not a mention: a status that merely contains "abandoned"
-// mid-sentence never excuses anything.
+// THE ONLY EXCUSE IS THE DECLARED ONE: the status STARTS with "abandoned" AND the run carries a
+// REPORT. Either half alone is not an ending — the word without the record is testimony, the record
+// without the word is a handover nobody ended. And the word is a DECLARATION, not a mention: a
+// status that merely contains "abandoned" mid-sentence never excuses anything.
+//
+// THE ACCOUNT IS A REPORT, AND THIS REVERSES WHAT §2.4 LANDED. A completeness press had widened it
+// to any attachment and c14 was marked met on that wording; his ruling, 2026-11-09: *"if the
+// worklist is nudging you, you abandon it, it shouldn't stop. It should require you to add the
+// report and then a nudge should be reminding you of that."* A branch says what the work touched,
+// not why it stopped — and the lenient version let a run buy its way out of the chase with a chip
+// it was going to attach anyway. Two surfaces already said report and only this one disagreed: the
+// drawer's `isAccounted` and the nudge's own final-notice text.
 {
   const att = [{ kind: "report", ref: "why-it-died", by: "sv", ts: 1 }];
   const st = { text: "abandoned — blocked on his review", ts: 1 };
@@ -94,20 +113,40 @@ ok("the cooldown holds, and releases");
   assert.equal(nudge.excusedOf({ status: st, attachments: att }), true);
   ok("the excuse takes both halves: the run declared abandoned, carrying its account");
 
-  // c13 — abandoned with NOTHING attached: the chase continues exactly as if nothing had been said.
+  // c13 — abandoned with NOTHING attached: the CHASE continues exactly as if nothing had been said.
   assert.ok(pick({ status: st, attachments: null }), "the word without the record is NOT an excuse");
-  assert.equal(
-    pick({ status: st, attachments: null }).text,
-    pick().text,
-    "…and the nudge is the SAME nudge an undeclared stall gets — the bare word changes nothing"
-  );
+  // BUT THE NUDGE IS NOT THE SAME NUDGE, and that is a change of his making, 2026-11-09: *"a nudge
+  // should be reminding you of that."* This used to assert the texts were IDENTICAL — the bare word
+  // changing nothing at all — which is right about the chase and wrong about the agent reading it:
+  // a generic idle nudge about a run you believe you have already ended reads as the declaration
+  // being ignored, and the obvious response is to declare it again, harder.
+  const declared = pick({ status: st, attachments: null }).text;
+  declared !== pick().text && /ALREADY DECLARED THIS ONE ABANDONED/.test(declared)
+    ? ok("a declared run is chased like any other, but TOLD that the account is what is missing")
+    : bad("a declared, unaccounted run gets the same words as an undeclared stall");
   ok("abandoned alone keeps the chase alive, exactly as if nothing had been said");
 
-  // c14 — abandoned with AT LEAST ONE attachment, any kind: the nudging stops, the same end
-  // every-item-done reaches.
-  assert.equal(pick({ status: st, attachments: [{ kind: "branch", ref: "lane/x", ts: 1 }] }), null, "a branch attachment is an account too");
-  assert.equal(pick({ status: st, attachments: [{ kind: "document", ref: "RFCs/RFC-078", ts: 1 }] }), null, "so is a document");
-  ok("abandoned with at least one attachment — any kind — ends the nudging, same as every item done");
+  // c14 — ONLY A REPORT ENDS IT. A branch, a document or a card attached instead say what the work
+  // touched, never why it stopped, and a run could otherwise buy its way out of the chase with a
+  // chip it was going to attach anyway.
+  const stillChased = (att) => pick({ status: st, attachments: att });
+  assert.ok(stillChased([{ kind: "branch", ref: "lane/x", ts: 1 }]), "a branch is not an account");
+  assert.ok(stillChased([{ kind: "document", ref: "RFCs/RFC-078", ts: 1 }]), "nor is a document");
+  assert.ok(stillChased([{ kind: "card", ref: "1794231762504", ts: 1 }]), "nor is a card");
+  assert.equal(stillChased([{ kind: "report", ref: "why-it-died", ts: 1 }]), null, "the report is");
+  ok("abandoned ends the nudging only with a REPORT on it — a branch, a document and a card do not");
+
+  // AND THE NUDGE SAYS WHAT IS MISSING, which is the other half of his instruction: *"a nudge
+  // should be reminding you of that."* A generic idle nudge about a run the agent believes it has
+  // already ended is indistinguishable from the declaration being ignored, and the obvious
+  // conclusion from that is to declare it again, harder.
+  const toldWhy = stillChased([{ kind: "branch", ref: "lane/x", ts: 1 }]).text;
+  /ALREADY DECLARED THIS ONE ABANDONED/.test(toldWhy) && /kind `report`/.test(toldWhy)
+    ? ok("a declared, unaccounted run is told the account is what is missing, and which kind")
+    : bad("the nudge does not say why a declared run is still being chased: " + toldWhy.slice(0, 200));
+  // It says so on the FIRST nudge, not only at the final notice — the exit is already taken, so
+  // naming the bill is not advertising the exit.
+  /ALREADY DECLARED/.test(toldWhy) ? ok("…and on the first nudge of the cycle, not only the last") : bad("only the final notice says it");
 
   assert.ok(pick({ status: { text: "waiting on review", ts: 1 }, attachments: att }), "an account without the word is NOT an excuse");
   assert.ok(

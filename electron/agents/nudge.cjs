@@ -57,7 +57,11 @@ const DEFAULTS = Object.freeze({
   // over how it nudges is this list — same idle window, same cooldown, same ceiling, same switch.
   // No per-source knobs (his simplification, 2026-11-09: "I can just make it work on what it works
   // now, basically how the settings are now").
-  sources: ["job:", "skill:", "correction:"],
+  // DERIVED FROM THE KINDS (worklist.cjs KINDS) rather than typed, so a kind that arrives
+  // arrives WITH its switch — which is his ask: "that could go to the worklist settings as well,
+  // as which one counts". A typed list here is how `correction:` came to be chased by the code and
+  // called unheld by the door in the same breath.
+  sources: Object.freeze(require("./runKinds.cjs").PREFIXES.slice()),
   // WHO MAY ASSIGN WORK TO ANOTHER AGENT — one slot name, and empty means nobody.
   //
   // THE AUTHORITY IS A NAME HERE RATHER THAN A FIELD ON EVERY DEFINITION, and that is his design:
@@ -183,17 +187,37 @@ function cycleOf(run, cfg) {
 // one old excuse cannot cover a new stall. "Abandoned" is the word on purpose — agents will grind
 // out the last two items rather than write it next to their own run.
 //
-// TWO EDGES FIXED BY RFC-078 §2.4 (systemview), where the press settled both wordings:
-//   - "at least one attachment", not "a report attachment" — the first wiring demanded kind
-//     `report`, which left a run abandoned with its branch or document attached nudging forever;
-//     the approved claim (c14) says the attachment, any kind, is the account.
-//   - the status STARTS with "abandoned" — a declaration, not a mention. The old `/abandon/i`
-//     anywhere let "not abandoned, just slow" read as the word being said.
+// THE ACCOUNT IS A REPORT, AND THAT IS HIS RULING — 2026-11-09, given with some impatience because
+// he has given it before: *"if the worklist is nudging you, you abandon it, it shouldn't stop. It
+// should require you to add the report and then a nudge should be reminding you of that."*
+//
+// THIS REVERSES WHAT §2.4 LANDED, deliberately and in the open. The first wiring demanded kind
+// `report`; a completeness press widened it to any attachment, and c14 was marked met on that
+// wording. The cost showed up in use: a BRANCH is not an account of why work stopped, and a run
+// could buy its way out of the chase with a chip it was going to attach anyway. Two other surfaces
+// already disagreed with the lenient version and both said report — the drawer's own `isAccounted`
+// (ACCOUNT_KINDS = {report}) and the final-notice text twenty lines below, which has always told
+// the agent to write a report document and attach it with kind `report`. One fact had three
+// answers and the lenient one was the outlier.
+//
+// THE STATUS STILL HAS TO START WITH "abandoned" — a declaration, not a mention. The old
+// `/abandon/i`-anywhere let "not abandoned, just slow" read as the word being said.
+const ACCOUNT_KINDS = new Set(["report"]);
+
 function excusedOf(run) {
   const st = run && run.status && typeof run.status === "object" ? String(run.status.text || "") : "";
   if (!/^\s*abandoned/i.test(st)) return false;
   const atts = Array.isArray(run && run.attachments) ? run.attachments : [];
-  return atts.some(Boolean);
+  return atts.some((a) => a && ACCOUNT_KINDS.has(String(a.kind || "")));
+}
+
+// IS THIS RUN DECLARED AND UNACCOUNTED — the state his instruction is about. The word is said, the
+// report is not there, and the nudging therefore continues; a nudge that did not SAY why would read
+// as the declaration being ignored.
+function declaredUnaccounted(run) {
+  const st = run && run.status && typeof run.status === "object" ? String(run.status.text || "") : "";
+  if (!/^\s*abandoned/i.test(st)) return false;
+  return !excusedOf(run);
 }
 
 function nudgeText(run, cfg, { session } = {}) {
@@ -220,6 +244,26 @@ function nudgeText(run, cfg, { session } = {}) {
         `by that session, which is why it reached you here. You are not holding this list: read ` +
         `it, and read the whiteboard with it, before you decide anything about it.`
       : "");
+  // THE DECLARED-BUT-UNACCOUNTED NUDGE — his instruction, 2026-11-09: the chase continues and the
+  // nudge "should be reminding you of that". Without this the agent reads a generic idle nudge
+  // about a run it believes it has already ended, which is indistinguishable from the declaration
+  // being ignored — and the obvious conclusion from that is to declare it again, harder.
+  if (declaredUnaccounted(run)) {
+    return (
+      `${head}\n\nYOU HAVE ALREADY DECLARED THIS ONE ABANDONED, and the chase is continuing ` +
+      `because the account is not on it. The word alone does not end a run — if it did, every ` +
+      `stall could be talked out of existence. What is missing is one thing: the REPORT. Write ` +
+      `the account as a report document (a file with a \`::report\` leaf) saying why this cannot ` +
+      `go further, attach it to this run (\`worklist attach\`, kind \`report\`), and the nudging ` +
+      `stops on the next tick — the declaration you already made still stands. A branch, a ` +
+      `document or a card attached instead will NOT do it: those say what the work touched, not ` +
+      `why it stopped.`
+    );
+  }
+  // AND THIS ONE IS EXEMPT FROM THE RULE BELOW, which is why it sits above it: naming the exit
+  // on every ordinary nudge would advertise the way out of work, but this agent has ALREADY
+  // taken that exit and is being told the account it owes. That is not an advertisement, it
+  // is the bill.
   // ORDINARY NUDGES STAY CLEAN (his: the exit is named only on the final notice). Naming the
   // abandonment door every time would advertise the way out of work; the cycle's last word is
   // where it belongs, beside the fact that the nudging does not otherwise stop.
