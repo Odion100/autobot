@@ -30,7 +30,6 @@ const HISTORY_LIMIT = 2000;
 const { buildUpdate } = require("../apps/documentUpdate.cjs");
 const documents = require("../markdown/registry.cjs");
 const docFires = require("../markdown/fires.cjs");
-const corrections = require("./corrections.cjs");
 const docWrite = require("../markdown/write.cjs");
 const PROJECTS_FILE = () => path.join(require("os").homedir(), ".autobot", "projects.json");
 const { jobRunOf, onRunOpened, onRunClosed } = require("./runSlots.cjs");
@@ -141,7 +140,6 @@ const hooks = require("./hooks.cjs");
 const ledger = require("./ledger.cjs");
 const worklist = require("./worklist.cjs");
 const nudge = require("./nudge.cjs");
-const nudges = require("./nudges.cjs"); // RFC-078 — the nudge record and the write-time judges dial
 const compaction = require("./compaction.cjs");
 const skillSources = require("./skillSources.cjs");
 const context = require("./context.cjs");
@@ -791,10 +789,6 @@ function armIdle(s) {
     if (quietMin < 1) return;
     try { fireHooks(s, { kind: "idle", quietMin }); } catch {}
     try { maybeNudge(s, quietMin); } catch {}
-    // THE SWEEP CLOCK rides the same tick (RFC-078 §2.3, c11) — and the tick's own early return
-    // above (turnActive / toolsInFlight) is what makes every standing delivery turn-end (c35):
-    // a session mid-turn is never even asked.
-    try { maybeSweepJudges(s); } catch {}
   }, every);
   if (s.idleTimer.unref) s.idleTimer.unref();
 }
@@ -1087,10 +1081,6 @@ function emit(s, event) {
   // ledger that can break a session is worse than no ledger.
   ledger.record(s, event);
   fireHooks(s, event);
-  // RFC-078 §2.3 — THE WRITE-TIME CLOCK. Both halves of `file.changed` (watcher and schema) land
-  // here, so one line covers every write this session makes. Fire-and-forget: the dial is a fetch
-  // and a feed must never wait on a hub.
-  if (event.kind === "file.changed") maybeSteerWrite(s, event);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1379,130 +1369,6 @@ function maybeNudge(s, quietMin) {
     return null;
   }
   return run;
-}
-
-// A VIOLATION STEERS THE SESSION THAT WROTE IT — RFC-078 §2.3, the write-time clock's delivery
-// half. nudges.judgeWrite does everything that can be wrong (the markdown check, the record's
-// gates, the debounce, the dial, the skew-proof read of the answer); this function only delivers —
-// on the SAME ride the run-chaser uses: a user turn pushed onto the session's own input queue,
-// `nextTurnFromHook` marked so the harness knows no human typed it, a receipt in the feed.
-//
-// THE TARGETING IS BY CONSTRUCTION, not by lookup (c9): the event was emitted into `s`, the
-// session whose write it was, and `s` is the only session this function can reach. No other
-// session hears anything because no other session is in the room.
-function maybeSteerWrite(s, event) {
-  // RFC-078 §2.7, slice 3.4 — THE AUDIT QUEUE rides the SAME moment, behind the SAME gate
-  // (nudges.isRegisteredDocumentWrite, inside enqueueAudit): a registered-document write lands an
-  // entry for the manager's drain, debounced per document. The shell never learns what a block is,
-  // so "met-mark or report filing" narrows here to "registered-document write" — the drain (3.5)
-  // reads the document and decides. Synchronous and swallowed: a queue that cannot be written must
-  // never break the feed that fed it.
-  try {
-    nudges.enqueueAudit({ path: event.path, project: s.projectCode });
-  } catch {}
-  nudges
-    .judgeWrite({
-      path: event.path,
-      project: s.projectCode,
-      slot: s.agentId || s.projectCode, // the slot identity hooks use; the project code when a session runs bare
-      session: s.key, // debounce is per nudge × document × SESSION — the key is the session's identity
-    })
-    .then((steers) => deliverSteers(s, steers))
-    .catch(() => {}); // a hub that cannot answer fires nothing and breaks nothing
-}
-
-// ONE DELIVERY FOR EVERY STEERING NUDGE, whichever clock judged it — the chaser's own ride: a user
-// turn pushed onto the session's input queue, `nextTurnFromHook` marked so the harness knows no
-// human typed it, a receipt in the feed. A second copy of this block per clock is how the two
-// clocks would start delivering differently.
-async function deliverSteers(s, steers) {
-  for (const st of steers || []) {
-    try {
-      // RE-DERIVED AT DELIVERY (nudges.confirmSteer): a write-clock steer is a queued TURN, so the
-      // agent has usually kept working on the judged document in between and the fix often lands
-      // first. A message describing a violation that no longer exists is worse than no message —
-      // it sends a reader to a correct document and spends their trust. The drop is SAID in the
-      // feed, because a steer that vanishes silently is indistinguishable from one never derived.
-      if (!(await nudges.confirmSteer(st, { session: s.key }))) {
-        emit(s, {
-          kind: "nudge.dropped",
-          nudge: st.nudge,
-          ...(st.path ? { path: st.path } : {}),
-          reason: "the violation was gone by the time the turn came round",
-        });
-        logLife(s, `steer dropped (already fixed): ${st.nudge} on ${st.path || ""}`);
-        continue;
-      }
-      s.input.push({
-        type: "user",
-        message: { role: "user", content: [{ type: "text", text: st.text }] },
-        parent_tool_use_id: null,
-        session_id: "",
-      });
-      s.nextTurnFromHook = true;
-      // THE RECEIPT CARRIES WHAT WAS SAID — a nudge that only exists as an injected turn is
-      // invisible the moment the transcript scrolls, and nothing here runs invisibly.
-      emit(s, {
-        kind: "nudge.steered",
-        nudge: st.nudge,
-        ...(st.path ? { path: st.path } : {}),
-        ...(st.run ? { run: st.run } : {}),
-        ...(st.line ? { line: st.line } : {}),
-        text: st.text,
-      });
-      logLife(s, `steered: ${st.nudge} on ${st.path || st.run || ""}`);
-    } catch {}
-  }
-}
-
-// THE SWEEP CLOCK — RFC-078 §2.3, slice 3.3: the standing judges, on the chaser's existing idle
-// tick (c11). Called only from the tick, whose early return already guarantees this session is
-// between turns — that is the whole of "delivers at turn end, never mid-turn" (c35), bought from
-// the discipline the chaser already had rather than built again.
-//
-// FREQUENCY, CHOSEN AND WHY: the tick can fire as often as every minute and a project can hold
-// several sessions, so the project-wide door is NOT dialled per tick — nudges.judgeProject stamps
-// each project and refuses to re-dial inside the chaser's cooldownMin window (default 30min).
-// That window is the ceiling because delivery itself is capped at it (per nudge × document ×
-// session): asking the hub more often than anything could be delivered buys nothing. And only a
-// CONNECTED project is dialled at all — ~/.autobot/projects.json is the roster — with each
-// project's own sessions driving its sweep, so a connected project with no running session costs
-// no dial and misses nothing: violations are derived on every ask, never stored, and are simply
-// found by whichever session of that project next sits idle.
-function maybeSweepJudges(s) {
-  let cfg;
-  try { cfg = nudge.readSettings(); } catch { return; }
-  const now = Date.now();
-  const cooldownMin = cfg.cooldownMin;
-  const slot = s.agentId || s.projectCode;
-  // THE SHELL'S OWN STANDING JUDGE over run state — this agent's runs, by the chaser's own
-  // ownership rule (sameAgent), with the chaser's own closed-condition passed in (excusedOf, §2.4)
-  // so "open" keeps exactly one definition.
-  try {
-    const mine = worklist.all().filter((r) => nudge.sameAgent(r.session, s.worklistOwner));
-    deliverSteers(
-      s,
-      nudges.judgeRuns({
-        runs: mine,
-        project: s.projectCode,
-        slot,
-        session: s.key,
-        now,
-        cooldownMin,
-        excused: nudge.excusedOf,
-      }),
-    ).catch(() => {}); // async now — the enclosing try cannot catch a rejection it does not await
-  } catch {}
-  // THE PROJECT-WIDE DOOR, dialled for this session's own project when it is a connected one.
-  // Delivery lands on this session — a RUNNING session of the project by construction, idle at
-  // this instant by the tick's guard.
-  try {
-    if (!s.projectCode || !nudges.connectedProjects().includes(s.projectCode)) return;
-  } catch { return; }
-  nudges
-    .judgeProject({ project: s.projectCode, slot, session: s.key, now, cooldownMin })
-    .then((steers) => deliverSteers(s, steers))
-    .catch(() => {}); // a hub that cannot answer fires nothing and breaks nothing
 }
 
 // THE NUDGE'S CLOCK, READABLE (his: "see the countdown… watch it and boom"). The countdown row
@@ -2146,7 +2012,7 @@ const EVENTS = hooks.EVENTS;
 
 // `worklist` was missing here, so `get`'s result clipped at 400 chars — the list survived and
 // the whiteboard under it was amputated, invisibly. His catch, watching the logs for it.
-const HARNESS_MCP = /^mcp__(context|corrections|discovery|systemlynx|systemview|worklist)__/;
+const HARNESS_MCP = /^mcp__(context|discovery|systemlynx|systemview|worklist)__/;
 const resultBudget = (toolName) => (HARNESS_MCP.test(String(toolName || "")) ? 6000 : 400);
 
 // Lifecycle breadcrumbs — when a session dies on its own, this file says why.
@@ -2820,20 +2686,6 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
   // has no slot to inherit from or write to.
   const contextServer = context.serverFor({ projectCode, slot: agent ? agent.id : null });
 
-  // CORRECTIONS — RFC-078 §2.8. The audit queue's agent face: submit one, clear one, read your
-  // own, drop a checked entry. The RULES are nudges.cjs's and stay there; what the host adds is
-  // the one thing that module cannot do, which is SAY a refusal out loud. nudges.cjs has no
-  // session to speak into; this does. Same shape and same reason as the dropped steer below —
-  // a door that refuses and returns is a door whose refusal an agent can drop on the floor.
-  const correctionsServer = corrections.serverFor({
-    projectCode,
-    slot: agent ? agent.id : null,
-    onRefused: ({ verb, reason }) => {
-      emit(s, { kind: "correction.refused", verb, reason });
-      logLife(s, `correction ${verb} refused: ${reason}`);
-    },
-  });
-
   // SYSTEMVIEW — the agent face of the hub (RFC-056): tests, probe-grade calls, logs, stats, the
   // TV, the window-driving verbs — as tools with THIS session's identity, replacing the CLI door.
   const systemviewServer = systemview.serverFor({
@@ -2940,7 +2792,6 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
         [services.SERVER]: servicesServer,
         [context.SERVER]: contextServer,
         [systemview.SERVER]: systemviewServer,
-        [corrections.SERVER]: correctionsServer,
       },
       canUseTool: (tool, input) =>
         new Promise((resolve) => {
