@@ -869,4 +869,68 @@ const readQueueFile = () => JSON.parse(fs.readFileSync(QUEUE, "utf8"));
   ok("an unreadable re-check still delivers; a steer with no document passes through and is not stamped here");
 }
 
+// ---- 13. CORRECTIONS ON THE QUEUE — RFC-078 §2.8, slice 3.8 -------------------------------------
+// The reader PARSES an entry now rather than rebuilding it from three keys. It used to map every
+// row to exactly {project, path, at}; writeAuditQueue then persisted that stripped list, so a
+// field added to an entry was destroyed by the next read-write cycle with no error anywhere.
+{
+  const corr = { id: "k1", at: 7000, by: "manager", for: "sv", target: "RFCs/RFC-9.md#c18", text: "the note does not support the mark" };
+  fs.writeFileSync(QUEUE, JSON.stringify([{ project: "sv", path: "/repo/RFCs/RFC-9.md", at: 5000, corrections: [corr] }]));
+  const back = nudges.readAuditQueue();
+  assert.equal(back.length, 1, "the entry survives the read");
+  assert.deepEqual(back[0].corrections, [corr], "…and its correction comes through field for field");
+  // THE ROUND TRIP IS THE WHOLE CLAIM (c43): read, write what you read, read again.
+  assert.equal(nudges.writeAuditQueue(back), true);
+  assert.deepEqual(nudges.readAuditQueue()[0].corrections, [corr],
+    "read → write → read leaves the correction intact — the cycle that used to destroy it");
+  ok("a correction on an entry survives the read-write cycle — the reader parses the entry, it no longer rebuilds it");
+}
+{
+  // AN ENTRY WITH NO CORRECTIONS CARRIES NO EMPTY ARRAY — the shape the shell has always written
+  // stays exactly what it was, so nothing downstream learns a new field it does not need.
+  fs.writeFileSync(QUEUE, JSON.stringify([{ project: "sv", path: "/repo/RFCs/RFC-9.md", at: 5000 }]));
+  assert.deepEqual(nudges.readAuditQueue(), [{ project: "sv", path: "/repo/RFCs/RFC-9.md", at: 5000 }],
+    "an entry with nothing owed reads as {project, path, at} and gains no empty corrections array");
+  fs.writeFileSync(QUEUE, JSON.stringify([{ project: "sv", path: "/x.md", at: 1, corrections: [] }]));
+  assert.deepEqual(nudges.readAuditQueue(), [{ project: "sv", path: "/x.md", at: 1 }],
+    "…and an empty array on disk is read back as no field at all");
+  ok("the old entry shape is untouched — corrections appear only where something is actually owed");
+}
+{
+  // A PATHLESS ENTRY IS LEGITIMATE ONLY WHEN SOMETHING IS OWED ON IT (c46). A correction about a
+  // practice, a repo or an agent's conduct has no document write behind it and no path to name.
+  // With nothing owed, a row with no path is still junk: no document to read, nothing to do.
+  const about = { id: "k2", at: 1, by: "manager", for: "sv", target: "the handbook's worklist chapter", text: "no chapter exists" };
+  fs.writeFileSync(QUEUE, JSON.stringify([
+    { project: "sv", at: 1, corrections: [about] },
+    { project: "sv", at: 2 },
+  ]));
+  const q = nudges.readAuditQueue();
+  assert.equal(q.length, 1, "the pathless row with nothing owed is dropped; the one carrying a correction is not");
+  assert.equal(q[0].corrections[0].target, "the handbook's worklist chapter",
+    "…and a target that is not a document comes through intact — the field is deliberately unconstrained");
+  ok("an entry with no document behind it survives only while it carries a correction, target intact");
+}
+{
+  // JUNK CORRECTIONS ARE DROPPED ONE BY ONE, the same discipline as junk entries — and the three
+  // fields that make one addressable are required: no id is nothing to clear, no `for` is nobody
+  // to deliver to, no text is nothing to say.
+  fs.writeFileSync(QUEUE, JSON.stringify([{ project: "sv", path: "/x.md", at: 1, corrections: [
+    null, 7, "words",
+    { at: 1, by: "m", for: "sv", text: "t" },
+    { id: "a", by: "m", for: "", text: "t" },
+    { id: "b", by: "m", for: "sv", text: "" },
+    { id: "ok", by: "m", for: "sv", text: "kept" },
+  ] }]));
+  const kept = nudges.readAuditQueue()[0].corrections;
+  assert.equal(kept.length, 1, "six unusable rows dropped, the usable one kept");
+  assert.equal(kept[0].id, "ok");
+  assert.equal(kept[0].at, 0, "a missing stamp normalizes rather than disqualifying — age is not addressability");
+  assert.equal(kept[0].target, "", "…and so does a missing target");
+  fs.writeFileSync(QUEUE, JSON.stringify([{ project: "sv", path: "/x.md", at: 1, corrections: "not a list" }]));
+  assert.deepEqual(nudges.readAuditQueue(), [{ project: "sv", path: "/x.md", at: 1 }],
+    "a corrections field that is not a list is no corrections at all — never a crash");
+  ok("junk corrections are dropped row by row; id, for and text are what make one addressable");
+}
+
 console.log(`\n  ${asserts} assertions across ${pass} checks — the record gates, the judges are asked in-process, nothing crosses a wire`);

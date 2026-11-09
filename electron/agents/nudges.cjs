@@ -344,8 +344,40 @@ const QUEUE_FILE = () =>
 // lands in the record (3.5), this knob can move there with the rest of its settings.
 const AUDIT_DEBOUNCE_MIN = 10;
 
+// A CORRECTION — RFC-078 §2.8. Words with an address: `by` judged it, `for` owes it, `target` is
+// what it is about (a claim address, a file, a repo, a practice — deliberately unconstrained), and
+// `text` is the correction. Normalized by the same tolerance as the entry around it: a row missing
+// the three fields that make it addressable is dropped rather than carried as a half-thing.
+function normalizeCorrection(c) {
+  if (!c || typeof c !== "object") return null;
+  const out = {
+    id: String(c.id || ""),
+    at: Number(c.at) || 0,
+    by: String(c.by || ""),
+    for: String(c.for || ""),
+    target: String(c.target || ""),
+    text: String(c.text || ""),
+  };
+  // `id` is the address clearCorrection works by and `for` is the whole point of the field; a
+  // correction missing either cannot be delivered or discharged, so it is not one.
+  if (!out.id || !out.for || !out.text) return null;
+  return out;
+}
+
 // TOLERANT LIKE EVERY FILE HERE: missing is empty, junk is empty, and junk ROWS are dropped one
 // by one — a half-broken queue never crashes the write path that feeds it.
+//
+// AND IT PARSES THE ENTRY RATHER THAN REBUILDING IT (§2.8, c43). This function used to map every
+// row to exactly `{project, path, at}` and drop whatever else was on it, which `writeAuditQueue`
+// then persisted — so any field added to an entry was destroyed by the next read-write cycle,
+// silently and with no error anywhere. `corrections` is the field that made that fatal: it is the
+// amendment's whole mechanism, and the reader is where it lives or dies.
+//
+// A PATHLESS ENTRY IS LEGITIMATE NOW, and only when it carries a correction (§2.8, c46). A
+// correction about a practice, a repo or an agent's conduct has no document write behind it and no
+// path to name; the submission creates the entry itself. With nothing owed on it, though, a row
+// with no path is still junk — there is no document for the drain to read and nothing for anyone
+// to do, which is the silt the old filter was written against.
 function readAuditQueue() {
   let parsed;
   try {
@@ -356,8 +388,14 @@ function readAuditQueue() {
   if (!Array.isArray(parsed)) return [];
   return parsed
     .filter((e) => e && typeof e === "object")
-    .map((e) => ({ project: String(e.project || ""), path: String(e.path || ""), at: Number(e.at) || 0 }))
-    .filter((e) => e.project && e.path && e.at);
+    .map((e) => {
+      const corrections = (Array.isArray(e.corrections) ? e.corrections : [])
+        .map(normalizeCorrection)
+        .filter(Boolean);
+      const entry = { project: String(e.project || ""), path: String(e.path || ""), at: Number(e.at) || 0 };
+      return corrections.length ? { ...entry, corrections } : entry;
+    })
+    .filter((e) => e.project && e.at && (e.path || (e.corrections && e.corrections.length)));
 }
 
 // ── THE RECORD'S WRITE SIDE (RFC-078 §2.5) ──────────────────────────────────────────────────────
