@@ -329,6 +329,17 @@ console.log("\nmarkBlock — the agent's door, with its rules");
 
   const withNote = await sessions.markBlock(signed, 6, { state: "met", note: "I checked it too" }, "systemview");
   assert.ok(withNote.ok && withNote.countersigned && /note= was not written/.test(withNote.noteNotWritten || ""));
+
+  // AND THE TOOL MUST SAY IT. The door composed this advisory from the day countersigning worked
+  // and the mark tool discarded it, answering "marked the claim on line N met" either way — so an
+  // agent that countersigned with a note believed its account landed when nothing was written.
+  // Found 2026-11-09 by manager doing exactly that. The answer now carries every field the door
+  // returns, asserted from source because the tool's text is composed in another module.
+  const toolSrc = fs.readFileSync(new URL("../electron/agents/systemview.cjs", import.meta.url), "utf8");
+  const mark = /const r = await markBlock\(abs, line[\s\S]*?return text\(said\.join\(" — "\)\);/.exec(toolSrc);
+  assert.ok(mark, "the mark tool composes its answer from the door's result");
+  for (const field of ["countersigned", "already", "noteNotWritten", "fired"])
+    assert.ok(new RegExp(`r\\.${field}`).test(mark[0]), `the mark tool says r.${field} rather than discarding it`);
   assert.ok(/note="ran it; saw state=met in the row"/.test(fs.readFileSync(signed, "utf8").split("\n")[5]));
   ok("a note passed WITH a countersign is neither written nor silently dropped — the door says whose account stands and where to put yours");
 

@@ -1166,7 +1166,18 @@ function toolsFor(identity = {}) {
             const abs = require("path").isAbsolute(at) ? at : require("path").join(require("path").resolve(root), at);
             const r = await markBlock(abs, line, { state, note });
             if (!r || !r.ok) return text(`not marked: ${(r && r.error) || "no answer"}`);
-            return text(`marked the ${r.marked} on line ${line} ${r.state}${r.fired ? ` — announced to the document's audience` : ""}`);
+            // EVERYTHING THE DOOR SAID, not just that it answered. markBlock composes three things
+            // this line used to discard, and each one is a case where the caller believes something
+            // that did not happen: a COUNTERSIGN does not write your note (the standing note is the
+            // first signer's account), a RE-SIGN writes nothing at all, and both used to come back
+            // as "marked the claim on line N met". An agent that trusts the success string believes
+            // its account landed. Measured 2026-11-09 by manager, countersigning RFC-078.
+            const said = [`marked the ${r.marked} on line ${line} ${r.state}`];
+            if (r.countersigned) said.push(`countersigned — by= is now ${r.by}`);
+            if (r.already) said.push(r.already);
+            if (r.noteNotWritten) said.push(r.noteNotWritten);
+            if (r.fired) said.push("announced to the document's audience");
+            return text(said.join(" — "));
           } catch (e) { return fail(e); }
         }
       ),
