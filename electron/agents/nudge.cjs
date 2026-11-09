@@ -51,6 +51,19 @@ const DEFAULTS = Object.freeze({
   // Never nudge a session fuller than this. A nudge at 95% spends the context the agent needs to
   // finish the thing it is being nudged about, which makes the nudge actively harmful.
   ctxCeilingPct: 70,
+  // HOW LONG A SUBAGENT MAY BE QUIET BEFORE IT COUNTS AS IDLE — his ask, 2026-11-09: "the lanes is
+  // where the subagents go. You could see when they're quiet or when they're idle and there's a
+  // countdown right there. of control how long they can be idle before they update you."
+  //
+  // IT IS ITS OWN NUMBER, NOT `idleMin`, because the two clocks measure different things. `idleMin`
+  // is how long THIS agent may sit before being pointed back at its own run — a conversation's
+  // pace, 20 minutes. This is how long a SUBAGENT may go without emitting anything before the
+  // agent that spawned it should look: a different question, a different tolerance, and bolting it
+  // onto `idleMin` would mean one slider governing both and neither set where he wants it.
+  //
+  // THE DEFAULT IS THE OLD HARDCODED NUMBER. `laneLiveness` warned at `mins >= 10` with nothing
+  // able to change it; 10 here keeps every row reading exactly as it did and makes the number his.
+  subagentIdleMin: 10,
   // WHICH SOURCES COUNT — prefixes, matched literally. His: "job and skill nudge."
   //
   // `correction:` is here because a correction IS work somebody owes, and the whole of his control
@@ -113,6 +126,9 @@ function normalizeSettings(raw) {
     // 0 is a legitimate value and means "never nudge", so the floor is 0 rather than 1.
     giveUpAfter: clampInt(r.giveUpAfter, 0, 100, DEFAULTS.giveUpAfter),
     ctxCeilingPct: clampInt(r.ctxCeilingPct, 1, 100, DEFAULTS.ctxCeilingPct),
+    // Same bounds as the other minute fields: a floor of 1 because 0 would mean "idle the instant
+    // it stops talking", which every thinking subagent is.
+    subagentIdleMin: clampInt(r.subagentIdleMin, 1, 24 * 60, DEFAULTS.subagentIdleMin),
     // An EMPTY list is not the same as an absent one: [] means nothing qualifies, which is a way
     // to turn this off that survives somebody flipping `on` back.
     sources: sources ? sources : DEFAULTS.sources.slice(),
@@ -346,4 +362,63 @@ function pickNudge({ runs = [], session = "", now = Date.now(), quietMin = 0, ct
   return { run, text: nudgeText(run, cfg, { session }), ...cycleOf(run, cfg) };
 }
 
-module.exports = { DEFAULTS, FILE, normalizeSettings, readSettings, writeSettings, sourceCounts, nudgeText, pickNudge, cycleOf, excusedOf, sameAgent };
+// A QUIET SUBAGENT NUDGES THE AGENT THAT SPAWNED IT — his ask, 2026-11-09, and the gap it closes is
+// the one `unseenSubagents` only half-closed. That selector made a running subagent VISIBLE; it
+// still needed somebody to be looking at the window. A subagent that goes quiet while its owner has
+// moved on is work spending tokens with nobody accountable for it, and "nothing runs invisibly" is
+// not satisfied by a row that happens to be on a tab he is not on.
+//
+// IT IS A SEPARATE SELECTOR BECAUSE A SUBAGENT IS NOT A RUN. It has no run record — no source, no
+// items, no owner file — which is exactly why `pickNudge` cannot see it: that function filters run
+// records off disk, and a subagent is session state that dies with the session. So this takes the
+// session's own liveness map and answers the same shape.
+//
+// SILENCE IS NOT DEATH AND THIS MUST NOT SAY IT IS. `laneLiveness` already settled the wording for
+// the window — a subagent thinking for two minutes emits nothing, so elapsed is reported and the
+// number speaks. The same discipline holds here: the text says how long it has been quiet and asks
+// the agent to look. It never says stalled, stuck, hung or dead, because the host does not know.
+function pickSubagentNudge({ subagents = [], session = "", now = Date.now(), ctxPct = null, settings } = {}) {
+  const cfg = settings || readSettings();
+  if (!cfg.on) return null;
+  if (ctxPct != null && Number(ctxPct) > cfg.ctxCeilingPct) return null;
+
+  const windowMs = cfg.subagentIdleMin * 60000;
+  const candidates = (subagents || []).filter((u) => {
+    if (!u || !u.parent) return false;
+    // A FINISHED SUBAGENT IS NOT IDLE. It stopped because it was done, and nudging about it would
+    // point the agent at work that has already landed.
+    if (u.ended) return false;
+    const last = Number(u.lastTs) || 0;
+    // NEVER EMITTED ANYTHING AT ALL is not something this can time. With no first event there is no
+    // clock to run, and inventing one from the spawn moment would nudge about a subagent that is
+    // still starting up.
+    if (!last) return false;
+    if (now - last < windowMs) return false;
+    const was = Number(u.nudgedAt) || 0;
+    if (was && now - was < cfg.cooldownMin * 60000) return false;
+    return true;
+  });
+  if (!candidates.length) return null;
+
+  // THE QUIETEST ONE. Two silent subagents means the one that has been silent longest is the one
+  // most likely to have been forgotten.
+  candidates.sort((a, b) => (Number(a.lastTs) || 0) - (Number(b.lastTs) || 0));
+  const u = candidates[0];
+  const mins = Math.floor((now - (Number(u.lastTs) || 0)) / 60000);
+  const named = String(u.brief || "").trim();
+  const which = named ? `"${named}"` : `the one spawned by ${u.parent}`;
+  const text =
+    `⏰ A SUBAGENT HAS GONE QUIET — from the harness, not the human. ${which} has emitted nothing ` +
+    `for ${mins} minute(s), past the ${cfg.subagentIdleMin}-minute threshold in your worklist settings. ` +
+    `It has not finished: no result has come back for it.\n\n` +
+    `THIS IS NOT A DIAGNOSIS, AND THE HARNESS IS NOT ABLE TO MAKE ONE. A subagent thinking for ` +
+    `several minutes emits nothing and is perfectly alive, so all that has been measured is the ` +
+    `silence — what it means is yours to find out by looking, and the answer is as likely to be ` +
+    `"still working" as anything else. What IS true either way: work you spawned is spending ` +
+    `tokens with nobody watching it. So check on it, or say in the chat what it was for and what ` +
+    `you intend to do about it. Work pushed out to a subagent is brought back in by whoever sent ` +
+    `it out.`;
+  return { subagent: u, text, mins };
+}
+
+module.exports = { DEFAULTS, FILE, normalizeSettings, readSettings, writeSettings, sourceCounts, nudgeText, pickNudge, pickSubagentNudge, cycleOf, excusedOf, sameAgent };

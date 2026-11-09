@@ -421,6 +421,31 @@ function openRunFor(session, source) {
   return hit ? hit.owner.slice(4) : null;
 }
 
+// EVERY OPEN RUN THIS AGENT OWNS, READ OFF DISK — and the reason it exists is a measured failure of
+// its absence.
+//
+// `get` is the one call that is supposed to survive a compaction, and it was rendering the open run
+// from the session's `currentRun` — a SINGLE IN-MEMORY SLOT, overwritten by the next sourced write.
+// So a session that wrote `skill:assignment`, left it at 9/11, and then ran a second procedure had
+// no way to see the first: the slot held the second, the first stood open on disk, and `get`
+// answered "6/6 done" about a session with unfinished work in it. Measured 2026-11-09, and the cost
+// was not the missing row — it was that the agent read `get`, believed it, and told the human
+// "nothing open" in writing while the chaser was already nudging about the run.
+//
+// THE CHASER READS DISK, SO THIS READS DISK, AND IT MATCHES THE SAME WAY `openRunFor` DOES — by the
+// AGENT rather than the session string. Two readers of "what is open" that disagree is the whole
+// bug; a door whose answer is narrower than the thing chasing you is worse than no door, because it
+// reads as an all-clear.
+function openRunsFor(session) {
+  const place = placeOf(session);
+  const mine = (r) => (place && place !== "-" ? placeOf(r.session) === place : r.session === session);
+  return all()
+    .filter((r) => r.owner.startsWith("run:") && mine(r) && r.items.length > 0 && !allDone(r.items))
+    // STALEST FIRST, the chaser's own ordering — the run nobody has touched longest is the one most
+    // likely forgotten, so it is the one to read first rather than the one to scroll to.
+    .sort((a, b) => (Number(a.updatedAt) || 0) - (Number(b.updatedAt) || 0));
+}
+
 // WHO COMMISSIONED THIS RUN (RFC-066 §3) — stamped AT BIRTH and never re-asked, because
 // `selfDirected` is a fact about the moment the run STARTED, not about the moment of any later
 // write. A backgrounded lane whose fifth list write lands in a turn the user did start must not be
@@ -895,7 +920,7 @@ function all() {
 // these for the SDK, and a test can hold the handler and CALL it. That matters here more than usual
 // — `markBroughtIn` shipped defined, exported and tested with no door on it at all, called by
 // nothing but its own test, so zero receipts ever existed. A door is only proven by being opened.
-function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null, onTouch = null, identity = {}) {
+function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => "", getRun = null, checkSource = null, onTouch = null, identity = {}, getOwner = null) {
   const { tool } = require("@anthropic-ai/claude-agent-sdk");
   return [
       tool(
@@ -1171,13 +1196,37 @@ function toolsFor(onSet, getList = () => [], onBoard = null, getBoard = () => ""
           const mark = (st) => (st === "done" ? "\u2713" : st === "active" ? "\u25b8" : "\u00b7");
           const render = (items) => items.map((i) => `${mark(i.state)} ${i.text}`).join("\n");
           const list = normalize(getList() || []);
-          // ONE CALL, THE WHOLE SESSION STATE: the session plan, the open run's list when a
-          // procedure is in flight, and the whiteboard. Anything `get` leaves out is the one
-          // piece of held state a compaction still eats.
-          const run = getRun ? getRun() : null;
-          const runTail = run && run.items && run.items.length
-            ? `\n\nrun ${run.id} (${run.source}): ${run.items.filter((i) => i.state === "done").length}/${run.items.length} done\n${render(normalize(run.items))}`
-            : "";
+          // ONE CALL, THE WHOLE SESSION STATE: the session plan, EVERY open run this agent owns,
+          // and the whiteboard. Anything `get` leaves out is the one piece of held state a
+          // compaction still eats.
+          //
+          // AND IT IS READ OFF DISK, NOT OUT OF THE SESSION'S CURRENT SLOT. `getRun` answers with
+          // `currentRun` — ONE slot, taken by whichever sourced write happened last — so a session
+          // holding two open runs could only ever see the newer one. Measured 2026-11-09: a run
+          // left at 9/11 was invisible here while the chaser was actively nudging about it, and the
+          // agent read this door, believed it, and told the human "nothing open" in writing. A door
+          // narrower than the thing chasing you does not merely omit — it reads as an all-clear.
+          //
+          // `getOwner` is the session's own worklist owner string; with no wiring (a test holding
+          // the tools bare) this falls back to the current-run slot, so the old shape still answers.
+          const owner = getOwner ? String(getOwner() || "") : "";
+          const open = owner ? openRunsFor(owner) : [];
+          const runTail = open.length
+            ? open
+                .map((r) => {
+                  // THE DECLARATION RIDES THE HEADING. A run standing open with "abandoned" on it
+                  // is a different thing from one simply unfinished, and reading the list without
+                  // that word invites re-driving work somebody already accounted for.
+                  const said = r.status && r.status.text ? ` — ${r.status.text}` : "";
+                  return `\n\nrun ${r.owner.replace(/^run:/, "")} (${r.source || "no source"}): ${r.done}/${r.total} done${said}\n${render(r.items)}`;
+                })
+                .join("")
+            : (() => {
+                const run = getRun ? getRun() : null;
+                return run && run.items && run.items.length
+                  ? `\n\nrun ${run.id} (${run.source}): ${run.items.filter((i) => i.state === "done").length}/${run.items.length} done\n${render(normalize(run.items))}`
+                  : "";
+              })();
           const board = String(getBoard() || "");
           const boardTail = board ? `\n\nwhiteboard:\n${board}` : "";
           if (!list.length) {
@@ -1230,4 +1279,4 @@ function serverFor(...wiring) {
 // joins them to an agent's chore lines. `stampClosed` is exported for the test, which has to be
 // able to put an OLD close on the record without a time machine; nothing else should call it, the
 // close in writeRun is the only writer.
-module.exports = { KINDS, kindOf, PREFIXES, OWN_PREFIXES, attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_ASSIGN, TOOL_ASSIGN_NAME, TOOL_NAMES };
+module.exports = { KINDS, kindOf, PREFIXES, OWN_PREFIXES, attach, HOW, removeAttachment, attachmentsOf, ATTACH_KINDS, serverFor, toolsFor, normalize, DIR, STAMPS, read, write, readBoard, writeBoard, all, newRunId, runOwner, openRunFor, openRunsFor, writeRun, allDone, pruneRuns, misspelledLane, laneRuns, stripRuns, registeredLanes, deleteRun, runIdForLane, markBroughtIn, markLaneRepo, markStatus, markNudged, stampClosed, lastClosed, lastClosedBySource, placeOf, SERVER, TOOL, TOOL_READ, TOOL_ATTACH, TOOL_BOARD, TOOL_NAME, TOOL_READ_NAME, TOOL_ATTACH_NAME, TOOL_BOARD_NAME, TOOL_STATUS, TOOL_STATUS_NAME, TOOL_ASSIGN, TOOL_ASSIGN_NAME, TOOL_NAMES };

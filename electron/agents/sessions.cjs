@@ -1099,6 +1099,53 @@ function compactionState(key) {
   return { ok: true, pending: compactionPending(s), settings: compaction.readSettings() };
 }
 
+// WHICH TOOL SPAWNS A SUBAGENT. The SDK has called it both things across versions, and a name this
+// list misses is a subagent whose clock never starts — so it matches loosely rather than exactly.
+const SPAWNS_SUBAGENT = (name) => /^(agent|task)$/i.test(String(name || ""));
+
+/**
+ * KEEP EACH SUBAGENT'S LIVENESS, off the events that already flow through `emit`.
+ *
+ * Three facts, and each comes from a different shape of event:
+ *   · IT EXISTS and WHAT IT IS FOR — the Agent/Task tool CALL. Its `id` is the `parent` every event
+ *     from inside that subagent will carry, and its prompt is the only description there will ever
+ *     be of what it was asked to do.
+ *   · IT IS ALIVE — any event stamped with `parent`. That is the clock, and it is the only honest
+ *     one: a subagent emits when it does something, and the gaps are thinking.
+ *   · IT IS FINISHED — the tool RESULT whose id is that same spawning call. Never inferred from the
+ *     events going quiet, because quiet is exactly the state this map exists to measure.
+ */
+function noteSubagent(s, event) {
+  if (!s.subagents) s.subagents = new Map();
+  const at = Number(event.ts) || Date.now();
+  // THE SPAWN. Recorded with the prompt, so the nudge can name which subagent it means — an id
+  // alone is visible without being legible.
+  if (event.kind === "tool.call" && SPAWNS_SUBAGENT(event.name) && event.id) {
+    const brief = String((event.input && (event.input.prompt || event.input.description)) || "").trim();
+    const prev = s.subagents.get(event.id) || {};
+    s.subagents.set(event.id, { ...prev, parent: event.id, brief: brief.split("\n").find(Boolean) || "", spawnedAt: at, lastTs: prev.lastTs || 0, ended: false });
+    return;
+  }
+  // THE END. A result for the spawning call is the subagent's own ending, and it is the ONLY thing
+  // that sets `ended` — see the doc comment above.
+  if (event.kind === "tool.result" && event.id && s.subagents.has(event.id) && !event.parent) {
+    const u = s.subagents.get(event.id);
+    s.subagents.set(event.id, { ...u, ended: true, endedAt: at, ok: event.ok !== false });
+    return;
+  }
+  // THE CLOCK. Anything from inside a subagent — its text, its thinking, its tool calls and their
+  // results — carries the spawning call's id as `parent`.
+  if (event.parent) {
+    const u = s.subagents.get(event.parent) || { parent: event.parent, brief: "", ended: false };
+    if (!u.ended) s.subagents.set(event.parent, { ...u, lastTs: at });
+  }
+}
+
+/** The liveness map as the selector wants it — a plain list, nothing derived. */
+function subagentsOf(s) {
+  return s && s.subagents ? [...s.subagents.values()] : [];
+}
+
 function emit(s, event) {
   event.ts = Date.now();
   // the rule-3 envelope, stamped once here so no emitter can forget it
@@ -1108,6 +1155,15 @@ function emit(s, event) {
   event.worktree = s.cwd;
   s.events.push(event);
   if (s.events.length > HISTORY_LIMIT) s.events.splice(0, s.events.length - HISTORY_LIMIT);
+  // A SUBAGENT'S CLOCK IS KEPT HERE, FOR THE SAME REASON EVERYTHING ELSE IS. emit() is already the
+  // one seam the feed, the hooks and the ledger all draw from, so the liveness map gets it free and
+  // no future emitter can forget to tick it — the alternative was stamping three call sites in the
+  // message loop and losing the fourth that gets added next month.
+  //
+  // IT HAS TO LIVE IN SESSION STATE BECAUSE A SUBAGENT HAS NOWHERE ELSE TO LIVE. No run record, no
+  // source, no owner file — which is exactly why the disk-reading chaser could never see one, and
+  // why `unseenSubagents` in the window had to derive them from the event stream too.
+  try { noteSubagent(s, event); } catch {}
   for (const sub of s.subs) { try { sub(event); } catch {} }
   // RFC-057 — THE SAME SEAM, A THIRD TIME. emit() is where the feed draws, where hooks fire, and now
   // where the ledger is written: observability, hookability and accountability are one surface, so
@@ -1353,6 +1409,52 @@ function deliverToMembers(e) {
 // THE RECEIPT IS NOT DECORATION. A nudge that only exists as an injected turn is invisible the
 // moment the transcript scrolls, and "nothing runs invisibly" is the rule this harness lives by —
 // so the window gets an event, and the COUNT is stamped on the run itself where a row can read it.
+// THE SUBAGENT HALF OF THE SAME CLOCK — his ask, 2026-11-09: "make sure that the subagents nudge…
+// control how long they can be idle before they update you."
+//
+// The decision is `nudge.pickSubagentNudge`, pure and tested; this pushes the turn, stamps the
+// cooldown on the session's own map (a subagent has no record to stamp) and leaves the same kind of
+// receipt a run's nudge leaves — because a nudge that exists only as an injected turn is invisible
+// the moment the transcript scrolls, and nothing here runs invisibly.
+function maybeNudgeSubagent(s, ctxPct) {
+  const picked = nudge.pickSubagentNudge({
+    subagents: subagentsOf(s),
+    session: s.worklistOwner,
+    ctxPct,
+  });
+  if (!picked) return null;
+  const { subagent, text, mins } = picked;
+  try {
+    s.input.push({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text }] },
+      parent_tool_use_id: null,
+      session_id: "",
+    });
+    s.nextTurnFromHook = true;
+    // THE COOLDOWN STAMP LIVES WHERE THE SUBAGENT LIVES. `markNudged` writes to a run FILE and
+    // there is no file here — so the map is the ledger, and it dies with the session exactly as the
+    // subagent does.
+    const u = s.subagents.get(subagent.parent);
+    if (u) s.subagents.set(subagent.parent, { ...u, nudgedAt: Date.now(), nudges: (Number(u.nudges) || 0) + 1 });
+    emit(s, {
+      kind: "subagent.nudged",
+      // DELIBERATELY EMPTY, and this is load-bearing. `noteSubagent` bumps a subagent's clock on
+      // any event carrying `parent` — so stamping this receipt with the subagent's id would reset
+      // the very silence it is reporting, and the second nudge could never fire. The receipt is
+      // ABOUT a subagent, it did not come FROM one.
+      parent: "",
+      subagent: subagent.parent,
+      brief: subagent.brief || "",
+      quietMin: mins,
+      text,
+    });
+  } catch {
+    return null;
+  }
+  return subagent;
+}
+
 function maybeNudge(s, quietMin) {
   const cfg = nudge.readSettings();
   if (!cfg.on) return null;
@@ -1360,6 +1462,14 @@ function maybeNudge(s, quietMin) {
   // here is how the nudge's ceiling and a hook's `{ctxPct: {lte: N}}` would start disagreeing.
   const win = contextWindowOf(s.model);
   const ctxPct = win && s.lastCtxSnapshot ? Math.round((s.lastCtxSnapshot / win) * 100) : null;
+  // A QUIET SUBAGENT IS ASKED ABOUT FIRST, and the ordering is the point rather than a preference.
+  // An idle RUN is work that has stopped — it costs nothing while it waits, and the nudge about it
+  // is still true in thirty minutes. A quiet SUBAGENT is work that may be running right now,
+  // spending tokens, with nobody accountable for it. One of those two is urgent and it is not the
+  // list. Both share the session's quiet clock, so without an order they would race for the same
+  // turn and the cooldown would hide whichever lost.
+  const sub = maybeNudgeSubagent(s, ctxPct);
+  if (sub) return sub;
   const picked = nudge.pickNudge({
     runs: worklist.all(),
     // THE RUN'S OWN SPELLING OF WHERE IT RAN — `session:<projectCode>:<sessionId>`, the exact
@@ -2710,7 +2820,12 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
       const told = announceAssigned(slot, { source, runId });
       logLife(s, `assigned ${source} to ${slot} (run ${runId}) — ${told} session(s) told`);
     },
-  });
+  // WHOSE RUNS `get` READS OFF DISK. The same string the worklist stamps on every record and the
+  // same one the chaser matches against — so the door that tells an agent what is open and the
+  // clock that nudges it about what is open are reading one place. They were not: `get` rendered
+  // `currentRun`, a single in-memory slot, and went quiet about every other open run this agent
+  // owned.
+  }, () => s.worklistOwner);
 
   // DISCOVERY — one tool that finds the others (RFC-055, his design). Built from the
   // definition's OWN mcpServers record, so it can never describe a server this agent is
@@ -3407,6 +3522,10 @@ module.exports = {
   composedStamp, skillsStamp, skillMtimes, compositionOf, // test seam: proves which fields staleness watches, and that the hot path is cached
   repoHolding, // test seam: a lane's branch may live in a COUPLED repo, not the session's own folder
   purgeAgent, agentRuns,
+  // TEST SEAM: a subagent's liveness is kept in SESSION state because a subagent has no run
+  // record to keep it in — so the only way to prove the clock starts, ticks, stops at the result
+  // and is NOT reset by the nudge's own receipt is to drive these two directly.
+  noteSubagent, subagentsOf,
   setThinking, thinkingOf, // the thinking knob — RFC-073's cousin: how much of the reasoning reaches the window
   open, send, answerPermission, interrupt, wipeWhiteboard, laneRuns, stripRuns, deleteLaneRun, removeLaneByBranch, announceLaneRemoved, announceAssigned, recordLaneBroughtIn, models, setModel, subscribe, history, kill, reinit, announceReinit, list, keyOf, noteUsedBy,
   transcriptsFor, transcriptMessages, dismissTranscript, toolSummary,

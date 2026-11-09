@@ -1014,6 +1014,63 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   ok("a refused assign announces nothing — only a write that happened is told");
 }
 
+// ---- `get` ANSWERS WITH EVERY OPEN RUN, OFF DISK (2026-11-09) ---------------------------------
+// The door that is supposed to survive a compaction rendered `currentRun` — ONE in-memory slot,
+// taken by whichever sourced write happened last. A session holding two open runs could only see
+// the newer one, so the older stood open on disk, nudged by the chaser, and invisible to the one
+// call an agent makes to find out where it left off. Measured live: a run at 9/11 unseen while the
+// chaser was nudging about it, and the agent told the human "nothing open" in writing.
+{
+  const owner = "session:p-twoopen:s1";
+  const a = worklist.newRunId();
+  const b = worklist.newRunId();
+  worklist.writeRun(a, owner, [{ id: "1", text: "the older half", state: "done" }, { id: "2", text: "never started", state: "pending" }], "skill:older");
+  worklist.writeRun(b, owner, [{ id: "1", text: "the newer one", state: "active" }], "skill:newer");
+
+  // THE PURE HALF FIRST — two open runs for this agent, stalest first.
+  const open = worklist.openRunsFor(owner);
+  assert.equal(open.length, 2, "both open runs come back, not just the session's current slot");
+  assert.deepEqual(open.map((r) => r.source), ["skill:older", "skill:newer"], "stalest first — the chaser's own ordering, so the forgotten one reads first");
+
+  // ALL-DONE IS NOT OPEN, and that is what keeps this from being a list of everything.
+  const shut = worklist.newRunId();
+  worklist.writeRun(shut, owner, [{ id: "1", text: "finished", state: "done" }], "skill:closed");
+  assert.equal(worklist.openRunsFor(owner).some((r) => r.source === "skill:closed"), false, "an all-done run is closed and does not come back");
+
+  // AND IT MATCHES BY AGENT, NOT BY SESSION STRING — the same rule openRunFor follows, so the door
+  // and the chaser cannot disagree about whose run it is. A new session of the same agent sees it.
+  assert.equal(worklist.openRunsFor("session:p-twoopen:a-different-session").length, 2, "a later session of the same agent still sees its own open runs");
+  assert.equal(worklist.openRunsFor("session:somebody-else:s1").length, 0, "and never another agent's");
+
+  // THEN THE DOOR, which is what the agent actually reads.
+  const tools = worklist.toolsFor(
+    () => {}, () => [{ id: "p", text: "the session plan", state: "done" }], null, () => "",
+    () => ({ id: b, source: "skill:newer", items: [{ id: "1", text: "the newer one", state: "active" }] }),
+    null, null, {}, () => owner
+  );
+  const read = await tools.find((t) => t.name === worklist.TOOL_READ).handler({}, {});
+  const text = read.content[0].text;
+  assert.match(text, /skill:older/, "the run the in-memory slot does NOT hold is in the answer");
+  assert.match(text, /skill:newer/, "…and so is the one it does");
+  assert.match(text, /1\/2 done/, "with its real count off disk");
+  assert.match(text, /never started/, "and its items, so the agent can see where it stopped");
+
+  // A DECLARATION RIDES THE HEADING. An abandoned-but-open run is a different thing from a merely
+  // unfinished one, and reading the list without that word invites re-driving accounted-for work.
+  worklist.markStatus(a, { text: "abandoned — blocked on his word", by: "skill:older" });
+  const again = await tools.find((t) => t.name === worklist.TOOL_READ).handler({}, {});
+  assert.match(again.content[0].text, /abandoned — blocked on his word/, "the declaration is said in the heading, not left to be inferred");
+
+  // NO WIRING, OLD SHAPE. A caller holding the tools bare still gets the current run.
+  const bare = worklist.toolsFor(
+    () => {}, () => [], null, () => "",
+    () => ({ id: b, source: "skill:newer", items: [{ id: "1", text: "the newer one", state: "active" }] })
+  );
+  const bareRead = await bare.find((t) => t.name === worklist.TOOL_READ).handler({}, {});
+  assert.match(bareRead.content[0].text, /skill:newer/, "with no owner wired it falls back to the slot — the old shape still answers");
+  ok("`get` answers with EVERY open run this agent owns, read off disk, stalest first, declarations said");
+}
+
 fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} assertions held — the agent worklist\n`);
 process.exit(0);

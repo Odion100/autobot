@@ -299,5 +299,138 @@ console.log("the countdown is the selector's answer — the door ships the pick"
   ok("an unplaceable session is its own agent — no project, no sharing");
 }
 
+// ---- A QUIET SUBAGENT NUDGES THE AGENT THAT SPAWNED IT (2026-11-09) --------------------------
+// His ask: "make sure that the subagents nudge… you could see when they're quiet or when they're
+// idle and there's a countdown right there. of control how long they can be idle before they
+// update you." A subagent has no run record, so pickNudge could never see one — this is the
+// selector for the half that lives in session state.
+{
+  const MIN = 60000;
+  const now = 10_000_000;
+  const cfg = nudge.normalizeSettings({ on: true, subagentIdleMin: 10, cooldownMin: 30, ctxCeilingPct: 70 });
+
+  // THE THRESHOLD IS HIS NUMBER, AND IT IS THE ONLY THING THAT DECIDES.
+  const quiet = { parent: "toolu_a", brief: "audit the claims", lastTs: now - 11 * MIN };
+  const fresh = { parent: "toolu_b", brief: "write the spec", lastTs: now - 2 * MIN };
+  assert.equal(nudge.pickSubagentNudge({ subagents: [fresh], now, settings: cfg }), null, "two minutes quiet is a subagent thinking, not an idle one");
+  const picked = nudge.pickSubagentNudge({ subagents: [quiet], now, settings: cfg });
+  assert.ok(picked, "eleven minutes past a ten-minute threshold is idle");
+  assert.equal(picked.subagent.parent, "toolu_a");
+  assert.equal(picked.mins, 11, "it reports the elapsed minutes it measured");
+
+  // AND IT MOVES WITH THE SETTING — the whole point of the number existing.
+  const patient = nudge.normalizeSettings({ on: true, subagentIdleMin: 60, cooldownMin: 30 });
+  assert.equal(nudge.pickSubagentNudge({ subagents: [quiet], now, settings: patient }), null, "raise the threshold to an hour and eleven minutes is no longer idle");
+  const twitchy = nudge.normalizeSettings({ on: true, subagentIdleMin: 1, cooldownMin: 30 });
+  assert.ok(nudge.pickSubagentNudge({ subagents: [fresh], now, settings: twitchy }), "drop it to a minute and two minutes is");
+  ok("the subagent idle threshold is a SETTING, and it is the only thing that decides idle");
+
+  // SILENCE IS NOT DEATH, AND THE TEXT MUST NOT SAY IT IS. The window settled this wording for
+  // laneLiveness ("the tone escalates but the words never diagnose") and the nudge inherits it —
+  // a host that cannot tell a thinking model from a hung one must not pick one in writing.
+  assert.match(picked.text, /quiet|emitted nothing/i, "it says what it measured");
+  assert.match(picked.text, /audit the claims/, "and names the subagent by its brief, so the agent knows which one");
+  for (const word of [/\bstalled\b/i, /\bstuck\b/i, /\bhung\b/i, /\bdead\b/i, /\bcrashed\b/i, /\bfroze/i])
+    assert.ok(!word.test(picked.text), `the nudge never diagnoses — found ${word}`);
+  ok("the subagent nudge reports elapsed and never diagnoses — stalled, stuck, hung, dead all absent");
+
+  // A FINISHED SUBAGENT IS NOT IDLE. It stopped because it was done.
+  assert.equal(nudge.pickSubagentNudge({ subagents: [{ ...quiet, ended: true }], now, settings: cfg }), null, "a subagent whose result came back is finished, not quiet");
+  // NEVER EMITTED ANYTHING is not something a clock can time.
+  assert.equal(nudge.pickSubagentNudge({ subagents: [{ parent: "toolu_c", lastTs: 0 }], now, settings: cfg }), null, "with no first event there is no clock to run");
+  ok("finished and never-started are both excluded — only a subagent that spoke and then stopped");
+
+  // THE COOLDOWN HOLDS, per subagent, off the stamp the caller keeps.
+  assert.equal(nudge.pickSubagentNudge({ subagents: [{ ...quiet, nudgedAt: now - 5 * MIN }], now, settings: cfg }), null, "nudged five minutes ago, cooling down");
+  assert.ok(nudge.pickSubagentNudge({ subagents: [{ ...quiet, nudgedAt: now - 31 * MIN }], now, settings: cfg }), "past the cooldown it nudges again");
+
+  // THE CEILING REFUSES, same rule as a run's nudge: spending the context the agent needs to deal
+  // with the thing it is being nudged about makes the nudge harmful.
+  assert.equal(nudge.pickSubagentNudge({ subagents: [quiet], now, ctxPct: 95, settings: cfg }), null, "a nearly-full session is not nudged");
+  assert.ok(nudge.pickSubagentNudge({ subagents: [quiet], now, ctxPct: null, settings: cfg }), "…and an UNKNOWN context is not treated as full");
+  assert.equal(nudge.pickSubagentNudge({ subagents: [quiet], now, settings: { ...cfg, on: false } }), null, "the master switch is still the master switch");
+  ok("cooldown, context ceiling and the master switch govern the subagent nudge exactly as they govern a run's");
+
+  // THE QUIETEST ONE, not the newest — the forgotten one is the one that has been silent longest.
+  const two = nudge.pickSubagentNudge({ subagents: [{ parent: "recent", lastTs: now - 12 * MIN }, { parent: "ancient", lastTs: now - 90 * MIN }], now, settings: cfg });
+  assert.equal(two.subagent.parent, "ancient", "the longest-silent subagent is picked");
+  ok("the quietest subagent is the one nudged about");
+
+  // THE DEFAULT IS THE OLD HARDCODED NUMBER, so no row changes meaning on upgrade.
+  assert.equal(nudge.DEFAULTS.subagentIdleMin, 10, "the default is laneLiveness' old hardcoded warn threshold");
+  assert.equal(nudge.normalizeSettings({}).subagentIdleMin, 10, "…and a file that never mentions it reads the same");
+  // 0 CLAMPS TO THE FLOOR, not to the default — the same thing `idleMin` and `cooldownMin` do with
+  // the same clampInt, and consistency across the three minute fields beats a special case here.
+  assert.equal(nudge.normalizeSettings({ subagentIdleMin: 0 }).subagentIdleMin, 1, "0 would mean idle the instant it stops talking — clamped to the one-minute floor");
+  assert.equal(nudge.normalizeSettings({ subagentIdleMin: 99999 }).subagentIdleMin, 24 * 60, "and a day is the ceiling");
+  ok("the threshold defaults to the number it replaced, and clamps at both ends");
+}
+
+// ---- A SUBAGENT'S CLOCK IS KEPT IN SESSION STATE (2026-11-09) ---------------------------------
+// It has to be: a subagent has NO run record — no source, no items, no owner file — which is
+// exactly why the disk-reading chaser could never see one. Three facts, three shapes of event, and
+// one trap: the nudge's own receipt must not reset the silence it reports.
+{
+  const sessions = require("../electron/agents/sessions.cjs");
+  const s = {};
+  const T = 1_000_000;
+  const ev = (e, ts) => sessions.noteSubagent(s, { ts: ts || T, ...e });
+
+  // THE SPAWN starts nothing but the record — a subagent that has not emitted yet has no clock,
+  // because timing it from the spawn would nudge about one that is still starting up.
+  ev({ kind: "tool.call", name: "Agent", id: "toolu_1", input: { prompt: "audit the claims\nsecond line ignored" } });
+  let [u] = sessions.subagentsOf(s);
+  assert.equal(u.parent, "toolu_1");
+  assert.equal(u.brief, "audit the claims", "the first line of the prompt is the brief — a whole prompt is not a row");
+  assert.equal(u.lastTs, 0, "spawned is not alive: no event from inside it yet, so no clock");
+  assert.equal(u.ended, false);
+
+  // TASK IS THE SAME TOOL. The SDK has called it both things across versions, and a name the match
+  // misses is a subagent whose clock never starts at all.
+  ev({ kind: "tool.call", name: "Task", id: "toolu_2", input: { prompt: "the other one" } });
+  assert.equal(sessions.subagentsOf(s).length, 2, "Agent and Task both spawn subagents");
+  // ...AND AN ORDINARY TOOL CALL DOES NOT.
+  ev({ kind: "tool.call", name: "Bash", id: "toolu_3", input: { command: "ls" } });
+  assert.equal(sessions.subagentsOf(s).length, 2, "a Bash call is not a subagent");
+
+  // THE CLOCK TICKS ON ANYTHING CARRYING `parent` — text, thinking, a tool call, a tool result.
+  ev({ kind: "assistant.text", parent: "toolu_1", text: "working" }, T + 1000);
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").lastTs, T + 1000, "an event from inside the subagent is the clock");
+  ev({ kind: "tool.call", parent: "toolu_1", id: "inner", name: "Read" }, T + 2000);
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").lastTs, T + 2000, "…including its own tool calls");
+
+  // AN EVENT WITH A `parent` NOBODY SPAWNED still gets a record, because it is still something
+  // running that nothing else accounts for — the same reason unseenSubagents reports a registered
+  // lane with no row rather than dropping it.
+  ev({ kind: "assistant.text", parent: "toolu_orphan" }, T + 3000);
+  assert.ok(sessions.subagentsOf(s).some((x) => x.parent === "toolu_orphan"), "an unspawned parent is still tracked, not dropped");
+
+  // THE END COMES FROM THE SPAWNING CALL'S RESULT, and never from the events going quiet — quiet
+  // is the state this map exists to measure, so inferring death from it would be circular.
+  ev({ kind: "tool.result", id: "toolu_2", ok: true }, T + 4000);
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_2").ended, true, "the spawning call's result is the subagent's ending");
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").ended, false, "and it ends only the one it belongs to");
+
+  // A RESULT FROM *INSIDE* A SUBAGENT IS NOT ITS ENDING. It carries `parent`; the spawning call's
+  // result does not. Without that distinction a subagent's first inner tool result would end it.
+  ev({ kind: "tool.result", id: "inner", parent: "toolu_1", ok: true }, T + 5000);
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").ended, false, "an inner tool result is work, not an ending");
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").lastTs, T + 5000, "…and it ticks the clock");
+
+  // A FINISHED SUBAGENT'S CLOCK IS FROZEN. Late events must not resurrect it into "alive".
+  const endedAt = sessions.subagentsOf(s).find((x) => x.parent === "toolu_2").lastTs;
+  ev({ kind: "assistant.text", parent: "toolu_2" }, T + 9000);
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_2").lastTs, endedAt, "an ended subagent's clock does not restart");
+  ok("a subagent's clock starts on its first inner event, ticks on every one, and stops only at the spawning call's result");
+
+  // THE TRAP, AND IT IS THE WHOLE REASON THE RECEIPT CARRIES AN EMPTY `parent`. The nudge emits a
+  // `subagent.nudged` receipt ABOUT a subagent — if that receipt were stamped with the subagent's
+  // id, it would tick the very clock it is reporting on and no second nudge could ever fire.
+  const before = sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").lastTs;
+  ev({ kind: "subagent.nudged", parent: "", subagent: "toolu_1", quietMin: 20 }, T + 99_000);
+  assert.equal(sessions.subagentsOf(s).find((x) => x.parent === "toolu_1").lastTs, before, "the nudge's own receipt does NOT reset the silence it reports");
+  ok("the nudge receipt cannot reset the clock it measures — the second nudge stays possible");
+}
+
 console.log(`\n  ${pass} assertions, all green — an unfinished run nudges its agent\n`);
 fs.rmSync(scratch, { recursive: true, force: true });
