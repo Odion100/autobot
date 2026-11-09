@@ -1183,6 +1183,52 @@ const reset = () => fs.writeFileSync(QUEUE, "[]");
   ok("every refusal reaches the agent's chat as well as its turn; an empty owing says so in words");
 }
 {
+  // WHAT THE DOOR SAYS ABOUT WHAT IT DID. One defect class, found three times in one night: a verb
+  // composes an advisory into its answer, the MCP door hand-picks fields off that answer, and the
+  // advisory dies one inch from the agent that needed it. The mark tool lost `noteNotWritten`;
+  // submit mis-stated `joined`; drop threw away `gone` and `carried`. Each one is silent, each one
+  // leaves the caller believing something false about a write that already happened — so the
+  // ANSWER is asserted here, not just the effect on the file.
+  reset();
+  const tools = corrections.toolsFor({ slot: "manager", projectCode: "sv" });
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  const read = (r) => JSON.parse(r.content[0].text);
+
+  // JOINED MEANS AN ENTRY WAS STANDING (c47). A path matching nothing MAKES its own entry, and
+  // reporting that as a join tells the submitter its document was already under audit when it was
+  // not — which is exactly backwards for an auditor deciding whether anyone has looked.
+  const fresh = path.join(scratch, "fresh-document.md");
+  fs.writeFileSync(fresh, "::rfc{id=RFC-0}\n");
+  const first = read(await byName.submit.handler({ for: "bu", text: "the first", path: fresh }, {}));
+  assert.equal(first.joined, false, "a path no entry matches MAKES one — that is not a join");
+  const second = read(await byName.submit.handler({ for: "bu", text: "the second", path: fresh }, {}));
+  assert.equal(second.joined, true, "…and the next correction on that path joins the entry now standing");
+  assert.equal(nudges.readAuditQueue().filter((e) => e.path === fresh).length, 1, "one entry, two corrections");
+  const src = fs.readFileSync(new URL("../electron/agents/nudges.cjs", import.meta.url), "utf8");
+  assert.ok(!/joined: !!String\(p/.test(src), "`joined` is not computed from whether a path was passed");
+
+  // THE GONE-DOCUMENT ESCAPE REACHES THE CALLER (c64). removeEntry's own comment promises "the
+  // answer says what it carried so the drain's account can name them" — and the door was picking
+  // two fields off it, so a removal that took open corrections with it was indistinguishable from
+  // an ordinary checked one. The drain cannot name what it was never told.
+  const standing = nudges.readAuditQueue().find((e) => e.path === fresh);
+  fs.rmSync(fresh);
+  const gone = read(await byName.drop.handler({ project: "sv", path: fresh, at: standing.at }, {}));
+  assert.equal(gone.ok, true, "a gone document's entry leaves even while holding corrections");
+  assert.equal(gone.gone, true, "…and the door SAYS it went by the escape, not by being checked");
+  assert.equal(gone.carried, 2, "…naming how many open corrections it took with it");
+
+  // AND THE ORDINARY REMOVAL CLAIMS NEITHER — `gone` is not a field that is always there.
+  reset();
+  const live = path.join(scratch, "a-document-that-stays.md");
+  fs.writeFileSync(live, "::rfc{id=RFC-1}\n");
+  nudges.enqueueAudit({ project: "sv", path: live, now: 5_000_000 });
+  const checked = read(await byName.drop.handler({ project: "sv", path: live, at: 5_000_000 }, {}));
+  assert.equal(checked.ok, true, "a checked entry with nothing owed leaves");
+  assert.equal(checked.gone, undefined, "…and says nothing about a gone document, because there was none");
+  ok("the door says which of the two things it did — joined or made, gone or checked (c47, c64)");
+}
+{
   // THE WIRING, read from source the way this file reads every other seam — the server is built,
   // it is handed to the session, and its refusal hook emits into the feed and the life log.
   const host = fs.readFileSync(new URL("../electron/agents/sessions.cjs", import.meta.url), "utf8");
@@ -1378,10 +1424,14 @@ const owedSteer = (out) => out.find((o) => o.nudge === "open-corrections");
   assert.ok(/open correction/.test(said[0].reason), "with the reason, in words");
   // AND THE UNIVERSAL, which no single verb's claim can carry: every verb that can refuse routes
   // its refusal through the same hook. A fifth verb added without it breaks nothing visible, so
-  // the guard is structural.
+  // the guard is structural — and it matches the CALL, never one expression shape, because a verb
+  // that grows a second branch and moves its refusal off the ternary has not stopped refusing.
   const door = fs.readFileSync(new URL("../electron/agents/corrections.cjs", import.meta.url), "utf8");
-  const refusing = [...door.matchAll(/return r\.ok \? [\s\S]*?: refused\("(\w+)", r\)/g)].map((m) => m[1]).sort();
+  const calls = [...door.matchAll(/(.{0,12})refused\("(\w+)", r\)/g)];
+  const refusing = [...new Set(calls.map((m) => m[2]))].sort();
   assert.deepEqual(refusing, ["clear", "drop", "submit"], "every verb that can refuse hands its refusal to the hook — all three, by name");
+  for (const m of calls)
+    assert.ok(/return |\? |: /.test(m[1]), `…and ${m[2]}'s refusal is RETURNED, not computed and dropped`);
   ok("every refusing verb says so in the session, drop included — the universal, not one verb generally (c42, c49, c51)");
 }
 {

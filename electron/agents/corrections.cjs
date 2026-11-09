@@ -85,7 +85,13 @@ function toolsFor({ slot = "", projectCode = "", onRefused = null } = {}) {
       },
       async (a) => {
         const r = nudges.removeEntry({ project: a.project || projectCode, path: a.path, at: a.at });
-        return r.ok ? say({ ok: true, removed: r.removed }) : refused("drop", r);
+        // THE GONE-DOCUMENT ESCAPE HAS TO REACH THE CALLER. removeEntry answers `gone` and `carried`
+        // when it took an entry whose document no longer exists, because that removal is NOT the
+        // ordinary "it was checked, it leaves" — it took open corrections with it, and the drain's
+        // account has to be able to name them. Picking fields off that answer is how the module's
+        // own advisory dies one inch from the agent that needed it.
+        if (!r.ok) return refused("drop", r);
+        return say(r.gone ? { ok: true, removed: r.removed, gone: true, carried: r.carried } : { ok: true, removed: r.removed });
       }
     ),
   ];

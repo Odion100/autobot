@@ -570,6 +570,10 @@ function submitCorrection({ project = "", path: p = "", by = "", for: owes = "",
   if (!String(text).trim()) return refuse("a correction with no words is nothing to act on");
 
   let written = null;
+  // JOINED MEANS JOINED. The caller is told which of the two things happened, so it says `joined`
+  // only when an entry was standing — a path that matched nothing makes a new entry, and reporting
+  // that as a join tells the submitter its document was already under audit when it was not.
+  let joinedExisting = false;
   const applied = mutateQueue((queue) => {
     const taken = new Set(queue.flatMap((e) => (e.corrections || []).map((c) => c.id)));
     const correction = {
@@ -584,6 +588,7 @@ function submitCorrection({ project = "", path: p = "", by = "", for: owes = "",
     const doc = String(p || "");
     const i = doc ? queue.findIndex((e) => e.path === doc && e.project === project) : -1;
     if (i >= 0) {
+      joinedExisting = true;
       const e = queue[i];
       const next = [...queue];
       next[i] = { ...e, corrections: [...(e.corrections || []), correction] };
@@ -592,7 +597,7 @@ function submitCorrection({ project = "", path: p = "", by = "", for: owes = "",
     return [...queue, { project: String(project), path: doc, at: Number(now) || 0, corrections: [correction] }];
   });
   if (!applied) return refuse("the queue could not be written");
-  return { ok: true, correction: written, joined: !!String(p || "") };
+  return { ok: true, correction: written, joined: joinedExisting };
 }
 
 // CLEAR — and it refuses the agent the correction is FOR. An agent cannot clear its own
