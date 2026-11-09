@@ -916,19 +916,39 @@ function fireHooks(s, event) {
 //
 // AN UNKNOWN PREFIX WAS THE SILENT CASE, and it is the one that cost nine items. `assignment:
 // run-the-proofs` passed this door with no word at all on 29 Oct and sat there: no row in the strip
-// and never nudged — both key on the three prefixes — so four of its thirteen items closed and nine
-// went quiet with nothing anywhere saying so. Still not an error, because a scratch list IS
-// legitimate; what it owes is a sentence saying what the write just bought.
-function sourceNote(src, { skills = [], jobs = [] } = {}) {
+// and never nudged — so four of its thirteen items closed and nine went quiet with nothing anywhere
+// saying so. Still not an error, because a scratch list IS legitimate; what it owes is a sentence
+// saying what the write just bought.
+//
+// AND THE SENTENCE IS DERIVED NOW, NOT TYPED — because the typed version became false the moment a
+// fourth kind of run existed. `correction:` joined the chaser's sources, the strip's filter and the
+// work-retention window on 2026-11-09, and this door went on telling agents that anything outside
+// skill/job/lane "draws no row and is never nudged". Measured the same day: a correction assigned
+// by the manager, drawing its own tab and actively being chased, was reported as unheld to the
+// agent working it — which is the exact failure this note exists to prevent, inverted. An agent
+// that believes it would re-file work the system is already holding.
+//
+// `sources` is the list HE controls in the band's settings, so "is this chased" is read from the
+// switch rather than claimed beside it: turn `correction:` off and this sentence changes with it.
+function sourceNote(src, { skills = [], jobs = [], sources = [] } = {}) {
   const s = String(src || "");
   if (!s) return "";
   if (/^lane:/.test(s))
     return `registered as a lane on ${s.slice(5)} — it has a row in his strip now, and it stands there until he clears it.`;
+  // CHASED IS A FACT ABOUT HIS SETTINGS, read the same way the chaser reads it (literal prefix
+  // match, nudge.cjs sourceCounts) rather than re-implemented.
+  const chased = (Array.isArray(sources) ? sources : []).some((p) => p && s.startsWith(String(p)));
+  if (/^correction:/.test(s))
+    return (
+      `a correction owed by this agent, sent by ${s.slice(11) || "another agent"} — it has a row in ` +
+      `the corrections tab and ${chased ? "is chased like a job or a skill" : "is NOT chased, because corrections are switched off in his worklist settings"}. ` +
+      `It closes the way every run closes: every item done, or abandoned with an account attached.`
+    );
   const m = /^(skill|job):(.+)$/.exec(s);
   if (!m)
     return (
-      `note: "${s}" is not one of the three prefixes this system reads (skill: job: lane:), so this ` +
-      `run draws no row in his strip and is never nudged. Fine for a scratch list; if it is work ` +
+      `note: "${s}" is not a prefix this system reads (skill: job: lane: correction:), so this run ` +
+      `draws no row in his strip${chased ? "" : " and is never nudged"}. Fine for a scratch list; if it is work ` +
       `anybody should be held to, write it again under skill:<name>, job:<id> or lane:<branch>.`
     );
   if (m[1] === "skill") {
@@ -2646,6 +2666,9 @@ async function open({ projectCode, sessionId = "agent", cwd, model, permissionMo
     sourceNote(src, {
       skills: definitions.skills(agent ? agent.id : null),
       jobs: require("./jobs.cjs").list(),
+      // The chaser's own list, so what this door SAYS about nudging and what the chaser DOES
+      // cannot disagree — the drift that made the old sentence false.
+      sources: (() => { try { return require("./nudge.cjs").readSettings().sources || []; } catch { return []; } })(),
     }), (id, source, what) => {
     // A STATUS OR ATTACHMENT IS NEWS THE STRIP READS OFF DISK — without an announce his rows wear
     // yesterday's face until some unrelated run event ticks a refresh (his catch, 2026-10-26: the

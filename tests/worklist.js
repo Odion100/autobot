@@ -45,6 +45,13 @@ const sessions = require("../electron/agents/sessions.cjs");
 
 let pass = 0;
 const ok = (n) => { pass++; console.log(`  ok  ${n}`); };
+// AND ITS OPPOSITE, WHICH DID NOT EXIST. Twenty assertions in this file are written
+// `cond ? ok(...) : bad(...)` and `bad` was never defined — so every one of them had a
+// ReferenceError on its failure path instead of a readable failure. Latent for as long as they
+// all passed, and discovered 2026-11-09 the first time one went false: the output was
+// "bad is not defined" at a line number, which says nothing about what broke. A guard whose
+// failure mode is a crash in the guard is a guard you cannot read.
+const bad = (n) => { console.error(`\n  FAILED  ${n}\n`); process.exitCode = 1; throw new Error(n); };
 
 // ---- 6. OWNERSHIP (RFC-005 §3, pure) -------------------------------------------
 // One concept, two lifetimes: the same structure, keyed by who it belongs to. The assertion that
@@ -768,13 +775,13 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   const JOBS = [{ id: "proactive-development", name: "Proactive development" }];
   const note = (src) => sessions.sourceNote(src, { skills: SKILLS, jobs: JOBS });
 
-  /three prefixes/.test(note("assignment:run-the-proofs"))
+  /not a prefix this system reads/.test(note("assignment:run-the-proofs"))
     ? ok("an unknown PREFIX is named as unreadable, rather than passing in silence")
     : bad("an unknown prefix still writes a run with nothing said about it");
   /never nudged/.test(note("assignment:run-the-proofs"))
     ? ok("...and it says what that costs: no row, never nudged")
     : bad("the reminder does not say what an unreadable source costs");
-  !/not one of the three/.test(note("skill:assignment")) && note("skill:assignment") === ""
+  !/not a prefix this system reads/.test(note("skill:assignment")) && note("skill:assignment") === ""
     ? ok("a known skill source says nothing — silence is the right answer when the record is readable")
     : bad("a legitimate skill source was warned about");
   /no skill named/.test(note("skill:made-up-thing"))
@@ -786,6 +793,34 @@ await sessions.kill(s.key, { forget: false }).catch(() => sessions.kill(s.key));
   /registered as a lane/.test(note("lane:lane/x"))
     ? ok("a lane says so POSITIVELY — registering is the whole act, so the call that does it confirms it")
     : bad("a lane source does not confirm its registration");
+
+  // A CORRECTION IS HELD, AND THE DOOR HAS TO SAY SO. This sentence was false for the whole of the
+  // day §2.8 landed: `correction:` joined the chaser's sources, the strip's filter and the work
+  // retention window, and this door went on telling the agent working one that anything outside
+  // skill/job/lane "draws no row and is never nudged". Measured 2026-11-09 on a real correction
+  // from the manager — drawing its own tab, actively being chased, reported as unheld.
+  const withSources = (src, sources) => sessions.sourceNote(src, { skills: SKILLS, jobs: JOBS, sources });
+  const held = withSources("correction:manager", ["job:", "skill:", "correction:"]);
+  /row in the corrections tab/.test(held) && /is chased like a job or a skill/.test(held) && !/never nudged/.test(held)
+    ? ok("a correction says so POSITIVELY — its own tab, chased, and how it closes")
+    : bad("a correction is not told it is held: " + held);
+  /sent by manager/.test(held)
+    ? ok("…and it names who sent it, which is the one thing the source carries that the items do not")
+    : bad("the note does not say who sent the correction");
+
+  // AND THE CLAIM IS DERIVED FROM HIS SWITCH, not written beside it — which is the whole fix. Take
+  // corrections out of the chaser's sources and the sentence has to change with them, or the door
+  // is back to asserting something it cannot see.
+  const off = withSources("correction:manager", ["job:", "skill:"]);
+  /NOT chased/.test(off) && /switched off in his worklist settings/.test(off)
+    ? ok("with corrections switched off, the door says the row exists and the chase does not")
+    : bad("the note claims chasing regardless of the setting: " + off);
+
+  // THE SILENT CASE STILL SPEAKS, and it now names four prefixes rather than three.
+  const unknown = withSources("assignment:run-the-proofs", ["job:", "skill:", "correction:"]);
+  /not a prefix this system reads/.test(unknown) && /correction:/.test(unknown)
+    ? ok("an unknown prefix is still named, and the sentence lists every prefix that IS read")
+    : bad("the unknown-prefix note is stale: " + unknown);
 }
 
 // ---- ASSIGN — writing ANOTHER agent's list, the verb behind a correction -------------------
